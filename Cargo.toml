@@ -1,0 +1,32 @@
+[package]
+name = "art-window"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+description = "A daily artwork on your desktop, always fit to the screen."
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+anyhow = "1"
+ureq = { version = "3", features = ["json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "1"
+directories = "6"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+rusqlite = "0.37"
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = [
+    "NSString", "NSURL", "NSDictionary", "NSValue", "NSArray", "NSError",
+] }
+objc2-app-kit = { version = "0.3", features = [
+    "NSWorkspace", "NSScreen", "NSColor", "NSCell", "objc2-core-foundation",
+] }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
