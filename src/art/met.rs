@@ -32,6 +32,20 @@ pub struct Met {
     avoid: Option<u64>,
 }
 
+/// Recovers the object id from a file this source downloaded, or `None` if the
+/// file came from somewhere else.
+///
+/// The id has to outlive the process so tomorrow's painting is not today's, and
+/// the download already spells it into the filename. Remembering it a second time
+/// would only create something that could disagree with the picture on screen.
+pub fn id_of(path: &Path) -> Option<u64> {
+    path.file_stem()?
+        .to_str()?
+        .strip_prefix("met-")?
+        .parse()
+        .ok()
+}
+
 #[derive(Deserialize)]
 struct SearchResults {
     #[serde(rename = "objectIDs")]

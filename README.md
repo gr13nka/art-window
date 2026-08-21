@@ -13,35 +13,55 @@ independent rewrite and shares no code with either.
 ## Status
 
 **macOS only.** Windows and Linux backends are planned but not written; the crate
-does not currently build for them. There is no menu-bar icon yet — Art Window is a
-command, scheduled by launchd.
+does not currently build for them.
 
 ## Install
 
 ```sh
-cargo build --release
-cp target/release/art-window ~/.local/bin/
-codesign --force --sign - ~/.local/bin/art-window
+./macos/bundle.sh
+cp -R "target/Art Window.app" /Applications/
 ```
 
-To have it run by itself, create `~/Library/LaunchAgents/dev.artwindow.daily.plist`
-pointing at the binary with `--if-due`, `RunAtLoad` set, and `StartInterval` of
-3600, then:
+Open it and a small framed-picture icon appears in the menu bar. That is the whole
+interface:
 
-```sh
-launchctl bootstrap gui/$UID ~/Library/LaunchAgents/dev.artwindow.daily.plist
+```
+L'Arlésienne: Madame Joseph-Michel Ginoux
+Vincent van Gogh, 1888–89
+Open in browser
+─────────────────────
+Re-apply wallpaper
+✓ Start at login
+─────────────────────
+Quit Art Window
 ```
 
-launchd wakes it hourly; the program itself decides whether a new picture is owed,
-so the check is a few milliseconds and logging in repeatedly does not burn through
-paintings.
+**Start at login** writes a launchd agent to `~/Library/LaunchAgents`. It takes
+effect at your next login — switching it on cannot start a program that is already
+running, and switching it off should not stop one.
+
+While it runs, Art Window checks the clock every few minutes and fetches a new
+painting once the current one has had its `refresh_hours`. It compares wall-clock
+times rather than counting down, so a laptop that spent the week shut wakes up owing
+exactly one painting, not seven.
 
 ## Use
 
+Art Window is a menu bar app, but it stays a command as well — useful when you want
+to see what happens rather than trust that it did.
+
 ```sh
-art-window            # fetch a new painting now
-art-window --if-due   # fetch only if the current one has had its time
+art-window            # live in the menu bar (what the .app does)
+art-window --once     # fetch a painting now, print it, exit
+art-window --if-due   # the same, but only if one is due
 art-window --where    # print where settings, state and cache live
+```
+
+The binary lives inside the bundle, so either call it there or link it onto your
+path:
+
+```sh
+ln -s "/Applications/Art Window.app/Contents/MacOS/art-window" ~/.local/bin/
 ```
 
 ## Settings
@@ -59,14 +79,18 @@ refresh_hours = 24
 ```
 
 Pointing `source` at a folder inside `~/Pictures` or `~/Documents` will make macOS
-ask for access. A launchd-run process cannot show that prompt, so run `art-window`
-once from a terminal to approve it.
+ask for access. A process started by launchd cannot show that prompt, so run
+`art-window --once` from a terminal to approve it.
+
+Settings are read when Art Window starts. After editing `config.toml`, quit and
+reopen it.
 
 ## Uninstall
 
+Turn off **Start at login**, quit from the menu, then:
+
 ```sh
-launchctl bootout gui/$UID/dev.artwindow.daily
-rm ~/Library/LaunchAgents/dev.artwindow.daily.plist ~/.local/bin/art-window
+rm -rf "/Applications/Art Window.app"
 rm -rf ~/Library/Application\ Support/ArtWindow
 ```
 

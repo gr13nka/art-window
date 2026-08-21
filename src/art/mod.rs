@@ -5,13 +5,17 @@
 //! requests, what the JSON looked like.
 
 use anyhow::Result;
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 pub mod folder;
 pub mod met;
 
 /// One picture, ready to hang, with what a person would want to know about it.
-#[derive(Debug, Clone)]
+///
+/// Serialisable because the menu has to name the picture already on the desktop,
+/// and after a restart the only witness to what that was is `state.json`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Artwork {
     /// "Wheat Field with Cypresses"
     pub title: String,

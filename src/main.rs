@@ -1,25 +1,28 @@
 //! Art Window — a daily painting on your desktop, always fit to the screen.
 //!
-//! Until the tray arrives this is a one-shot command. `--if-due` makes it safe to
-//! run often: launchd can wake it every hour and the program decides whether a
-//! new picture is actually owed. That keeps the schedule correct across sleep,
-//! shutdown and missed windows without anything staying resident.
+//! With no arguments it settles into the menu bar and looks after itself. The
+//! one-shot forms are kept because a resident program is a bad place to find out
+//! that the network, the museum or the Dock's database has changed its mind:
+//! `--once` does exactly one rotation and says what happened, on a terminal where
+//! the answer is visible.
 
 mod art;
+mod autostart;
 mod config;
+mod rotation;
+mod tray;
 mod wallpaper;
 
-use anyhow::{Context, Result};
-use art::Source;
+use anyhow::Result;
 use config::{Config, Paths, State};
 
 fn main() -> Result<()> {
-    let mut only_if_due = false;
-    let mut show_where = false;
+    let mut mode = Mode::Tray;
     for arg in std::env::args().skip(1) {
         match arg.as_str() {
-            "--if-due" => only_if_due = true,
-            "--where" => show_where = true,
+            "--once" => mode = Mode::Once { only_if_due: false },
+            "--if-due" => mode = Mode::Once { only_if_due: true },
+            "--where" => mode = Mode::Where,
             "--help" | "-h" => {
                 usage();
                 return Ok(());
@@ -31,99 +34,56 @@ fn main() -> Result<()> {
     let paths = Paths::locate()?;
     Config::write_default_if_absent(&paths.config)?;
 
-    if show_where {
+    if let Mode::Where = mode {
         println!("config  {}", paths.config.display());
         println!("state   {}", paths.state.display());
         println!("cache   {}", paths.cache.display());
+        println!(
+            "login   {}",
+            if autostart::is_enabled() { "on" } else { "off" }
+        );
         return Ok(());
     }
 
     let config = Config::load(&paths.config)?;
     let mut state = State::load(&paths.state);
 
-    if only_if_due && !state.is_due(config.refresh_hours) {
-        return Ok(());
-    }
+    match mode {
+        Mode::Where => unreachable!("handled above, before the config is read"),
+        Mode::Tray => tray::run(paths, config, state),
+        Mode::Once { only_if_due } => {
+            if only_if_due && !state.is_due(config.refresh_hours) {
+                return Ok(());
+            }
+            let artwork = rotation::fetch(&config, &state, &paths.cache)?;
+            rotation::show(&artwork, &paths, &mut state)?;
 
-    let source = build_source(&config, &state);
-    let artwork = source
-        .fetch(&paths.cache)
-        .with_context(|| format!("fetching from {}", source.label()))?;
-
-    wallpaper::pin(&artwork.path)?;
-
-    // Recorded only now: a fetch that failed above must not count as today's
-    // picture, or a bad network moment would cost a whole day.
-    state.last_success = Some(config::now_secs());
-    state.last_path = Some(artwork.path.clone());
-    state.last_met_id = met_id_of(&artwork.path).or(state.last_met_id);
-    state.save(&paths.state)?;
-
-    tidy_cache(&paths.cache, &artwork.path);
-
-    println!("{}", artwork.title);
-    if !artwork.byline.is_empty() {
-        println!("{}", artwork.byline);
-    }
-    println!("{}", artwork.attribution);
-    if let Some(url) = &artwork.details_url {
-        println!("{url}");
-    }
-    Ok(())
-}
-
-fn build_source(config: &Config, state: &State) -> Box<dyn Source> {
-    if config.source == "met" {
-        Box::new(art::met::Met::new(state.last_met_id))
-    } else {
-        Box::new(art::folder::Folder::new(
-            expand_tilde(&config.source),
-            state.last_path.clone(),
-        ))
-    }
-}
-
-/// Recovers the Met object id from a cached filename, so the next run knows what
-/// to avoid without the source having to report it separately.
-fn met_id_of(path: &std::path::Path) -> Option<u64> {
-    path.file_stem()?
-        .to_str()?
-        .strip_prefix("met-")?
-        .parse()
-        .ok()
-}
-
-/// Keeps only the picture now on screen. Deleting it while it is the wallpaper
-/// would leave a blank desktop, so the current file is always spared.
-fn tidy_cache(cache: &std::path::Path, keep: &std::path::Path) {
-    let Ok(entries) = std::fs::read_dir(cache) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_file() && path != keep {
-            let _ = std::fs::remove_file(path);
+            println!("{}", artwork.title);
+            if !artwork.byline.is_empty() {
+                println!("{}", artwork.byline);
+            }
+            println!("{}", artwork.attribution);
+            if let Some(url) = &artwork.details_url {
+                println!("{url}");
+            }
+            Ok(())
         }
     }
 }
 
-fn expand_tilde(s: &str) -> std::path::PathBuf {
-    match s.strip_prefix("~/") {
-        Some(rest) => {
-            std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(rest)
-        }
-        None => std::path::PathBuf::from(s),
-    }
+enum Mode {
+    /// Live in the menu bar and rotate on a schedule.
+    Tray,
+    /// Rotate once and report, for a terminal or a script.
+    Once { only_if_due: bool },
+    /// Print where the files are and stop.
+    Where,
 }
 
 fn usage() {
-    println!(
-        "Art Window — a daily painting on your desktop, always fit to the screen.
-
-  art-window            fetch a new picture now
-  art-window --if-due   fetch only if the current one has had its time
-  art-window --where    print where settings and state are kept
-
-Settings live in config.toml; run --where to find it."
-    );
+    println!("art-window — a daily painting on your desktop\n");
+    println!("  art-window            live in the menu bar and rotate daily");
+    println!("  art-window --once     fetch a picture now, then exit");
+    println!("  art-window --if-due   the same, but only if one is due");
+    println!("  art-window --where    print where settings and cache live");
 }

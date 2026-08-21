@@ -5,6 +5,7 @@
 //! and formatting survive. `state.json` belongs to the program: it is rewritten
 //! freely and nobody is expected to read it.
 
+use crate::art::Artwork;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -36,10 +37,9 @@ pub struct State {
     /// Unix seconds of the last *successful* fetch. A failure leaves this alone,
     /// so the next run retries rather than writing the day off.
     pub last_success: Option<u64>,
-    /// The Met object shown last, so today's painting is not yesterday's.
-    pub last_met_id: Option<u64>,
-    /// The file shown last, for the same reason with a local folder.
-    pub last_path: Option<PathBuf>,
+    /// The picture currently on the desktop. Two jobs: the menu names it, and the
+    /// next fetch avoids it so today's painting is not yesterday's.
+    pub shown: Option<Artwork>,
 }
 
 pub struct Paths {

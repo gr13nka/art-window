@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleName</key>
+	<string>Art Window</string>
+	<key>CFBundleDisplayName</key>
+	<string>Art Window</string>
+	<key>CFBundleIdentifier</key>
+	<string>dev.artwindow</string>
+	<key>CFBundleExecutable</key>
+	<string>art-window</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.1.0</string>
+	<key>CFBundleVersion</key>
+	<string>0.1.0</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>11.0</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+
+	<!-- The key that makes this a menu bar program: no Dock icon, no application
+	     menu. LaunchServices reads it before main() runs, so unlike asking AppKit
+	     for the same policy from inside the program, nothing appears even briefly. -->
+	<key>LSUIElement</key>
+	<true/>
+</dict>
+</plist>

@@ -1,8 +1,8 @@
 # Art Window — working notes
 
 A daily public-domain painting as the desktop wallpaper, fit to screen and
-letterboxed in black. macOS only so far; `wallpaper/` and `autostart/` are shaped
-for Windows and Linux backends that do not exist yet.
+letterboxed in black, run from a menu bar icon. macOS only so far; `wallpaper/` is
+shaped for Windows and Linux backends that do not exist yet.
 
 ## Commands
 
@@ -10,6 +10,7 @@ for Windows and Linux backends that do not exist yet.
 cargo build --release
 cargo clippy --all-targets -- -D warnings
 cargo fmt --check
+./macos/bundle.sh          # -> target/Art Window.app
 ```
 
 There are **no tests**. `cargo test` exits 0 because the suite is empty — it is not
@@ -34,15 +35,31 @@ it before touching `src/wallpaper/macos.rs`.
   Callers must never be responsible for re-applying — forgetting that is the
   original bug this project exists to fix.
 - **`pin` must run on the main thread.** `NSScreen::screens` demands a
-  `MainThreadMarker`. It errors rather than trusting a doc comment.
+  `MainThreadMarker`. It errors rather than trusting a doc comment. This is why
+  `rotation` is split: `fetch` blocks for up to two minutes and runs on a worker,
+  `show` touches AppKit and runs on the event loop's thread.
+- **The scheduler compares wall-clock times; it never counts down.** `State::is_due`
+  against `now_secs()` is the only thing that decides a picture is owed. A timer
+  cannot survive a closed lid, and a machine asleep at the appointed moment is the
+  normal case. The tray's `TICK` only decides how *often* to ask the question.
+- **Every failure path must set `hold_until`.** The day is marked done only on
+  success, so an error with no cooling-off period retries instantly and forever.
 - **`state.last_success` advances only after a *successful* fetch.** A failed
   network call must not consume the day; the next run retries.
+- **The cache filename `met-{id}.{ext}` is load-bearing.** `met::id_of` reads the
+  object id back out of it, which is how tomorrow's painting avoids being today's.
+  Renaming downloads breaks that silently — nothing errors, the same picture just
+  comes round again. The id is derived rather than stored so it cannot drift out of
+  agreement with the file actually on screen.
 - **`config.toml` is read, never written. `state.json` is written, never read by a
   human.** Two files because they have two authors — serialising config back would
   destroy the user's comments.
 - **Nothing decodes image pixels.** `Artwork` carries a `PathBuf`; the file goes
   straight to the OS. This is why there is no `image` dependency. Do not add one
   without a reason that survives the question "does the OS not already do this?".
+  The menu bar glyph is the one bitmap in the program and it is drawn from ASCII
+  art in `tray.rs` for exactly this reason — `tray_icon::Icon::from_path` is
+  Windows-only, so the alternative was a decoder for an eighteen-point icon.
 
 ## Deliberate omissions
 
@@ -64,9 +81,31 @@ challenges. One request per day. `art/met.rs` filters to department 11 (European
 Paintings) — an unfiltered collection of 490,000 objects is mostly coins and
 textiles.
 
+## The menu bar app
+
+`tao` + `tray-icon` + `muda`, which pin the same `objc2 0.6` / `objc2-*-0.3` family
+this project already used, so there is one copy of AppKit in the tree. `tray-icon`
+needs a **GTK** event loop on Linux, which is why `tao` is the pairing and `winit`
+is not.
+
+Three things that are not guessable from the docs:
+
+- The `TrayIcon` must be built inside `Event::NewEvents(StartCause::Init)`, not
+  before `run()`, or it goes missing in front of full-screen apps. Afterwards the
+  main `CFRunLoop` needs a manual `wake_up()` or the icon does not appear at all.
+- `set_activation_policy(Accessory)` takes `&mut EventLoop` and only works *before*
+  `run()`. It hides the Dock icon for an unbundled `cargo run`; the bundle's
+  `LSUIElement` does the same thing earlier and without the bounce. Both are set.
+- Dropping the `TrayIcon` is what removes it from the menu bar, so Quit does
+  `tray.take()` before `ControlFlow::Exit`.
+
+**Start at login is a launchd agent, not `SMAppService`.** `SMAppService.mainApp` is
+the modern answer and needs macOS 13; the development machine runs 12.7. The agent is
+written and deleted directly and `launchctl` is never called — bootstrapping it would
+start a second copy of a program that is by definition already running, and the
+setting only means anything at the next login anyway.
+
 ## Planned, not built
 
-Tray icon (`tao` + `tray-icon` + `muda`), an in-process scheduler, and the Windows
-and Linux backends. Note for whoever does the tray: `tray-icon` needs a **GTK** event
-loop on Linux, so `tao` is the right pairing and `winit` is not — it speaks
-X11/Wayland directly and provides no GTK loop.
+The Windows and Linux backends. `autostart.rs` is macOS-only and would grow the same
+platform split `wallpaper/` has.
