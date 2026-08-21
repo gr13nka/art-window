@@ -114,7 +114,7 @@ pub fn run(paths: Paths, config: Config, mut state: State) -> Result<()> {
             Event::UserEvent(Wake::Fetched(result)) => {
                 fetching = false;
                 match result.and_then(|artwork| {
-                    rotation::show(&artwork, &paths, &mut state).map(|()| artwork)
+                    rotation::show(&artwork, &config, &paths, &mut state).map(|()| artwork)
                 }) {
                     Ok(_) => {
                         hold_until = None;

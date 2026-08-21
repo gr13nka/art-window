@@ -5,7 +5,7 @@
 //! and formatting survive. `state.json` belongs to the program: it is rewritten
 //! freely and nobody is expected to read it.
 
-use crate::art::Artwork;
+use crate::art::{Artwork, SourceSpec};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -15,8 +15,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
-    /// `"met"`, or a path to a directory of your own pictures.
-    pub source: String,
+    /// Where the pictures come from. The spelling of this setting belongs to
+    /// [`SourceSpec`]; it is decoded while the file is read and nothing downstream
+    /// ever sees the string.
+    pub source: SourceSpec,
     /// How long a picture stays up before another is fetched.
     pub refresh_hours: u64,
 }
@@ -24,7 +26,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            source: "met".to_owned(),
+            source: SourceSpec::Met,
             refresh_hours: 24,
         }
     }
@@ -35,8 +37,9 @@ impl Default for Config {
 #[serde(default)]
 pub struct State {
     /// Unix seconds of the last *successful* fetch. A failure leaves this alone,
-    /// so the next run retries rather than writing the day off.
-    pub last_success: Option<u64>,
+    /// so the next run retries rather than writing the day off. Private, because
+    /// the only correct moment to move it is [`State::record_shown`].
+    last_success: Option<u64>,
     /// The picture currently on the desktop. Two jobs: the menu names it, and the
     /// next fetch avoids it so today's painting is not yesterday's.
     pub shown: Option<Artwork>,
@@ -114,7 +117,19 @@ impl State {
             .unwrap_or_default()
     }
 
-    pub fn save(&self, path: &Path) -> Result<()> {
+    /// Records `artwork` as the picture of the day.
+    ///
+    /// Stamping the clock, remembering the picture and writing the file are one
+    /// operation and not three: the day is spent only by a painting that reached the
+    /// desktop, and there is no way to do half of it. Callers must have hung the
+    /// wallpaper first — see [`crate::rotation::show`].
+    pub fn record_shown(&mut self, artwork: &Artwork, path: &Path) -> Result<()> {
+        self.last_success = Some(now_secs());
+        self.shown = Some(artwork.clone());
+        self.save(path)
+    }
+
+    fn save(&self, path: &Path) -> Result<()> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -137,7 +152,7 @@ impl State {
     }
 }
 
-pub fn now_secs() -> u64 {
+fn now_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())

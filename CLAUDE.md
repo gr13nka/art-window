@@ -45,15 +45,31 @@ it before touching `src/wallpaper/macos.rs`.
 - **Every failure path must set `hold_until`.** The day is marked done only on
   success, so an error with no cooling-off period retries instantly and forever.
 - **`state.last_success` advances only after a *successful* fetch.** A failed
-  network call must not consume the day; the next run retries.
+  network call must not consume the day; the next run retries. `State::record_shown`
+  is the only way to move it: stamping the clock, remembering the picture and
+  writing the file are one operation, so there is no longer a way to do half of it
+  from outside.
 - **The cache filename `met-{id}.{ext}` is load-bearing.** `met::id_of` reads the
-  object id back out of it, which is how tomorrow's painting avoids being today's.
-  Renaming downloads breaks that silently — nothing errors, the same picture just
-  comes round again. The id is derived rather than stored so it cannot drift out of
-  agreement with the file actually on screen.
+  object id back out of it twice over: to keep tomorrow's painting from being
+  today's, and to decide which files in the cache are the Met's to delete. Renaming
+  downloads breaks both silently — nothing errors, the same picture just comes round
+  again. The id is derived rather than stored so it cannot drift out of agreement
+  with the file actually on screen, and `id_of` is private so the convention cannot
+  escape `art/met.rs`.
 - **`config.toml` is read, never written. `state.json` is written, never read by a
   human.** Two files because they have two authors — serialising config back would
-  destroy the user's comments.
+  destroy the user's comments. The `source` string is decoded into `SourceSpec`
+  while the file is read, so nothing downstream ever handles it as text.
+- **A source owns everything about itself; `rotation` branches on nothing.**
+  `Source::fetch` is handed the whole previous `Artwork` rather than an identifier,
+  because only a source knows how it recognises its own work — the Met parses an
+  object id out of a filename, a folder compares paths. `discard_all_but` is that
+  same rule for deletion: whoever wrote a file is the only one who may decide it is
+  rubbish, which is why a folder of the user's own pictures cannot be pruned by
+  mistake. `SourceSpec` owns how the choice is spelled, and `source_for` owns which
+  implementation answers to it. Adding a third source should touch `art/` and
+  nothing else — an `if config.source == …` outside `art/mod.rs` means the seam has
+  been broken again.
 - **Nothing decodes image pixels.** `Artwork` carries a `PathBuf`; the file goes
   straight to the OS. This is why there is no `image` dependency. Do not add one
   without a reason that survives the question "does the OS not already do this?".

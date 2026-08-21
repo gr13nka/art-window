@@ -7,7 +7,7 @@
 //!
 //! <https://metmuseum.github.io/>
 
-use super::{random_u64, Artwork, Source};
+use super::{pick_index, Artwork, Source};
 use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
 use std::io::Read;
@@ -28,8 +28,8 @@ const CANDIDATES: usize = 8;
 
 pub struct Met {
     agent: ureq::Agent,
-    /// The object shown last time, so the same painting does not appear twice running.
-    avoid: Option<u64>,
+    /// Where downloads go, and the only directory this source will delete from.
+    cache: PathBuf,
 }
 
 /// Recovers the object id from a file this source downloaded, or `None` if the
@@ -38,7 +38,11 @@ pub struct Met {
 /// The id has to outlive the process so tomorrow's painting is not today's, and
 /// the download already spells it into the filename. Remembering it a second time
 /// would only create something that could disagree with the picture on screen.
-pub fn id_of(path: &Path) -> Option<u64> {
+///
+/// Private, and the reason `fetch` and `discard_all_but` take whole paths rather
+/// than ids: recognising this source's own work is exactly the knowledge that has
+/// no business leaving this file.
+fn id_of(path: &Path) -> Option<u64> {
     path.file_stem()?
         .to_str()?
         .strip_prefix("met-")?
@@ -68,7 +72,7 @@ struct Object {
 }
 
 impl Met {
-    pub fn new(avoid: Option<u64>) -> Self {
+    pub fn new(cache: PathBuf) -> Self {
         let config = ureq::Agent::config_builder()
             // The Met asks callers to identify themselves, and the Art Institute's
             // image host demonstrated what anonymous traffic earns: a Cloudflare
@@ -82,7 +86,7 @@ impl Met {
             .build();
         Self {
             agent: ureq::Agent::new_with_config(config),
-            avoid,
+            cache,
         }
     }
 
@@ -112,7 +116,7 @@ impl Met {
             .with_context(|| format!("reading Met object {id}"))
     }
 
-    fn download(&self, url: &str, dir: &Path, id: u64) -> Result<PathBuf> {
+    fn download(&self, url: &str, id: u64) -> Result<PathBuf> {
         let mut response = self
             .agent
             .get(url)
@@ -137,9 +141,12 @@ impl Met {
             .next()
             .filter(|e| e.len() <= 4)
             .unwrap_or("jpg");
-        let path = dir.join(format!("met-{id}.{extension}"));
+        // Load-bearing: `id_of` reads the object id back out of this name, which is
+        // how tomorrow's painting avoids being today's.
+        let path = self.cache.join(format!("met-{id}.{extension}"));
 
-        std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+        std::fs::create_dir_all(&self.cache)
+            .with_context(|| format!("creating {}", self.cache.display()))?;
         let mut file =
             std::fs::File::create(&path).with_context(|| format!("creating {}", path.display()))?;
         let mut reader = response.body_mut().as_reader().take(MAX_IMAGE_BYTES);
@@ -151,13 +158,16 @@ impl Met {
 }
 
 impl Source for Met {
-    fn fetch(&self, dir: &Path) -> Result<Artwork> {
+    fn fetch(&self, avoid: Option<&Artwork>) -> Result<Artwork> {
+        // The previous picture arrives whole and is read for an id here, where the
+        // filename convention that carries it is already known.
+        let avoid = avoid.and_then(|a| id_of(&a.path));
         let ids = self.candidate_ids()?;
         let mut last_error = None;
 
         for attempt in 0..CANDIDATES {
-            let id = ids[random_u64(attempt as u64) as usize % ids.len()];
-            if Some(id) == self.avoid {
+            let id = ids[pick_index(ids.len(), attempt as u64)];
+            if Some(id) == avoid {
                 continue;
             }
 
@@ -170,7 +180,7 @@ impl Source for Met {
                 }
             };
 
-            match self.download(&object.primary_image, dir, object.object_id) {
+            match self.download(&object.primary_image, object.object_id) {
                 Ok(path) => {
                     return Ok(Artwork {
                         byline: match (object.artist.trim(), object.date.trim()) {
@@ -198,5 +208,20 @@ impl Source for Met {
 
     fn label(&self) -> &'static str {
         "The Met"
+    }
+
+    /// Deletes yesterday's downloads, and only those: a file is this source's to
+    /// remove exactly when `id_of` recognises its name. Anything else in the
+    /// directory belongs to somebody else and is left alone.
+    fn discard_all_but(&self, keep: &Path) {
+        let Ok(entries) = std::fs::read_dir(&self.cache) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() && path != keep && id_of(&path).is_some() {
+                let _ = std::fs::remove_file(path);
+            }
+        }
     }
 }

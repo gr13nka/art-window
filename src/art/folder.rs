@@ -4,7 +4,7 @@
 //! The chosen file is used where it lies — copying it would duplicate a library
 //! the user already curates.
 
-use super::{random_u64, Artwork, Source};
+use super::{pick_index, Artwork, Source};
 use anyhow::{anyhow, Context, Result};
 use std::path::{Path, PathBuf};
 
@@ -12,19 +12,16 @@ const EXTENSIONS: [&str; 6] = ["jpg", "jpeg", "png", "heic", "tif", "tiff"];
 
 pub struct Folder {
     dir: PathBuf,
-    /// The file shown last time, so a small folder does not repeat immediately.
-    avoid: Option<PathBuf>,
 }
 
 impl Folder {
-    pub fn new(dir: PathBuf, avoid: Option<PathBuf>) -> Self {
-        Self { dir, avoid }
+    pub fn new(dir: PathBuf) -> Self {
+        Self { dir }
     }
 }
 
 impl Source for Folder {
-    /// Ignores `_cache`: the picture is already on disk and stays where it is.
-    fn fetch(&self, _cache: &Path) -> Result<Artwork> {
+    fn fetch(&self, avoid: Option<&Artwork>) -> Result<Artwork> {
         let entries = std::fs::read_dir(&self.dir)
             .with_context(|| format!("reading {}", self.dir.display()))?;
 
@@ -48,14 +45,16 @@ impl Source for Folder {
         // folder; directory order is not guaranteed stable.
         images.sort();
 
-        // Only worth excluding the previous pick when there is something else to pick.
+        // A file here is recognised by where it lies, which is all the identity a
+        // folder has to offer. Only worth excluding the previous pick when there is
+        // something else to pick.
         if images.len() > 1 {
-            if let Some(avoid) = &self.avoid {
-                images.retain(|p| p != avoid);
+            if let Some(previous) = avoid {
+                images.retain(|p| p != &previous.path);
             }
         }
 
-        let path = images[random_u64(0) as usize % images.len()].clone();
+        let path = images[pick_index(images.len(), 0)].clone();
         let title = path
             .file_stem()
             .and_then(|s| s.to_str())
@@ -74,4 +73,8 @@ impl Source for Folder {
     fn label(&self) -> &'static str {
         "Folder"
     }
+
+    /// Nothing. This source writes no files, so it owns none to throw away — and a
+    /// folder of the user's own pictures is the last place to go deleting things.
+    fn discard_all_but(&self, _keep: &Path) {}
 }

@@ -56,7 +56,7 @@ fn main() -> Result<()> {
                 return Ok(());
             }
             let artwork = rotation::fetch(&config, &state, &paths.cache)?;
-            rotation::show(&artwork, &paths, &mut state)?;
+            rotation::show(&artwork, &config, &paths, &mut state)?;
 
             println!("{}", artwork.title);
             if !artwork.byline.is_empty() {

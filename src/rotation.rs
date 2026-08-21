@@ -6,19 +6,19 @@
 //! that thread. The tray carries an `Artwork` from one to the other; the one-shot
 //! command, having no menu to freeze, simply calls both in a row.
 
-use crate::art::{folder::Folder, met, met::Met, Artwork, Source};
-use crate::config::{self, Config, Paths, State};
+use crate::art::{self, Artwork};
+use crate::config::{Config, Paths, State};
 use crate::wallpaper;
 use anyhow::{Context, Result};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// Downloads the next picture, avoiding whatever is on the desktop now.
 ///
 /// Slow by nature, and safe to call from a worker thread.
 pub fn fetch(config: &Config, state: &State, cache: &Path) -> Result<Artwork> {
-    let source = build_source(config, state);
+    let source = art::source_for(&config.source, cache);
     source
-        .fetch(cache)
+        .fetch(state.shown.as_ref())
         .with_context(|| format!("fetching from {}", source.label()))
 }
 
@@ -28,46 +28,13 @@ pub fn fetch(config: &Config, state: &State, cache: &Path) -> Result<Artwork> {
 /// leaves the day unspent and the next attempt retries.
 ///
 /// Must run on the main thread — see [`wallpaper::pin`].
-pub fn show(artwork: &Artwork, paths: &Paths, state: &mut State) -> Result<()> {
+pub fn show(artwork: &Artwork, config: &Config, paths: &Paths, state: &mut State) -> Result<()> {
     wallpaper::pin(&artwork.path)?;
+    state.record_shown(artwork, &paths.state)?;
 
-    state.last_success = Some(config::now_secs());
-    state.shown = Some(artwork.clone());
-    state.save(&paths.state)?;
-
-    tidy_cache(&paths.cache, &artwork.path);
+    // Built again rather than carried over from `fetch`, which ran on another
+    // thread. Clearing up is the source's own business either way: it is the only
+    // thing that knows which files in the cache are its doing.
+    art::source_for(&config.source, &paths.cache).discard_all_but(&artwork.path);
     Ok(())
-}
-
-fn build_source(config: &Config, state: &State) -> Box<dyn Source> {
-    let shown = state.shown.as_ref();
-    if config.source == "met" {
-        Box::new(Met::new(shown.and_then(|a| met::id_of(&a.path))))
-    } else {
-        Box::new(Folder::new(
-            expand_tilde(&config.source),
-            shown.map(|a| a.path.clone()),
-        ))
-    }
-}
-
-/// Keeps only the picture now on screen. Deleting it while it is the wallpaper
-/// would leave a blank desktop, so the current file is always spared.
-fn tidy_cache(cache: &Path, keep: &Path) {
-    let Ok(entries) = std::fs::read_dir(cache) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_file() && path != keep {
-            let _ = std::fs::remove_file(path);
-        }
-    }
-}
-
-fn expand_tilde(s: &str) -> PathBuf {
-    match s.strip_prefix("~/") {
-        Some(rest) => PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(rest),
-        None => PathBuf::from(s),
-    }
 }
