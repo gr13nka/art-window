@@ -76,3 +76,19 @@ sqlite3 ~/Library/Application\ Support/Dock/desktoppicture.db \
 
 Every slot should name the current image. To see what is actually on screen,
 `screencapture -x` and look at it.
+
+## When the store is not there to be written
+
+macOS can decide the database is bad, rename it to `desktoppicture.db.corrupt` and
+start an empty one. It happened during a long session of testing, and it looks like
+a bug in this program rather than what it is: writes fail with `database is locked`
+or `disk I/O error`, `pin` reports that only the active Space was updated, and every
+Space but the visible one keeps the old picture.
+
+Nothing here needs fixing when that happens. `killall Dock` and the Dock repopulates
+`displays`, `spaces` and `pictures` as Spaces are visited; once `SELECT count(*) FROM
+pictures` is non-zero again, `spread_to_every_space` works exactly as before. Two
+things worth knowing before reaching for the debugger: the quarantined file usually
+passes `pragma integrity_check`, so its name is not evidence of what went wrong, and
+an empty store is also the one case where `pin` is *supposed* to do nothing beyond
+the active Space, because `slots == 0` returns early by design.

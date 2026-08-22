@@ -17,6 +17,29 @@ There are **no tests**. `cargo test` exits 0 because the suite is empty — it i
 evidence of anything. Verification is done by running the binary and reading the
 Dock's store (see `docs/macos-wallpaper.md`).
 
+The menu can be driven from a script, up to a point. Open it with
+
+```sh
+osascript -e 'tell application "System Events" to tell process "art-window" \
+  to (click menu bar item 1 of menu bar 1)'
+```
+
+then walk `menu 1 of menu bar item 1 of menu bar 1` to read every row's name and
+`enabled`. Clicking a **top-level** row works and really does reach the program.
+
+**Clicking a row inside a submenu does not.** The tree reads correctly and
+`perform action "AXPress"` returns success, but no `MenuEvent` ever arrives — checked
+by logging every id the event loop received. So *Show* and *Forget* under
+**Favourites** cannot be verified from a script and have to be clicked by hand; put
+the state a click would produce into `state.json` instead if what you need to test is
+what happens afterwards.
+
+Two smaller traps. The menu stays open when the script ends, so the *next* click
+closes it rather than opening it — send `key code 53` before returning, and if a read
+fails with "invalid index", that is why. And the position AppleScript reports for the
+status item is not to be believed: it read as far off-screen while clicks on it were
+landing perfectly well.
+
 ## The one thing that will waste your afternoon
 
 `NSWorkspace.setDesktopImageURL` **returns success while changing nothing you can
@@ -44,11 +67,12 @@ it before touching `src/wallpaper/macos.rs`.
   normal case. The tray's `TICK` only decides how *often* to ask the question.
 - **Every failure path must set `hold_until`.** The day is marked done only on
   success, so an error with no cooling-off period retries instantly and forever.
-- **`state.last_success` advances only after a *successful* fetch.** A failed
-  network call must not consume the day; the next run retries. `State::record_shown`
-  is the only way to move it: stamping the clock, remembering the picture and
-  writing the file are one operation, so there is no longer a way to do half of it
-  from outside.
+- **`state.last_success` advances only when the day is actually settled.** A failed
+  network call must not consume the day; the next run retries. Two methods may move
+  it and no others: `State::record_fetched` always, because a picture arrived, and
+  `State::record_chosen` only when `is_due` already said one was owed. Each stamps
+  the clock, remembers the picture and writes the file as one operation, so there is
+  no way to do half of it from outside.
 - **The cache filename `met-{id}.{ext}` is load-bearing.** `met::id_of` reads the
   object id back out of it twice over: to keep tomorrow's painting from being
   today's, and to decide which files in the cache are the Met's to delete. Renaming
@@ -70,6 +94,41 @@ it before touching `src/wallpaper/macos.rs`.
   implementation answers to it. Adding a third source should touch `art/` and
   nothing else — an `if config.source == …` outside `art/mod.rs` means the seam has
   been broken again.
+- **A favourite is a copy, and the copy is the whole point.** The cache holds one
+  picture: `discard_all_but` deletes every other download the moment a new one
+  goes up. Remembering a path would remember a file that is already gone, which is
+  why `Favourites::keep` copies into a folder of its own before recording
+  anything.
+- **`Favourites` owns its folder exactly as a source owns the cache.** Its
+  `discard_all_but` has the same name, the same contract and the same reason: only
+  whoever wrote a file may decide it is rubbish, and the file on the desktop is
+  never rubbish. That exception is what lets `forget` drop the very picture on
+  screen without blanking it — the row leaves the menu at once, the file waits
+  until the desktop is pointing somewhere else. The sweep therefore has to be run
+  wherever the desktop changes — after a forget, after a fetch and after a hand-pick
+  — which is why `tray` calls it in all three.
+- **The copy keeps the original file name.** `met::id_of` reads the object id back
+  out of it whatever folder the file sits in, so tomorrow's painting still avoids
+  being the favourite already on the desktop. Two pictures out of someone's own
+  folder can collide, and then one is renamed; a folder recognises its work by
+  path, so nothing is lost by it.
+- **A picture chosen by hand takes the desktop without taking the day.** Showing a
+  favourite, or putting the day's own picture back, leaves `state.fetched` and the
+  clock alone, so tomorrow's painting still arrives at its usual hour however often
+  the desktop is changed in between. The one exception is a picture that was already
+  owed: then the choice settles it, because otherwise the tail of the event loop
+  would spawn the overdue fetch seconds later and take the desktop straight back.
+  `is_due` is still the only thing that decides a picture is owed — `record_chosen`
+  asks it rather than second-guessing it. A download already in the air is dropped
+  rather than hung — see `superseded` in `tray.rs` — because landing it would undo
+  a choice just made.
+- **The source's sweep spares `state.fetched`; the favourites' sweep spares
+  `state.shown`.** Getting these the wrong way round is not a hypothetical: it is
+  the bug that made coming back to today's picture impossible, because handing the
+  favourite's path to `Source::discard_all_but` told the Met to spare a file that
+  was never in its cache, and today's download was deleted. The rule behind both is
+  the same — whoever wrote a file may delete it, but never the one on the desktop,
+  and never the one there is still a way back to.
 - **Nothing decodes image pixels.** `Artwork` carries a `PathBuf`; the file goes
   straight to the OS. This is why there is no `image` dependency. Do not add one
   without a reason that survives the question "does the OS not already do this?".
@@ -113,7 +172,13 @@ Three things that are not guessable from the docs:
   `run()`. It hides the Dock icon for an unbundled `cargo run`; the bundle's
   `LSUIElement` does the same thing earlier and without the bounce. Both are set.
 - Dropping the `TrayIcon` is what removes it from the menu bar, so Quit does
-  `tray.take()` before `ControlFlow::Exit`.
+  `tray.take()` before `ControlFlow::Exit`. Menu *items* are the opposite: a parent
+  keeps an `Rc` of every child, so the favourites submenu can be rebuilt from
+  throwaway handles and answered later by the id the click carries.
+- `muda` fires a menu event from the item's own id and says nothing about where it
+  sat, so a row nested two submenus deep arrives exactly like a top-level one.
+  That is why the favourites rows carry `favourite/show/…` and `favourite/forget/…`
+  ids instead of handles — prefixed because muda hands out bare counters otherwise.
 
 **Start at login is a launchd agent, not `SMAppService`.** `SMAppService.mainApp` is
 the modern answer and needs macOS 13; the development machine runs 12.7. The agent is

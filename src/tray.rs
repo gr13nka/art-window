@@ -19,13 +19,15 @@
 use crate::art::Artwork;
 use crate::autostart;
 use crate::config::{Config, Paths, State};
+use crate::favourites::Favourites;
 use crate::rotation;
 use crate::wallpaper;
 use anyhow::{anyhow, Result};
+use std::path::Path;
 use std::time::{Duration, Instant};
 use tao::event::{Event, StartCause};
 use tao::event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy};
-use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem};
+use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 
 #[cfg(target_os = "macos")]
@@ -52,6 +54,23 @@ enum Wake {
     Fetched(Result<Artwork>),
 }
 
+/// What a click asks of the event loop.
+///
+/// The menu can open a browser and tick a box by itself, but it owns neither the
+/// state nor the settings, and hanging a picture needs both. Rather than borrow
+/// them, it says what it wants and the loop does it.
+enum Wanted {
+    Nothing,
+    /// Keep the picture on the desktop.
+    Keep,
+    /// Put a kept picture up in place of whatever the clock had in mind.
+    Show(String),
+    /// Put the day's own picture back, after one of the above.
+    Today,
+    /// Drop a kept picture from the list.
+    Forget(String),
+}
+
 /// Runs until the user picks Quit.
 pub fn run(paths: Paths, config: Config, mut state: State) -> Result<()> {
     let mut event_loop = EventLoopBuilder::<Wake>::with_user_event().build();
@@ -68,13 +87,18 @@ pub fn run(paths: Paths, config: Config, mut state: State) -> Result<()> {
         let _ = menu_proxy.send_event(Wake::Menu(event));
     }));
 
+    let mut favourites = Favourites::open(&paths.favourites)?;
+
     let ui = Ui::new()?;
-    ui.describe(&state);
+    ui.describe(&state, &favourites);
 
     let mut tray: Option<TrayIcon> = None;
     let mut fetching = false;
     // Set while an attempt is cooling off; cleared by success.
     let mut hold_until: Option<Instant> = None;
+    // Set when a kept picture goes up while a download is still in the air, so that
+    // the download does not land on top of a choice just made.
+    let mut superseded = false;
 
     event_loop.run(move |event, _target, control_flow| {
         match event {
@@ -108,22 +132,89 @@ pub fn run(paths: Paths, config: Config, mut state: State) -> Result<()> {
                     *control_flow = ControlFlow::Exit;
                     return;
                 }
-                ui.handle(&click, &state);
+                // Both ways of picking a picture by hand end in the same place, so
+                // the arms only say which picture and the work happens once, below.
+                let mut chosen: Option<Artwork> = None;
+                match ui.handle(&click, &state) {
+                    Wanted::Nothing => {}
+
+                    Wanted::Keep => {
+                        if let Some(art) = &state.shown {
+                            match favourites.keep(art) {
+                                Ok(()) => ui.describe(&state, &favourites),
+                                Err(e) => {
+                                    report(&e);
+                                    ui.set_status("Could not keep that picture");
+                                }
+                            }
+                        }
+                    }
+
+                    // Cloned out of their owners because hanging one needs `state`
+                    // mutably, and it is about to become the picture `state`
+                    // remembers.
+                    Wanted::Show(key) => chosen = favourites.get(&key).cloned(),
+                    Wanted::Today => chosen = state.fetched.clone(),
+
+                    Wanted::Forget(key) => match favourites.forget(&key) {
+                        Ok(()) => {
+                            // An empty path names no file, which is the right thing
+                            // to spare when nothing is on the desktop.
+                            let on_desktop = state
+                                .shown
+                                .as_ref()
+                                .map_or(Path::new(""), |art| art.path.as_path());
+                            favourites.discard_all_but(on_desktop);
+                            ui.describe(&state, &favourites);
+                        }
+                        Err(e) => {
+                            report(&e);
+                            ui.set_status("Could not drop that favourite");
+                        }
+                    },
+                }
+
+                if let Some(art) = chosen {
+                    match rotation::revisit(&art, &config, &paths, &mut state) {
+                        Ok(()) => {
+                            // Nothing is owed that this has not just answered, and a
+                            // download already in the air would only undo it.
+                            hold_until = None;
+                            superseded = fetching;
+                            favourites.discard_all_but(&art.path);
+                            ui.describe(&state, &favourites);
+                        }
+                        Err(e) => {
+                            report(&e);
+                            ui.set_status("Could not put that picture up");
+                        }
+                    }
+                }
             }
 
             Event::UserEvent(Wake::Fetched(result)) => {
                 fetching = false;
-                match result.and_then(|artwork| {
-                    rotation::show(&artwork, &config, &paths, &mut state).map(|()| artwork)
-                }) {
-                    Ok(_) => {
-                        hold_until = None;
-                        ui.describe(&state);
-                    }
-                    Err(e) => {
-                        report(&e);
-                        hold_until = Some(Instant::now() + RETRY);
-                        ui.set_status("Last attempt failed — will retry");
+                // Dropped on the floor when a kept picture went up while this was
+                // in the air: hanging it now would undo a choice just made. The
+                // file stays where it is, for the next rotation to overwrite or
+                // sweep away. Skipped rather than returned from, because the clock
+                // below still has to be wound.
+                if !std::mem::take(&mut superseded) {
+                    match result.and_then(|artwork| {
+                        rotation::show(&artwork, &config, &paths, &mut state).map(|()| artwork)
+                    }) {
+                        Ok(artwork) => {
+                            hold_until = None;
+                            // Where a favourite dropped while it was on the desktop
+                            // finally goes.
+                            favourites.discard_all_but(&artwork.path);
+                            ui.describe(&state, &favourites);
+                        }
+                        Err(e) => {
+                            report(&e);
+                            hold_until = Some(Instant::now() + RETRY);
+                            ui.set_status("Last attempt failed — will retry");
+                        }
                     }
                 }
             }
@@ -179,6 +270,14 @@ struct Ui {
     title: MenuItem,
     byline: MenuItem,
     open: MenuItem,
+    keep: MenuItem,
+    /// The kept pictures, one submenu each. Rebuilt whole rather than kept in
+    /// handles: a click is answered by the id it carries, so nothing here has to be
+    /// remembered between one opening of the menu and the next.
+    favourites: Submenu,
+    /// The way back from a kept picture to the one the rotation brought in. Its
+    /// text names that picture, so it says what it would return to.
+    today: MenuItem,
     reapply: MenuItem,
     login: CheckMenuItem,
     quit: MenuItem,
@@ -191,6 +290,9 @@ impl Ui {
             title: MenuItem::new("", false, None),
             byline: MenuItem::new("", false, None),
             open: MenuItem::new("Open in browser", false, None),
+            keep: MenuItem::new("Add to favourites", false, None),
+            favourites: Submenu::new("Favourites", false),
+            today: MenuItem::new(NO_WAY_BACK, false, None),
             reapply: MenuItem::new("Re-apply wallpaper", false, None),
             login: CheckMenuItem::new("Start at login", true, autostart::is_enabled(), None),
             quit: MenuItem::new("Quit Art Window", true, None),
@@ -201,6 +303,10 @@ impl Ui {
                 &ui.byline,
                 &ui.open,
                 &PredefinedMenuItem::separator(),
+                &ui.keep,
+                &ui.favourites,
+                &ui.today,
+                &PredefinedMenuItem::separator(),
                 &ui.reapply,
                 &ui.login,
                 &PredefinedMenuItem::separator(),
@@ -210,8 +316,8 @@ impl Ui {
         Ok(ui)
     }
 
-    /// Points the menu at whatever is on the desktop now.
-    fn describe(&self, state: &State) {
+    /// Points the menu at whatever is on the desktop now, and at what is kept.
+    fn describe(&self, state: &State, favourites: &Favourites) {
         match &state.shown {
             Some(art) => {
                 self.title.set_text(&art.title);
@@ -221,23 +327,90 @@ impl Ui {
                     &art.byline
                 });
                 self.open.set_enabled(art.details_url.is_some());
+                self.keep.set_enabled(!favourites.holds(art));
                 self.reapply.set_enabled(true);
             }
             None => {
                 self.title.set_text("No picture yet");
                 self.byline.set_text("Waiting for the first one");
                 self.open.set_enabled(false);
+                self.keep.set_enabled(false);
                 self.reapply.set_enabled(false);
             }
         }
+        self.relist(favourites);
+        self.offer_the_way_back(state);
+    }
+
+    /// Points the way-back row at the day's picture, when there is one to go back
+    /// to and the desktop is not already showing it.
+    ///
+    /// The file is checked for because a source can be changed, or a cache emptied,
+    /// between the picture being fetched and anyone asking for it again; a row that
+    /// only ever reports a failure is worse than a row that is plainly unavailable.
+    fn offer_the_way_back(&self, state: &State) {
+        let todays = state
+            .fetched
+            .as_ref()
+            .filter(|art| Some(&art.path) != state.shown.as_ref().map(|s| &s.path))
+            .filter(|art| art.path.exists());
+        match todays {
+            Some(art) => {
+                self.today
+                    .set_text(format!("Back to {}", shorten(&art.title)));
+                self.today.set_enabled(true);
+            }
+            None => {
+                self.today.set_text(NO_WAY_BACK);
+                self.today.set_enabled(false);
+            }
+        }
+    }
+
+    /// Rebuilds the favourites submenu from the list.
+    ///
+    /// Wholesale, and not by difference: there are a handful of rows, and this runs
+    /// when a picture changes rather than while anyone is looking at the menu.
+    fn relist(&self, favourites: &Favourites) {
+        while self.favourites.remove_at(0).is_some() {}
+        for (key, art) in favourites.iter() {
+            let row = Submenu::new(shorten(&art.title), true);
+            let _ = row.append(&MenuItem::with_id(
+                format!("{SHOW}{key}"),
+                "Show",
+                true,
+                None,
+            ));
+            let _ = row.append(&MenuItem::with_id(
+                format!("{FORGET}{key}"),
+                "Forget",
+                true,
+                None,
+            ));
+            let _ = self.favourites.append(&row);
+        }
+        self.favourites.set_enabled(!favourites.is_empty());
     }
 
     fn set_status(&self, text: &str) {
         self.byline.set_text(text);
     }
 
-    /// Acts on a click. Quit is handled by the caller, which owns the icon.
-    fn handle(&self, click: &MenuEvent, state: &State) {
+    /// Answers a click, doing what it can and asking for the rest.
+    ///
+    /// Quit is handled by the caller, which owns the icon.
+    fn handle(&self, click: &MenuEvent, state: &State) -> Wanted {
+        let id: &str = click.id.as_ref();
+        if let Some(key) = id.strip_prefix(SHOW) {
+            return Wanted::Show(key.to_string());
+        } else if let Some(key) = id.strip_prefix(FORGET) {
+            return Wanted::Forget(key.to_string());
+        } else if click.id == self.keep.id() {
+            return Wanted::Keep;
+        } else if click.id == self.today.id() {
+            return Wanted::Today;
+        }
+
         if click.id == self.open.id() {
             if let Some(url) = state.shown.as_ref().and_then(|a| a.details_url.as_deref()) {
                 let _ = std::process::Command::new("/usr/bin/open")
@@ -260,7 +433,33 @@ impl Ui {
                 self.login.set_checked(!wanted);
             }
         }
+        Wanted::Nothing
     }
+}
+
+/// What the rows of the favourites submenu are called.
+///
+/// muda hands out plain counters otherwise, and a row has to survive the menu being
+/// rebuilt underneath it, so each carries the key of the picture it means. The
+/// prefixes keep those keys clear of the counters.
+const SHOW: &str = "favourite/show/";
+const FORGET: &str = "favourite/forget/";
+
+/// What the way-back row says when there is nowhere to go back to: either the
+/// day's picture is already up, or none has been fetched since the program learnt
+/// to remember which one it was.
+const NO_WAY_BACK: &str = "Back to today's picture";
+
+/// Menu rows are for recognising a picture, not reading a catalogue entry, and the
+/// Met has titles a full line long.
+const TITLE_LIMIT: usize = 44;
+
+fn shorten(title: &str) -> String {
+    if title.chars().count() <= TITLE_LIMIT {
+        return title.to_string();
+    }
+    let kept: String = title.chars().take(TITLE_LIMIT - 1).collect();
+    format!("{}…", kept.trim_end())
 }
 
 /// The menu bar glyph: a framed picture with a sun over a hill, drawn a pixel at a

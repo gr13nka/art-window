@@ -36,19 +36,29 @@ impl Default for Config {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct State {
-    /// Unix seconds of the last *successful* fetch. A failure leaves this alone,
-    /// so the next run retries rather than writing the day off. Private, because
-    /// the only correct moment to move it is [`State::record_shown`].
+    /// Unix seconds of the moment the day was last settled. A failure leaves this
+    /// alone, so the next run retries rather than writing the day off. Private,
+    /// because the only correct moments to move it are [`State::record_fetched`]
+    /// and — when a picture was already owed — [`State::record_chosen`].
     last_success: Option<u64>,
     /// The picture currently on the desktop. Two jobs: the menu names it, and the
     /// next fetch avoids it so today's painting is not yesterday's.
     pub shown: Option<Artwork>,
+    /// The picture the rotation last brought in — today's. Kept apart from `shown`
+    /// because a picture chosen by hand takes the desktop without taking the day:
+    /// this is the one the menu offers a way back to, and the one file in the cache
+    /// that must survive the sweep.
+    pub fetched: Option<Artwork>,
 }
 
 pub struct Paths {
     pub config: PathBuf,
     pub state: PathBuf,
     pub cache: PathBuf,
+    /// The pictures kept back from the rotation, and the list naming them. A folder
+    /// of its own because the cache is emptied daily and this is the one place a
+    /// picture is safe from that.
+    pub favourites: PathBuf,
 }
 
 impl Paths {
@@ -60,6 +70,7 @@ impl Paths {
             config: base.join("config.toml"),
             state: base.join("state.json"),
             cache: base.join("cache"),
+            favourites: base.join("favourites"),
         })
     }
 }
@@ -117,14 +128,38 @@ impl State {
             .unwrap_or_default()
     }
 
-    /// Records `artwork` as the picture of the day.
+    /// Records `artwork` as the picture of the day, fresh from the rotation.
     ///
     /// Stamping the clock, remembering the picture and writing the file are one
     /// operation and not three: the day is spent only by a painting that reached the
     /// desktop, and there is no way to do half of it. Callers must have hung the
     /// wallpaper first — see [`crate::rotation::show`].
-    pub fn record_shown(&mut self, artwork: &Artwork, path: &Path) -> Result<()> {
+    pub fn record_fetched(&mut self, artwork: &Artwork, path: &Path) -> Result<()> {
         self.last_success = Some(now_secs());
+        self.fetched = Some(artwork.clone());
+        self.shown = Some(artwork.clone());
+        self.save(path)
+    }
+
+    /// Records `artwork` as the picture now on the desktop, chosen by hand.
+    ///
+    /// The day's picture is left where it is, so there is still something to come
+    /// back to. The clock moves only if a picture was already owed: choosing one
+    /// settles that debt, and without it the overdue fetch would start seconds later
+    /// and take the desktop straight back. When nothing was owed the schedule is
+    /// untouched, so tomorrow's painting arrives at its usual hour however often the
+    /// desktop was changed in between.
+    ///
+    /// Callers must have hung the wallpaper first — see [`crate::rotation::revisit`].
+    pub fn record_chosen(
+        &mut self,
+        artwork: &Artwork,
+        refresh_hours: u64,
+        path: &Path,
+    ) -> Result<()> {
+        if self.is_due(refresh_hours) {
+            self.last_success = Some(now_secs());
+        }
         self.shown = Some(artwork.clone());
         self.save(path)
     }

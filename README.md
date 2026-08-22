@@ -30,11 +30,32 @@ L'Arlésienne: Madame Joseph-Michel Ginoux
 Vincent van Gogh, 1888–89
 Open in browser
 ─────────────────────
+Add to favourites
+Favourites            ▸   L'Arlésienne: Madame…  ▸  Show
+                          Wheat Field with Cyp…     Forget
+Back to today's picture
+─────────────────────
 Re-apply wallpaper
 ✓ Start at login
 ─────────────────────
 Quit Art Window
 ```
+
+**Add to favourites** takes a copy of the painting on the desktop and keeps it,
+which is the only thing that saves it: the cache holds one picture, and tomorrow's
+arrival deletes today's. **Favourites ▸ … ▸ Show** puts a kept painting up when the
+day's does not suit, and the last row — which names the painting it means — puts
+today's back when you have had enough of the substitute. **Forget** drops a painting
+from the list; if it happens to be the one on the desktop, its file waits until the
+desktop has moved on.
+
+Choosing a painting by hand does not disturb the schedule: today's stays today's,
+and tomorrow's arrives at its usual hour no matter how often you change your mind in
+between. The exception is a painting that was already overdue — then whatever you
+choose settles the day, since something had to.
+
+Everything kept lives in one folder — `art-window --where` will say which — so the
+whole collection is one thing to copy or throw away.
 
 **Start at login** writes a launchd agent to `~/Library/LaunchAgents`. It takes
 effect at your next login — switching it on cannot start a program that is already
@@ -54,7 +75,7 @@ to see what happens rather than trust that it did.
 art-window            # live in the menu bar (what the .app does)
 art-window --once     # fetch a painting now, print it, exit
 art-window --if-due   # the same, but only if one is due
-art-window --where    # print where settings, state and cache live
+art-window --where    # print where settings, state, cache and favourites live
 ```
 
 The binary lives inside the bundle, so either call it there or link it onto your

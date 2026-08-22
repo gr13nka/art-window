@@ -9,6 +9,7 @@
 mod art;
 mod autostart;
 mod config;
+mod favourites;
 mod rotation;
 mod tray;
 mod wallpaper;
@@ -38,6 +39,7 @@ fn main() -> Result<()> {
         println!("config  {}", paths.config.display());
         println!("state   {}", paths.state.display());
         println!("cache   {}", paths.cache.display());
+        println!("kept    {}", paths.favourites.display());
         println!(
             "login   {}",
             if autostart::is_enabled() { "on" } else { "off" }
@@ -85,5 +87,5 @@ fn usage() {
     println!("  art-window            live in the menu bar and rotate daily");
     println!("  art-window --once     fetch a picture now, then exit");
     println!("  art-window --if-due   the same, but only if one is due");
-    println!("  art-window --where    print where settings and cache live");
+    println!("  art-window --where    print where settings and pictures live");
 }
