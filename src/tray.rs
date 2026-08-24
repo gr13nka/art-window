@@ -129,9 +129,17 @@ pub fn run(paths: Paths, config: Config, mut state: State) -> Result<()> {
     // Never dropped, because `run` below never returns. Dropping it would silence
     // the notifications, which is what the binding is holding them open against.
     let wake_proxy = proxy.clone();
-    let _woken = wake::watch(move || {
+    let _woken = match wake::watch(move || {
         let _ = wake_proxy.send_event(Wake::Woke);
-    });
+    }) {
+        Ok(watch) => Some(watch),
+        Err(error) => {
+            // The Linux GLib tick below preserves correctness; wake notification
+            // only removes up to a minute of latency after opening a lid.
+            report(&error);
+            None
+        }
+    };
 
     let mut favourites = Favourites::open(&paths.favourites)?;
 
@@ -144,13 +152,15 @@ pub fn run(paths: Paths, config: Config, mut state: State) -> Result<()> {
     ui.describe(&state, &favourites);
 
     let mut tray: Option<TrayIcon> = None;
+    #[cfg(target_os = "linux")]
+    let mut timer_started = false;
     let mut fetching = false;
     // Unix seconds until which a failed attempt is cooling off; cleared by success.
     // Wall clock rather than an `Instant` for the reason in the module comment: a
     // fifteen-minute countdown started before the lid closed still owes fifteen
     // minutes of *waking* time the next morning, which is the very complaint the
     // schedule exists to answer.
-    let mut hold_until: Option<u64> = None;
+    let mut cooling_off: Option<u64> = None;
     // Set when a kept picture goes up while a download is still in the air, so that
     // the download does not land on top of a choice just made.
     let mut superseded = false;
@@ -169,6 +179,14 @@ pub fn run(paths: Paths, config: Config, mut state: State) -> Result<()> {
             // wants a run loop that is already turning — otherwise it goes missing
             // in front of full-screen apps.
             Event::NewEvents(StartCause::Init) => {
+                #[cfg(target_os = "linux")]
+                if !timer_started {
+                    // tao's GTK backend does not register a source for WaitUntil.
+                    // This source decides nothing; it merely lets the loop ask its
+                    // wall-clock question at least once a minute.
+                    glib::timeout_add_seconds_local(60, || glib::ControlFlow::Continue);
+                    timer_started = true;
+                }
                 match build_tray(&ui.menu) {
                     Ok(built) => tray = Some(built),
                     Err(e) => {
@@ -233,7 +251,7 @@ pub fn run(paths: Paths, config: Config, mut state: State) -> Result<()> {
                         rotation::show(&artwork, &config, &paths, &mut state).map(|()| artwork)
                     }) {
                         Ok(artwork) => {
-                            hold_until = None;
+                            cooling_off = None;
                             // Where a favourite dropped while it was on the desktop
                             // finally goes.
                             favourites.discard_all_but(&artwork.path);
@@ -241,7 +259,7 @@ pub fn run(paths: Paths, config: Config, mut state: State) -> Result<()> {
                         }
                         Err(e) => {
                             report(&e);
-                            hold_until = Some(now_secs() + RETRY.as_secs());
+                            cooling_off = Some(now_secs() + RETRY.as_secs());
                             ui.set_status("Last attempt failed — will retry");
                         }
                     }
@@ -310,7 +328,7 @@ pub fn run(paths: Paths, config: Config, mut state: State) -> Result<()> {
                 Ok(()) => {
                     // Nothing is owed that this has not just answered, and a
                     // download already in the air would only undo it.
-                    hold_until = None;
+                    cooling_off = None;
                     superseded = fetching;
                     favourites.discard_all_but(&art.path);
                     ui.describe(&state, &favourites);
@@ -325,7 +343,7 @@ pub fn run(paths: Paths, config: Config, mut state: State) -> Result<()> {
         // When to wake up next. Recomputed after every event rather than scheduled
         // once, so that a click, a finished download and a tick all leave the clock
         // in the same, correct place.
-        let cooling_off = hold_until
+        let cooling_off = cooling_off
             .and_then(|until| until.checked_sub(now_secs()))
             .filter(|left| *left > 0);
         *control_flow = if fetching {

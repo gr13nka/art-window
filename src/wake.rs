@@ -15,7 +15,7 @@
 ///
 /// The returned [`Watch`] owns the subscription. Hold it for as long as the calls
 /// are wanted; dropping it stops them.
-pub fn watch(on_wake: impl Fn() + 'static) -> Watch {
+pub fn watch(on_wake: impl Fn() + 'static) -> anyhow::Result<Watch> {
     Watch::new(on_wake)
 }
 
@@ -42,7 +42,7 @@ mod platform {
     }
 
     impl Watch {
-        pub(super) fn new(on_wake: impl Fn() + 'static) -> Self {
+        pub(super) fn new(on_wake: impl Fn() + 'static) -> anyhow::Result<Self> {
             // The notification itself says nothing worth reading: that it arrived at
             // all is the entire message.
             let block = RcBlock::new(move |_: NonNull<NSNotification>| on_wake());
@@ -63,7 +63,7 @@ mod platform {
                 )
             };
 
-            Self { centre, token }
+            Ok(Self { centre, token })
         }
     }
 
@@ -78,18 +78,48 @@ mod platform {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
 pub use platform::Watch;
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
 mod platform {
-    /// Nothing, until there is a backend that can do better. The event loop's tick
-    /// remains the only thing that notices a new day, as it was everywhere before.
-    pub struct Watch;
+    use anyhow::{Context, Result};
+
+    /// A live subscription to logind's system-bus sleep transition.
+    pub struct Watch {
+        connection: gio::DBusConnection,
+        subscription: Option<gio::SignalSubscriptionId>,
+    }
 
     impl Watch {
-        pub(super) fn new(_on_wake: impl Fn() + 'static) -> Self {
-            Self
+        pub(super) fn new(on_wake: impl Fn() + 'static) -> Result<Self> {
+            let connection = gio::bus_get_sync(gio::BusType::System, gio::Cancellable::NONE)
+                .context("watching logind for wake notifications")?;
+            let subscription = connection.signal_subscribe(
+                Some("org.freedesktop.login1"),
+                Some("org.freedesktop.login1.Manager"),
+                Some("PrepareForSleep"),
+                Some("/org/freedesktop/login1"),
+                None,
+                gio::DBusSignalFlags::NONE,
+                move |_, _, _, _, _, parameters| {
+                    if parameters.get::<(bool,)>() == Some((false,)) {
+                        on_wake();
+                    }
+                },
+            );
+            Ok(Self {
+                connection,
+                subscription: Some(subscription),
+            })
+        }
+    }
+
+    impl Drop for Watch {
+        fn drop(&mut self) {
+            if let Some(subscription) = self.subscription.take() {
+                self.connection.signal_unsubscribe(subscription);
+            }
         }
     }
 }

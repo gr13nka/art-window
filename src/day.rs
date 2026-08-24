@@ -33,12 +33,33 @@ fn offset(at: u64) -> i64 {
     NSTimeZone::localTimeZone().secondsFromGMTForDate(&when) as i64
 }
 
-/// UTC, until there is a backend that knows better.
-///
-/// This joins the rest of the platform work that is planned and not built. On a
-/// machine far from Greenwich the picture changes at the wrong hour of the local
-/// evening or morning — wrong, but not stuck, which is the failure worth avoiding.
-#[cfg(not(target_os = "macos"))]
-fn offset(_at: u64) -> i64 {
-    0
+/// GLib asks the system timezone database for the interval containing this UTC
+/// instant, so each side of a daylight-saving boundary gets its own real offset.
+#[cfg(target_os = "linux")]
+fn offset(at: u64) -> i64 {
+    let zone = glib::TimeZone::local();
+    offset_in(&zone, at)
+}
+
+#[cfg(target_os = "linux")]
+fn offset_in(zone: &glib::TimeZone, at: u64) -> i64 {
+    let interval = zone.find_interval(glib::TimeType::Universal, at as i64);
+    if interval < 0 {
+        0
+    } else {
+        zone.offset(interval) as i64
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::offset_in;
+
+    #[test]
+    #[allow(deprecated)]
+    fn asks_for_the_offset_at_each_instant() {
+        let new_york = glib::TimeZone::new(Some("America/New_York"));
+        assert_eq!(offset_in(&new_york, 1_704_067_200), -5 * 60 * 60);
+        assert_eq!(offset_in(&new_york, 1_719_792_000), -4 * 60 * 60);
+    }
 }
