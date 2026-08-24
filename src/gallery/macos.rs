@@ -9,7 +9,7 @@
 //! in, and it is what the two buttons are aimed at — three jobs, but one object,
 //! because all three are the same question of which picture is meant.
 
-use super::Pick;
+use super::{Control, Pick, Snapshot};
 use crate::art::Artwork;
 use crate::favourites::Favourites;
 use anyhow::{anyhow, Result};
@@ -30,6 +30,15 @@ use std::path::Path;
 use std::rc::Rc;
 use tao::platform::macos::WindowExtMacOS;
 use tao::window::Window;
+
+pub(super) fn present(window: &Window) {
+    window.set_visible(true);
+    window.set_focus();
+}
+
+pub(super) fn close(_window: &Window) -> bool {
+    false
+}
 
 /// How wide the column of thumbnails is. Fixed, so that the picture beside it gets
 /// every point the window gains — and so that the column never has to be laid out
@@ -492,7 +501,11 @@ impl Content {
     ///
     /// Must run on the main thread, and says so with an error rather than a comment,
     /// for the same reason [`crate::desktop::pin`] does.
-    pub fn install(window: &Window, on_pick: Rc<dyn Fn(Pick)>) -> Result<Self> {
+    pub fn install(
+        window: &Window,
+        on_pick: Rc<dyn Fn(Pick)>,
+        _on_control: Rc<dyn Fn(Control)>,
+    ) -> Result<Self> {
         let mtm = MainThreadMarker::new()
             .ok_or_else(|| anyhow!("the favourites window must be built on the main thread"))?;
 
@@ -561,4 +574,12 @@ impl Content {
                 .collect(),
         );
     }
+
+    pub fn describe(&self, _snapshot: &Snapshot, favourites: &Favourites) {
+        self.relist(favourites);
+    }
+
+    pub fn describe_status(&self, _snapshot: &Snapshot) {}
+
+    pub fn set_login(&self, _enabled: bool) {}
 }

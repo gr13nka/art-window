@@ -27,7 +27,7 @@ use crate::art::Artwork;
 use crate::config::{now_secs, Config, Paths, State};
 use crate::desktop;
 use crate::favourites::Favourites;
-use crate::gallery::{Gallery, Pick};
+use crate::gallery::{Control, Gallery, Pick};
 use crate::rotation;
 use crate::wake;
 use anyhow::{anyhow, Result};
@@ -41,6 +41,11 @@ use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 
 #[cfg(target_os = "macos")]
 use tao::platform::macos::{ActivationPolicy, EventLoopExtMacOS};
+#[cfg(target_os = "linux")]
+use {
+    gio::prelude::{ActionMapExt, ApplicationExt},
+    tao::platform::unix::{EventLoopBuilderExtUnix, EventLoopWindowTargetExtUnix},
+};
 
 /// How often to look at the clock while the machine is plainly awake. The waking
 /// itself is announced — see [`wake`] — so this is only the backstop for a day that
@@ -60,10 +65,11 @@ enum Wake {
     /// A menu item was clicked. Forwarded rather than acted on where it arrives,
     /// because that is one of AppKit's own callbacks and no place to do work.
     Menu(MenuEvent),
-    /// A picture in the favourites window was picked. Forwarded for the same
-    /// reason as a menu click, and by the same route: it arrives mid-click on
-    /// AppKit's thread, which owns nothing this loop does.
-    Picked(Pick),
+    /// A window callback already translated into the event loop's vocabulary.
+    Chose(Wanted),
+    #[cfg(target_os = "linux")]
+    /// Whether a StatusNotifierWatcher is currently rendering tray items.
+    TrayHost(bool),
     /// The worker finished, for better or worse.
     Fetched(Result<Artwork>),
     /// The machine came back from sleep. Carries nothing, and its arm does nothing:
@@ -93,6 +99,24 @@ enum Wanted {
     Forget(String),
     /// Open the window where the kept pictures can be looked at.
     Gallery,
+    Browse,
+    Reapply,
+    Login(bool),
+    Quit,
+}
+
+impl From<Control> for Wanted {
+    fn from(control: Control) -> Self {
+        match control {
+            Control::Browse => Self::Browse,
+            Control::Next => Self::Next,
+            Control::Keep => Self::Keep,
+            Control::Today => Self::Today,
+            Control::Reapply => Self::Reapply,
+            Control::Login(enabled) => Self::Login(enabled),
+            Control::Quit => Self::Quit,
+        }
+    }
 }
 
 impl From<Pick> for Wanted {
@@ -106,8 +130,24 @@ impl From<Pick> for Wanted {
 
 /// Runs until the user picks Quit.
 pub fn run(paths: Paths, config: Config, mut state: State) -> Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        glib::set_prgname(Some(desktop::APP_ID));
+    }
+    let mut builder = EventLoopBuilder::<Wake>::with_user_event();
+    #[cfg(target_os = "linux")]
+    builder.with_app_id(desktop::APP_ID);
     #[cfg_attr(target_os = "linux", allow(unused_mut))]
-    let mut event_loop = EventLoopBuilder::<Wake>::with_user_event().build();
+    let mut event_loop = builder.build();
+
+    #[cfg(target_os = "linux")]
+    gdk::set_program_class(desktop::APP_ID);
+
+    #[cfg(target_os = "linux")]
+    if event_loop.gtk_app().is_remote() {
+        event_loop.gtk_app().activate();
+        return Ok(());
+    }
 
     // No Dock icon, no application menu: this program lives in the menu bar. The
     // bundle's `LSUIElement` says the same thing earlier and without the momentary
@@ -120,6 +160,23 @@ pub fn run(paths: Paths, config: Config, mut state: State) -> Result<()> {
     MenuEvent::set_event_handler(Some(move |event| {
         let _ = menu_proxy.send_event(Wake::Menu(event));
     }));
+
+    #[cfg(target_os = "linux")]
+    let _tray_host_watch = {
+        // The D-Bus subscription is delivered on this GTK main context. It still
+        // goes through tao's queue so tray changes and window actions have one
+        // ordering and one owner.
+        let host_proxy = proxy.clone();
+        match desktop::watch_tray_host(move |present| {
+            let _ = host_proxy.send_event(Wake::TrayHost(present));
+        }) {
+            Ok(watch) => Some(watch),
+            Err(error) => {
+                report(&error);
+                None
+            }
+        }
+    };
 
     // Both callbacks do the same thing and for the same reason: they arrive on
     // somebody else's terms — AppKit's here, the workspace's below — and neither is
@@ -146,14 +203,28 @@ pub fn run(paths: Paths, config: Config, mut state: State) -> Result<()> {
     // The window answers a click the same way the menu does: by saying what
     // happened and letting the loop decide what it means.
     let pick_proxy = proxy.clone();
-    let mut ui = Ui::new(move |pick| {
-        let _ = pick_proxy.send_event(Wake::Picked(pick));
-    })?;
+    let control_proxy = proxy.clone();
+    let mut ui = Ui::new(
+        move |pick| {
+            let _ = pick_proxy.send_event(Wake::Chose(pick.into()));
+        },
+        move |control| {
+            let _ = control_proxy.send_event(Wake::Chose(control.into()));
+        },
+    )?;
     ui.describe(&state, &favourites);
 
     let mut tray: Option<TrayIcon> = None;
     #[cfg(target_os = "linux")]
     let mut timer_started = false;
+    #[cfg(target_os = "linux")]
+    let mut initialized = false;
+    #[cfg(target_os = "linux")]
+    let mut quit_action_added = false;
+    #[cfg(target_os = "linux")]
+    let mut window_requested = false;
+    #[cfg(target_os = "linux")]
+    let indicator_available = desktop::appindicator_available();
     let mut fetching = false;
     // Unix seconds until which a failed attempt is cooling off; cleared by success.
     // Wall clock rather than an `Instant` for the reason in the module comment: a
@@ -175,9 +246,6 @@ pub fn run(paths: Paths, config: Config, mut state: State) -> Result<()> {
         // asked from two places — a menu row and a picture in the window — and
         // answering them twice over is how the two would drift apart.
         let wanted = match event {
-            // The status item is built here and not before `run`, because tray-icon
-            // wants a run loop that is already turning — otherwise it goes missing
-            // in front of full-screen apps.
             Event::NewEvents(StartCause::Init) => {
                 #[cfg(target_os = "linux")]
                 if !timer_started {
@@ -187,42 +255,90 @@ pub fn run(paths: Paths, config: Config, mut state: State) -> Result<()> {
                     glib::timeout_add_seconds_local(60, || glib::ControlFlow::Continue);
                     timer_started = true;
                 }
-                match build_tray(&ui.menu) {
-                    Ok(built) => tray = Some(built),
-                    Err(e) => {
-                        // Without an icon there is no way to quit and no way to know
-                        // why nothing appeared, so this one is fatal.
-                        report(&e);
+
+                #[cfg(target_os = "macos")]
+                {
+                    // tray-icon wants a run loop that is already turning — building
+                    // here keeps it visible in front of full-screen applications.
+                    match build_tray(&ui.menu) {
+                        Ok(built) => tray = Some(built),
+                        Err(e) => {
+                            report(&e);
+                            *control_flow = ControlFlow::Exit;
+                            return;
+                        }
+                    }
+                    wake_run_loop();
+                }
+
+                #[cfg(target_os = "linux")]
+                {
+                    if !quit_action_added {
+                        let quit = gio::SimpleAction::new(desktop::QUIT_ACTION, None);
+                        let quit_proxy = proxy.clone();
+                        quit.connect_activate(move |_, _| {
+                            let _ = quit_proxy.send_event(Wake::Chose(Wanted::Quit));
+                        });
+                        target.gtk_app().add_action(&quit);
+                        quit_action_added = true;
+                    }
+
+                    // A remote GApplication activation emits Init again. The first
+                    // one establishes fallback presence; every later one is the
+                    // explicit gesture to bring that window back.
+                    if initialized {
+                        window_requested = true;
+                    } else {
+                        initialized = true;
+                    }
+                    if let Err(error) = ui.present(target, &favourites) {
+                        report(&error);
                         *control_flow = ControlFlow::Exit;
                         return;
                     }
+                    if tray.is_some() && !window_requested {
+                        ui.minimize();
+                    }
                 }
-                wake_run_loop();
                 Wanted::Nothing
             }
 
             // The tick. Someone may have changed the login setting in System
             // Settings since the last one.
             Event::NewEvents(StartCause::ResumeTimeReached { .. }) => {
-                ui.login.set_checked(desktop::starts_at_login());
+                ui.set_login(desktop::starts_at_login());
                 Wanted::Nothing
             }
 
-            Event::UserEvent(Wake::Menu(click)) => {
-                if click.id == ui.quit.id() {
-                    // Dropping the icon is what takes it out of the menu bar, and
-                    // dropping the window is what shuts it.
-                    tray.take();
-                    ui.dismiss();
-                    *control_flow = ControlFlow::Exit;
-                    return;
-                }
-                ui.handle(&click, &state)
-            }
+            Event::UserEvent(Wake::Menu(click)) => ui.handle(&click),
 
-            // The window asks for the same two things the submenu used to, in its
-            // own two words.
-            Event::UserEvent(Wake::Picked(pick)) => pick.into(),
+            Event::UserEvent(Wake::Chose(wanted)) => wanted,
+
+            #[cfg(target_os = "linux")]
+            Event::UserEvent(Wake::TrayHost(present)) => {
+                if present && indicator_available {
+                    if tray.is_none() {
+                        match build_tray(&ui.menu) {
+                            Ok(built) => {
+                                tray = Some(built);
+                                wake_run_loop();
+                            }
+                            Err(error) => report(&error),
+                        }
+                    }
+                    if tray.is_some() && !window_requested {
+                        ui.minimize();
+                    }
+                } else {
+                    tray.take();
+                    if let Err(error) = ui.present(target, &favourites) {
+                        report(&error);
+                        *control_flow = ControlFlow::Exit;
+                        return;
+                    }
+                }
+                Wanted::Nothing
+            }
 
             // Shutting the window is not quitting: the program lives in the menu
             // bar and carries on there. Deliberately not returned from, so the
@@ -233,7 +349,11 @@ pub fn run(paths: Paths, config: Config, mut state: State) -> Result<()> {
                 ..
             } => {
                 if ui.owns_window(window_id) {
-                    ui.dismiss();
+                    #[cfg(target_os = "linux")]
+                    {
+                        window_requested = false;
+                    }
+                    ui.close_window();
                 }
                 Wanted::Nothing
             }
@@ -282,10 +402,49 @@ pub fn run(paths: Paths, config: Config, mut state: State) -> Result<()> {
             Wanted::Next => asked_for_next = true,
 
             Wanted::Gallery => {
+                #[cfg(target_os = "linux")]
+                {
+                    window_requested = true;
+                }
                 if let Err(e) = ui.present(target, &favourites) {
                     report(&e);
                     ui.set_status("Could not open the favourites window");
                 }
+            }
+
+            Wanted::Browse => {
+                if let Some(url) = state
+                    .shown
+                    .as_ref()
+                    .and_then(|art| art.details_url.as_deref())
+                {
+                    desktop::browse(url);
+                }
+            }
+
+            Wanted::Reapply => {
+                if let Some(art) = &state.shown {
+                    if let Err(error) = desktop::pin(&art.path) {
+                        report(&error);
+                        ui.set_status("Could not re-apply the wallpaper");
+                    }
+                }
+            }
+
+            Wanted::Login(enabled) => {
+                if let Err(error) = desktop::set_start_at_login(enabled) {
+                    report(&error);
+                    ui.set_login(!enabled);
+                } else {
+                    ui.set_login(enabled);
+                }
+            }
+
+            Wanted::Quit => {
+                tray.take();
+                ui.dismiss();
+                *control_flow = ControlFlow::Exit;
+                return;
             }
 
             Wanted::Keep => {
@@ -420,7 +579,10 @@ struct Ui {
 }
 
 impl Ui {
-    fn new(on_pick: impl Fn(Pick) + 'static) -> Result<Self> {
+    fn new(
+        on_pick: impl Fn(Pick) + 'static,
+        on_control: impl Fn(Control) + 'static,
+    ) -> Result<Self> {
         let ui = Self {
             menu: Menu::new(),
             title: MenuItem::new("", false, None),
@@ -429,7 +591,7 @@ impl Ui {
             next: MenuItem::new("Next picture", true, None),
             keep: MenuItem::new("Add to favourites", false, None),
             favourites: MenuItem::new("Favourites…", false, None),
-            gallery: Gallery::new(on_pick),
+            gallery: Gallery::new(on_pick, on_control),
             today: MenuItem::new(NO_WAY_BACK, false, None),
             reapply: MenuItem::new("Re-apply wallpaper", false, None),
             login: CheckMenuItem::new("Start at login", true, desktop::starts_at_login(), None),
@@ -478,7 +640,8 @@ impl Ui {
                 self.reapply.set_enabled(false);
             }
         }
-        self.relist(favourites);
+        self.gallery.describe(state, favourites);
+        self.favourites.set_enabled(!favourites.is_empty());
         self.offer_the_way_back(state);
     }
 
@@ -507,16 +670,6 @@ impl Ui {
         }
     }
 
-    /// Tells both surfaces what is kept.
-    ///
-    /// The window is told even though it is usually shut, because the alternative
-    /// is for every caller to know whether it is open, and the one that got that
-    /// wrong would leave a window showing a painting already thrown away.
-    fn relist(&mut self, favourites: &Favourites) {
-        self.favourites.set_enabled(!favourites.is_empty());
-        self.gallery.relist(favourites);
-    }
-
     /// Opens the window, or brings it forward if it is already up.
     fn present<T>(
         &mut self,
@@ -536,8 +689,23 @@ impl Ui {
         self.gallery.dismiss();
     }
 
-    fn set_status(&self, text: &str) {
+    fn close_window(&mut self) {
+        self.gallery.close();
+    }
+
+    #[cfg(target_os = "linux")]
+    fn minimize(&self) {
+        self.gallery.minimize();
+    }
+
+    fn set_status(&mut self, text: &str) {
         self.byline.set_text(text);
+        self.gallery.set_status(text);
+    }
+
+    fn set_login(&mut self, enabled: bool) {
+        self.login.set_checked(enabled);
+        self.gallery.set_login(enabled);
     }
 
     /// Says whether a download is in the air.
@@ -547,17 +715,17 @@ impl Ui {
     /// writing a file into the cache the sweep had already been run for. The status
     /// line is only set on the way in, because whatever comes back replaces it —
     /// a new painting's byline, or the word that there is none.
-    fn set_fetching(&self, fetching: bool) {
+    fn set_fetching(&mut self, fetching: bool) {
         self.next.set_enabled(!fetching);
+        self.gallery.set_fetching(fetching);
         if fetching {
             self.set_status("Fetching…");
         }
     }
 
-    /// Answers a click, doing what it can and asking for the rest.
-    ///
-    /// Quit is handled by the caller, which owns the icon.
-    fn handle(&self, click: &MenuEvent, state: &State) -> Wanted {
+    /// Translates a click without acting on it. Both surfaces meet in the event
+    /// loop's `Wanted` match, so side effects have exactly one owner.
+    fn handle(&self, click: &MenuEvent) -> Wanted {
         if click.id == self.keep.id() {
             return Wanted::Keep;
         } else if click.id == self.favourites.id() {
@@ -569,26 +737,16 @@ impl Ui {
         }
 
         if click.id == self.open.id() {
-            if let Some(url) = state.shown.as_ref().and_then(|a| a.details_url.as_deref()) {
-                desktop::browse(url);
-            }
+            Wanted::Browse
         } else if click.id == self.reapply.id() {
-            if let Some(art) = &state.shown {
-                if let Err(e) = desktop::pin(&art.path) {
-                    report(&e);
-                    self.set_status("Could not re-apply the wallpaper");
-                }
-            }
+            Wanted::Reapply
         } else if click.id == self.login.id() {
-            // muda has already flipped the tick; the setting has to catch up with it,
-            // and put it back if it cannot.
-            let wanted = self.login.is_checked();
-            if let Err(e) = desktop::set_start_at_login(wanted) {
-                report(&e);
-                self.login.set_checked(!wanted);
-            }
+            Wanted::Login(self.login.is_checked())
+        } else if click.id == self.quit.id() {
+            Wanted::Quit
+        } else {
+            Wanted::Nothing
         }
-        Wanted::Nothing
     }
 }
 
@@ -677,4 +835,35 @@ fn wake_run_loop() {}
 /// the launchd agent it lands in `~/Library/Logs/ArtWindow.log`.
 fn report(e: &anyhow::Error) {
     eprintln!("art-window: {e:#}");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn window_controls_translate_without_side_effects() {
+        assert!(matches!(Wanted::from(Control::Browse), Wanted::Browse));
+        assert!(matches!(Wanted::from(Control::Next), Wanted::Next));
+        assert!(matches!(Wanted::from(Control::Keep), Wanted::Keep));
+        assert!(matches!(Wanted::from(Control::Today), Wanted::Today));
+        assert!(matches!(Wanted::from(Control::Reapply), Wanted::Reapply));
+        assert!(matches!(
+            Wanted::from(Control::Login(true)),
+            Wanted::Login(true)
+        ));
+        assert!(matches!(Wanted::from(Control::Quit), Wanted::Quit));
+    }
+
+    #[test]
+    fn favourite_picks_keep_their_stable_keys() {
+        assert!(matches!(
+            Wanted::from(Pick::Show("one".into())),
+            Wanted::Show(key) if key == "one"
+        ));
+        assert!(matches!(
+            Wanted::from(Pick::Forget("two".into())),
+            Wanted::Forget(key) if key == "two"
+        ));
+    }
 }

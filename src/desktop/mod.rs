@@ -8,6 +8,11 @@ use anyhow::Result;
 use std::path::Path;
 
 #[cfg(target_os = "linux")]
+pub const APP_ID: &str = "dev.artwindow";
+#[cfg(target_os = "linux")]
+pub const QUIT_ACTION: &str = "quit";
+
+#[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
@@ -54,4 +59,22 @@ pub fn set_start_at_login(enabled: bool) -> Result<()> {
 #[cfg(target_os = "linux")]
 pub fn check(shown: Option<&Path>) -> Result<()> {
     platform::check(shown)
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) use platform::TrayHostWatch;
+
+#[cfg(target_os = "linux")]
+pub fn appindicator_available() -> bool {
+    platform::appindicator_available()
+}
+
+#[cfg(target_os = "linux")]
+pub fn watch_tray_host(on_changed: impl Fn(bool) + 'static) -> Result<TrayHostWatch> {
+    platform::watch_tray_host(on_changed)
+}
+
+#[cfg(target_os = "linux")]
+pub fn quit_running() -> Result<()> {
+    platform::quit_running()
 }

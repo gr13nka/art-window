@@ -2,7 +2,9 @@ mod background;
 mod host;
 mod login;
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
+use glib::variant::ToVariant;
+use std::collections::HashMap;
 use std::path::Path;
 
 pub(super) fn pin(path: &Path) -> Result<()> {
@@ -78,4 +80,39 @@ pub(super) fn check(shown: Option<&Path>) -> Result<()> {
     } else {
         bail!("GNOME check failed: {}", failures.join("; "))
     }
+}
+
+pub(crate) use host::TrayHostWatch;
+
+pub(super) fn appindicator_available() -> bool {
+    host::appindicator_available()
+}
+
+pub(super) fn watch_tray_host(on_changed: impl Fn(bool) + 'static) -> Result<TrayHostWatch> {
+    TrayHostWatch::new(on_changed)
+}
+
+pub(super) fn quit_running() -> Result<()> {
+    let connection = gio::bus_get_sync(gio::BusType::Session, gio::Cancellable::NONE)
+        .context("connecting to the running Art Window instance")?;
+    let parameters = (
+        super::QUIT_ACTION,
+        Vec::<glib::Variant>::new(),
+        HashMap::<String, glib::Variant>::new(),
+    )
+        .to_variant();
+    connection
+        .call_sync(
+            Some(super::APP_ID),
+            "/dev/artwindow",
+            "org.freedesktop.Application",
+            "ActivateAction",
+            Some(&parameters),
+            None,
+            gio::DBusCallFlags::NO_AUTO_START,
+            3000,
+            gio::Cancellable::NONE,
+        )
+        .context("asking the running Art Window instance to quit")?;
+    Ok(())
 }
