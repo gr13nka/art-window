@@ -9,12 +9,15 @@ esac
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 
+docker build --platform "$platform" \
+    --tag art-window-linux-check \
+    --file "$root/linux/Dockerfile.check" \
+    "$root/linux"
+
 docker run --rm --platform "$platform" \
     --mount "type=bind,source=$root,target=/work,readonly" \
     --workdir /work \
-    rust:1.75-bookworm sh -c '
-        apt-get update &&
-        apt-get install --yes --no-install-recommends libgtk-3-dev libdbus-1-dev pkg-config &&
+    art-window-linux-check sh -c '
         CARGO_TARGET_DIR=/tmp/art-window-target cargo build --release --locked &&
         CARGO_TARGET_DIR=/tmp/art-window-target cargo test --all-targets --locked &&
         CARGO_TARGET_DIR=/tmp/art-window-target cargo clippy --all-targets --locked -- -D warnings &&
