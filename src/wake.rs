@@ -7,9 +7,8 @@
 //! asleep through midnight is the ordinary case, so without this the first painting
 //! of a new day waits for whatever happens to poke the loop next.
 //!
-//! Small enough to be one file rather than the folder `wallpaper` needs, and the
-//! Its implementation is another platform seam: a real macOS body, and elsewhere
-//! an honest nothing until that desktop grows one.
+//! Small enough to keep both platform bodies in this file: NSWorkspace on macOS
+//! and logind on Linux.
 
 /// Calls `on_wake` on the main thread each time the machine wakes from sleep.
 ///

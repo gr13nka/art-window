@@ -20,8 +20,22 @@ docker run --rm --platform "$platform" \
     --mount "type=volume,source=art-window-linux-target,target=/target" \
     --workdir /work \
     art-window-linux-check sh -c '
-        CARGO_TARGET_DIR=/target cargo build --release --locked &&
-        CARGO_TARGET_DIR=/target cargo test --all-targets --locked &&
-        CARGO_TARGET_DIR=/target cargo clippy --all-targets --locked -- -D warnings &&
+        set -eu
+        CARGO_TARGET_DIR=/target cargo build --release --locked
+        CARGO_TARGET_DIR=/target cargo test --all-targets --locked
+        CARGO_TARGET_DIR=/target cargo clippy --all-targets --locked -- -D warnings
         cargo fmt --check
+        sh -n linux/check-container.sh linux/install.sh
+
+        install_root=$(mktemp -d)
+        CARGO_TARGET_DIR=/target \
+            ART_WINDOW_PREFIX="$install_root" \
+            XDG_DATA_HOME="$install_root/share" \
+            ./linux/install.sh
+        test -x "$install_root/bin/art-window"
+        grep -F "Exec=\"$install_root/bin/art-window\"" \
+            "$install_root/share/applications/dev.artwindow.desktop"
+        gdk-pixbuf-thumbnailer -s 64 linux/dev.artwindow.svg \
+            "$install_root/dev.artwindow.png"
+        test -s "$install_root/dev.artwindow.png"
     '

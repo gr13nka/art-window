@@ -1,21 +1,26 @@
 # Art Window — working notes
 
 A daily public-domain painting as the desktop wallpaper, fit to screen and
-letterboxed in black, run from a menu bar icon. macOS only so far; `wallpaper/` is
-shaped for Windows and Linux backends that do not exist yet.
+letterboxed in black. It runs as a macOS menu-bar app or a GNOME GTK application;
+platform wallpaper, browser and login behavior meet behind `desktop/`.
 
 ## Commands
 
 ```sh
 cargo build --release
+cargo test --all-targets
 cargo clippy --all-targets -- -D warnings
 cargo fmt --check
 ./macos/bundle.sh          # -> target/Art Window.app
+./linux/check-container.sh # Linux release build, tests, clippy and formatting
+./linux/install.sh         # user-local GNOME binary, launcher and icon
 ```
 
-There are **no tests**. `cargo test` exits 0 because the suite is empty — it is not
-evidence of anything. Verification is done by running the binary and reading the
-Dock's store (see `docs/macos-wallpaper.md`).
+Tests cover the platform-independent action translations and the Linux timezone and
+autostart contracts. They do not make wallpaper integration a pure unit-testable
+operation. Verify the real desktop too: read the Dock's store on macOS (see
+`docs/macos-wallpaper.md`) or run `art-window --check` inside GNOME (see
+`docs/gnome-wallpaper.md`).
 
 The menu can be driven from a script, up to a point. Open it with
 
@@ -56,20 +61,21 @@ will land on the desktop and quietly do nothing.
 `NSWorkspace.setDesktopImageURL` **returns success while changing nothing you can
 see.** macOS keeps a wallpaper per Mission Control Space per display, and that call
 reaches only the Space active for the calling process — 2 slots out of 49 on the
-development machine. `wallpaper::pin` therefore also writes the Dock's private
+development machine. `desktop::pin` therefore also writes the Dock's private
 SQLite store and restarts the Dock.
 
 Full details, schema and the four traps in it: **`docs/macos-wallpaper.md`**. Read
-it before touching `src/wallpaper/macos.rs`.
+it before touching `src/desktop/macos/wallpaper.rs`.
 
 ## Invariants
 
-- **`wallpaper::pin` owns re-asserting placement.** macOS records placement per
-  image *path*, so every new file arrives with the system default (crop-to-fill).
-  Callers must never be responsible for re-applying — forgetting that is the
-  original bug this project exists to fix.
-- **`pin` must run on the main thread.** `NSScreen::screens` demands a
-  `MainThreadMarker`. It errors rather than trusting a doc comment. This is why
+- **`desktop::pin` owns re-asserting placement.** macOS records placement per
+  image *path*, while GNOME stores it in `org.gnome.desktop.background`. Every
+  backend sets fit, black margins and the URI together. Callers must never be
+  responsible for re-applying—forgetting that is the original bug this project
+  exists to fix.
+- **The macOS `pin` backend must run on the main thread.** `NSScreen::screens`
+  demands a `MainThreadMarker`. It errors rather than trusting a doc comment. This is why
   `rotation` is split: `fetch` blocks for a couple of minutes and runs on a worker,
   `show` touches AppKit and runs on the event loop's thread. `fetch` is bounded by
   `met::BUDGET` rather than by its per-request timeouts alone, because the tray parks
@@ -85,10 +91,10 @@ it before touching `src/wallpaper/macos.rs`.
   alone the changeover walks right around the clock. A *countdown* cannot survive a
   closed lid at all, which is why the tray's `TICK` decides only how often to ask the
   question, and `wake::watch` exists to ask it the moment the lid opens: `Instant`
-  does not advance while macOS sleeps, so nothing monotonic can be trusted to notice
-  midnight. Every deadline in `tray.rs` is therefore wall-clock seconds — `hold_until`
-  included.
-- **Every failure path must set `hold_until`.** The day is marked done only on
+  does not advance while the machine sleeps, so nothing monotonic can be trusted to
+  notice midnight. Every deadline in `tray.rs` is therefore wall-clock seconds—
+  `cooling_off` included.
+- **Every failure path must set `cooling_off`.** The day is marked done only on
   success, so an error with no cooling-off period retries instantly and forever.
 - **`state.last_success` advances only when the day is actually settled.** A failed
   network call must not consume the day; the next run retries. Two methods may move
@@ -107,6 +113,16 @@ it before touching `src/wallpaper/macos.rs`.
   human.** Two files because they have two authors — serialising config back would
   destroy the user's comments. The `source` string is decoded into `SourceSpec`
   while the file is read, so nothing downstream ever handles it as text.
+- **Config, state and cache are different data kinds.** `Paths::locate` uses the
+  platform directories for each instead of putting them under one convenient
+  root. This preserves the existing Application Support/Cache split on macOS and
+  maps to XDG config/data/cache on Linux. Favourites belong with durable state,
+  never in the disposable cache.
+- **GNOME wallpaper writes require the real session backend.** The Linux backend
+  checks the schema before constructing `gio::Settings`, refuses to write without
+  `DBUS_SESSION_BUS_ADDRESS`, sets both light and optional dark URIs, clears a URI
+  before re-applying the same value, calls `sync`, and reads the result back. See
+  `docs/gnome-wallpaper.md` before simplifying any of those steps.
 - **A source owns everything about itself; `rotation` branches on nothing.**
   `Source::fetch` is handed the whole previous `Artwork` rather than an identifier,
   because only a source knows how it recognises its own work — the Met parses an
@@ -199,18 +215,18 @@ it before touching `src/wallpaper/macos.rs`.
   from a menu row or from the window, and answering them in two places is how the
   two would drift apart. This is also why `Wanted` is reached through
   `From<Pick>` rather than the window knowing what a `Wanted` is.
-- **Nothing decodes image pixels.** `Artwork` carries a `PathBuf`; the file goes
-  straight to the OS. This is why there is no `image` dependency. Do not add one
-  without a reason that survives the question "does the OS not already do this?".
-  The menu bar glyph is the one bitmap in the program and it is drawn from ASCII
-  art in `tray.rs` for exactly this reason — `tray_icon::Icon::from_path` is
-  Windows-only, so the alternative was a decoder for an eighteen-point icon.
+- **Rotation never decodes image pixels.** `Artwork` carries a `PathBuf`; wallpaper
+  files go straight to the OS. Galleries decode only what they show, through
+  AppKit or GdkPixbuf, and keep one full preview plus keyed thumbnails. This is why
+  there is no Rust `image` dependency. The panel glyph is drawn from ASCII art in
+  `tray.rs`; `tray_icon::Icon::from_path` is Windows-only, so the alternative was a
+  general decoder for an eighteen-point icon.
 - **A day is a local day, and the OS is asked what that means.** `day::local` is the
   whole calendar this program has: one number per instant, comparison the only
-  operation. The UTC offset comes from `NSTimeZone` for *the instant in question*
-  rather than for now, so the hours either side of a daylight-saving change do not
-  read as the wrong day. No date crate — the question "does the OS not already do
-  this?" has the same answer here as it does for image decoding.
+  operation. The UTC offset comes from `NSTimeZone` on macOS and `GTimeZone` on
+  Linux for *the instant in question* rather than for now, so the hours either side
+  of a daylight-saving change do not read as the wrong day. No date crate—the OS
+  already has the applicable timezone database.
 - **`config.toml` may name settings that no longer exist.** `Config` has
   `deny_unknown_fields` so a typo is an error rather than a silent shrug, which means
   a retired setting cannot simply be deleted: every file written by an earlier
@@ -238,14 +254,14 @@ challenges. One request per day. `art/met.rs` filters to department 11 (European
 Paintings) — an unfiltered collection of 490,000 objects is mostly coins and
 textiles.
 
-## The menu bar app
+## The resident app
 
 `tao` + `tray-icon` + `muda`, which pin the same `objc2 0.6` / `objc2-*-0.3` family
 this project already used, so there is one copy of AppKit in the tree. `tray-icon`
 needs a **GTK** event loop on Linux, which is why `tao` is the pairing and `winit`
 is not.
 
-Three things that are not guessable from the docs:
+Platform facts that are not guessable from the docs:
 
 - The `TrayIcon` must be built inside `Event::NewEvents(StartCause::Init)`, not
   before `run()`, or it goes missing in front of full-screen apps. Afterwards the
@@ -260,15 +276,27 @@ Three things that are not guessable from the docs:
   sat, so a row nested two submenus deep arrives exactly like a top-level one. The
   favourites submenu is gone — the window replaced it — but that is why it worked
   while it was there, and why anything nested added later will not need handles.
+- Linux gives tao the application id `dev.artwindow`. `GApplication` owns
+  uniqueness: a second ordinary launch activates the primary window and exits.
+  The `quit` action is exported at `/dev/artwindow`, which is what `--quit` calls;
+  changing the id, desktop filename, StartupWMClass or object path independently
+  breaks that chain.
+- A Linux panel icon exists only when an AppIndicator library and
+  `org.kde.StatusNotifierWatcher` both exist. The D-Bus owner is watched at runtime.
+  Missing either is ordinary stock-GNOME behavior, not a fatal error: the combined
+  GTK window remains the complete interface.
+- tao's GTK backend does not honor `ControlFlow::WaitUntil` by itself. One GLib
+  timeout source is installed on the first `Init`; it only wakes the loop to ask the
+  wall-clock question and never decides that a picture is due.
 
-**The machine waking is a notification, not something to poll for.**
-`NSWorkspaceDidWakeNotification` arrives on `NSWorkspace`'s own notification centre —
-the default `NSNotificationCenter` never sees it — and `wake::watch` forwards it to
-the loop through the same `EventLoopProxy` the menu uses, for the same reason: it
-arrives on somebody else's terms and is no place to touch the state the loop owns.
-Its match arm is deliberately empty. The clock at the tail of the loop is re-read
-after *every* event, so arriving is the entire message; putting work in the arm would
-be duplicating what the tail already does.
+**The machine waking is a notification, not something to poll for.** macOS uses
+`NSWorkspaceDidWakeNotification` from `NSWorkspace`'s own notification centre—the
+default `NSNotificationCenter` never sees it. Linux uses logind's
+`PrepareForSleep(false)` system-bus signal. `wake::watch` forwards either to the
+loop through the same `EventLoopProxy` the menu uses. Its match arm is deliberately
+empty: the clock at the tail is re-read after *every* event, so arriving is the
+entire message. A failed logind subscription is nonfatal because the GLib timer is
+the backstop.
 
 **The favourites window is tao's, and only what is inside it is AppKit's.** A
 `WindowBuilder` buys the title bar, the close button arriving as
@@ -280,19 +308,19 @@ inside that so the arithmetic is written in coordinates this program decides the
 orientation of rather than tao's. Everything resizes by autoresizing mask, so
 `WindowEvent::Resized` never has to be handled at all.
 
-Closing the window is not quitting, and its arm deliberately does not `return` — the
-clock at the tail of the loop still has to be wound.
+Closing a window is not quitting, and its arm deliberately does not `return`—the
+clock at the tail still has to be wound. macOS drops its optional gallery. Linux
+minimises its one combined window so the GApplication can reactivate the same
+surface; when no panel indicator exists, another launcher activation brings it
+back.
 
-**Start at login is a launchd agent, not `SMAppService`.** `SMAppService.mainApp` is
-the modern answer and needs macOS 13; the development machine runs 12.7. The agent is
-written and deleted directly and `launchctl` is never called — bootstrapping it would
-start a second copy of a program that is by definition already running, and the
-setting only means anything at the next login anyway.
+**Start at login is a file-exists setting.** On macOS it is a launchd agent rather
+than `SMAppService`, because the development machine runs 12.7. On Linux it is
+`$XDG_CONFIG_HOME/autostart/dev.artwindow.desktop`, with the current executable
+quoted under the desktop-entry and Exec grammars. Neither backend bootstraps,
+starts, or stops anything; the setting only means something at the next login.
 
 ## Planned, not built
 
-The Windows and Linux backends. `autostart.rs` is macOS-only and would grow the same
-platform split `wallpaper/` has. `gallery/` already has that split — the window
-itself is tao's and portable, and only what is drawn inside it is AppKit — but like
-`wallpaper/` it names no backend for anywhere else, so the crate still does not build
-off macOS.
+The Windows backend. Do not weaken the `desktop/`, `gallery/`, `day` or `wake`
+platform seams to add it; rotation and state do not branch on the operating system.

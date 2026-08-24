@@ -16,7 +16,7 @@ reported success while the desktop visibly did not change, because the process w
 launched from a terminal sitting on a different Space.
 
 Apple exposes no public API for the other Spaces. The options are the Dock's private
-store, undocumented CoreGraphics calls, or accepting one-Space-only. `wallpaper::pin`
+store, undocumented CoreGraphics calls, or accepting one-Space-only. `desktop::pin`
 uses the first, and keeps the supported call as well so there is something to fall
 back to.
 
@@ -49,13 +49,14 @@ Four things about this that will cost time if forgotten:
   before it is pointed at, so **delete first, then insert**.
 - **The Dock caches all of it in memory.** A write is invisible until `killall Dock`,
   which relaunches immediately and closes nothing. Restart only when the image
-  actually changed, or the Dock blinks on every hourly no-op.
+  actually changed, or the Dock blinks on every no-op.
 
 ## AppKit details
 
-- `NSScreen::screens` requires a `MainThreadMarker`, so `wallpaper::pin` only works
-  on the main thread. It raises an error rather than documenting the rule, because a
-  scheduler thread calling it would otherwise fail in a confusing way.
+- `NSScreen::screens` requires a `MainThreadMarker`, so the macOS `desktop::pin`
+  backend only works on the main thread. It raises an error rather than documenting
+  the rule, because a scheduler thread calling it would otherwise fail in a
+  confusing way.
 - `NSImageScaling::ScaleProportionallyDown` is documented as **not supported** for
   desktop images. Use `ScaleProportionallyUpOrDown` with `allowClipping = false`;
   that pairing is what "fit" means.

@@ -1,4 +1,5 @@
-//! The menu bar presence: an icon, a short menu, and a clock.
+//! The resident presence: a compact menu where the desktop supports one, a window,
+//! and a clock.
 //!
 //! The clock is the reason this exists as a resident program at all. It replaces a
 //! launchd job that woke a one-shot command every hour, and it keeps that job's one
@@ -15,9 +16,10 @@
 //!
 //! Three threads' worth of constraints meet here and only two threads exist:
 //!
-//! - AppKit will build a status item, and set a wallpaper, on the main thread only.
+//! - AppKit and GTK own their UI on the main thread; AppKit also sets wallpaper
+//!   there.
 //! - A museum download blocks for up to two minutes, which on the main thread is a
-//!   frozen menu bar.
+//!   frozen interface.
 //!
 //! So the fetch goes to a throwaway worker and comes back as an [`Artwork`] through
 //! the event loop's own queue, where the main thread hangs it. Nothing is shared

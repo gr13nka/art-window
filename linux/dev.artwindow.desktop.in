@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Art Window
+Comment=A daily painting on your desktop
+Exec=@EXEC@
+Icon=dev.artwindow
+Terminal=false
+Categories=Graphics;Utility;
+Keywords=wallpaper;art;painting;
+StartupNotify=true
+StartupWMClass=dev.artwindow
+DBusActivatable=false

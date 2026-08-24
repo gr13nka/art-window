@@ -8,8 +8,8 @@
 //! `~/Library/LaunchAgents` that launchd reads at login. No permission prompt, no
 //! version floor, and the switch is literally whether a file is there.
 //!
-//! macOS-only, like the rest of the program. If Windows and Linux ever arrive this
-//! grows the split that `wallpaper/` already has.
+//! This backend stays behind the same platform seam as macOS wallpaper; no caller
+//! knows that the file is a launchd property list.
 //!
 //! Nothing here calls `launchctl`. Loading the agent by hand would start a *second*
 //! copy of a program that is, by definition, already running; leaving it to the next

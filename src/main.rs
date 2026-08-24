@@ -1,8 +1,8 @@
 //! Art Window — a daily painting on your desktop, always fit to the screen.
 //!
-//! With no arguments it settles into the menu bar and looks after itself. The
-//! one-shot forms are kept because a resident program is a bad place to find out
-//! that the network, the museum or the Dock's database has changed its mind:
+//! With no arguments it settles into its resident desktop presence and looks after
+//! itself. The one-shot forms are kept because a resident program is a bad place to
+//! find out that the network, the museum or the desktop integration has changed its mind:
 //! `--once` does exactly one rotation and says what happened, on a terminal where
 //! the answer is visible.
 
@@ -101,7 +101,7 @@ fn main() -> Result<()> {
 }
 
 enum Mode {
-    /// Live in the menu bar and rotate on a schedule.
+    /// Live in the desktop session and rotate on a schedule.
     Tray,
     /// Rotate once and report, for a terminal or a script.
     Once { only_if_due: bool },
@@ -115,7 +115,7 @@ enum Mode {
 
 fn usage() {
     println!("art-window — a daily painting on your desktop\n");
-    println!("  art-window            live in the menu bar and rotate daily");
+    println!("  art-window            live in the desktop session and rotate daily");
     println!("  art-window --once     fetch a picture now, then exit");
     println!("  art-window --if-due   the same, but only if one is due");
     println!("  art-window --where    print where settings and pictures live");

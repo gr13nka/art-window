@@ -30,6 +30,18 @@ jobs:
       - name: Build
         run: cargo build --release --locked
 
+      - name: Check Linux installer
+        if: runner.os == 'Linux'
+        run: |
+          sh -n linux/check-container.sh linux/install.sh
+          install_root="$RUNNER_TEMP/art-window-install"
+          ART_WINDOW_PREFIX="$install_root" \
+            XDG_DATA_HOME="$install_root/share" \
+            ./linux/install.sh
+          test -x "$install_root/bin/art-window"
+          grep -F "Exec=\"$install_root/bin/art-window\"" \
+            "$install_root/share/applications/dev.artwindow.desktop"
+
       - name: Test
         run: cargo test --all-targets --locked
 
