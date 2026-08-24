@@ -60,6 +60,9 @@ pub struct State {
 pub struct Paths {
     pub config: PathBuf,
     pub state: PathBuf,
+    /// Where the day's download lands. Genuinely disposable: the source empties it
+    /// on every rotation, so it belongs wherever the platform puts things it would
+    /// not mind losing.
     pub cache: PathBuf,
     /// The pictures kept back from the rotation, and the list naming them. A folder
     /// of its own because the cache is emptied daily and this is the one place a
@@ -68,15 +71,22 @@ pub struct Paths {
 }
 
 impl Paths {
+    /// Each file where the platform keeps that kind of thing.
+    ///
+    /// Three directories rather than one, because the four files are three kinds:
+    /// something a person wrote, something the program remembers, and something it
+    /// can lose. On Linux those are three separate XDG directories and a user would
+    /// be surprised to find any of them in the others. On macOS `config_dir` and
+    /// `data_dir` are the same Application Support folder, so only the cache moves
+    /// out — which it can afford to, being swept on every rotation anyway.
     pub fn locate() -> Result<Self> {
         let dirs = directories::ProjectDirs::from("", "", "ArtWindow")
             .context("cannot determine where to keep settings")?;
-        let base = dirs.data_dir().to_path_buf();
         Ok(Self {
-            config: base.join("config.toml"),
-            state: base.join("state.json"),
-            cache: base.join("cache"),
-            favourites: base.join("favourites"),
+            config: dirs.config_dir().join("config.toml"),
+            state: dirs.data_dir().join("state.json"),
+            cache: dirs.cache_dir().to_path_buf(),
+            favourites: dirs.data_dir().join("favourites"),
         })
     }
 }
@@ -112,7 +122,7 @@ impl Config {
                 "\n",
                 "# \"met\" for public-domain paintings from the Metropolitan Museum,\n",
                 "# or a path to a folder of your own pictures, e.g.\n",
-                "#   source = \"/Users/you/Pictures/Wallpapers\"\n",
+                "#   source = \"~/Pictures/Wallpapers\"\n",
                 "source = \"met\"\n",
             ),
         )
