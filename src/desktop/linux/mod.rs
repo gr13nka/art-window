@@ -1,7 +1,8 @@
 mod background;
+mod host;
 mod login;
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 use std::path::Path;
 
 pub(super) fn pin(path: &Path) -> Result<()> {
@@ -18,4 +19,63 @@ pub(super) fn starts_at_login() -> bool {
 
 pub(super) fn set_start_at_login(enabled: bool) -> Result<()> {
     login::set(enabled)
+}
+
+pub(super) fn check(shown: Option<&Path>) -> Result<()> {
+    let mut failures = Vec::new();
+
+    let has_bus = std::env::var_os("DBUS_SESSION_BUS_ADDRESS").is_some();
+    println!(
+        "session bus       {}",
+        if has_bus { "available" } else { "missing" }
+    );
+    if !has_bus {
+        failures.push("DBUS_SESSION_BUS_ADDRESS is not set".to_string());
+    }
+
+    match background::inspect() {
+        Ok(found) => {
+            println!("background schema  present");
+            println!(
+                "dark wallpaper key {}",
+                if found.has_dark { "present" } else { "absent" }
+            );
+            println!("current picture    {}", found.picture_uri);
+        }
+        Err(error) => {
+            println!("background schema  unavailable ({error:#})");
+            failures.push(error.to_string());
+        }
+    }
+
+    match host::watcher_has_owner() {
+        Ok(true) => println!("tray host          running"),
+        Ok(false) => println!("tray host          absent (window fallback will be used)"),
+        Err(error) => println!("tray host          unknown ({error:#})"),
+    }
+    println!(
+        "appindicator      {}",
+        if host::appindicator_available() {
+            "available"
+        } else {
+            "missing (window fallback will be used)"
+        }
+    );
+
+    match shown {
+        None => println!("wallpaper write    skipped (no shown artwork is recorded)"),
+        Some(path) => match super::pin(path) {
+            Ok(()) => println!("wallpaper write    accepted and read back"),
+            Err(error) => {
+                println!("wallpaper write    failed ({error:#})");
+                failures.push(error.to_string());
+            }
+        },
+    }
+
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        bail!("GNOME check failed: {}", failures.join("; "))
+    }
 }

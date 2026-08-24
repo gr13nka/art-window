@@ -48,3 +48,10 @@ pub fn starts_at_login() -> bool {
 pub fn set_start_at_login(enabled: bool) -> Result<()> {
     platform::set_start_at_login(enabled)
 }
+
+/// Prints GNOME integration capabilities and verifies the current wallpaper when
+/// one is recorded.
+#[cfg(target_os = "linux")]
+pub fn check(shown: Option<&Path>) -> Result<()> {
+    platform::check(shown)
+}

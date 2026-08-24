@@ -26,6 +26,7 @@ fn main() -> Result<()> {
             "--once" => mode = Mode::Once { only_if_due: false },
             "--if-due" => mode = Mode::Once { only_if_due: true },
             "--where" => mode = Mode::Where,
+            "--check" => mode = Mode::Check,
             "--help" | "-h" => {
                 usage();
                 return Ok(());
@@ -53,11 +54,22 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
+    if let Mode::Check = mode {
+        #[cfg(target_os = "linux")]
+        {
+            let state = State::load(&paths.state);
+            return desktop::check(state.shown.as_ref().map(|art| art.path.as_path()));
+        }
+        #[cfg(not(target_os = "linux"))]
+        anyhow::bail!("--check is available on Linux/GNOME only");
+    }
+
     let config = Config::load(&paths.config)?;
     let mut state = State::load(&paths.state);
 
     match mode {
         Mode::Where => unreachable!("handled above, before the config is read"),
+        Mode::Check => unreachable!("handled above, before the config is read"),
         Mode::Tray => tray::run(paths, config, state),
         Mode::Once { only_if_due } => {
             if only_if_due && !state.is_due() {
@@ -86,6 +98,8 @@ enum Mode {
     Once { only_if_due: bool },
     /// Print where the files are and stop.
     Where,
+    /// Diagnose the GNOME wallpaper and tray integrations.
+    Check,
 }
 
 fn usage() {
@@ -94,4 +108,5 @@ fn usage() {
     println!("  art-window --once     fetch a picture now, then exit");
     println!("  art-window --if-due   the same, but only if one is due");
     println!("  art-window --where    print where settings and pictures live");
+    println!("  art-window --check    diagnose GNOME desktop integration");
 }
