@@ -8,7 +8,10 @@ use super::{pick_index, Artwork, Source};
 use anyhow::{anyhow, Context, Result};
 use std::path::{Path, PathBuf};
 
+#[cfg(target_os = "macos")]
 const EXTENSIONS: [&str; 6] = ["jpg", "jpeg", "png", "heic", "tif", "tiff"];
+#[cfg(not(target_os = "macos"))]
+const EXTENSIONS: [&str; 5] = ["jpg", "jpeg", "png", "tif", "tiff"];
 
 pub struct Folder {
     dir: PathBuf,

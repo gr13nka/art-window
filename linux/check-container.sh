@@ -16,10 +16,12 @@ docker build --platform "$platform" \
 
 docker run --rm --platform "$platform" \
     --mount "type=bind,source=$root,target=/work,readonly" \
+    --mount "type=volume,source=art-window-cargo-registry,target=/usr/local/cargo/registry" \
+    --mount "type=volume,source=art-window-linux-target,target=/target" \
     --workdir /work \
     art-window-linux-check sh -c '
-        CARGO_TARGET_DIR=/tmp/art-window-target cargo build --release --locked &&
-        CARGO_TARGET_DIR=/tmp/art-window-target cargo test --all-targets --locked &&
-        CARGO_TARGET_DIR=/tmp/art-window-target cargo clippy --all-targets --locked -- -D warnings &&
+        CARGO_TARGET_DIR=/target cargo build --release --locked &&
+        CARGO_TARGET_DIR=/target cargo test --all-targets --locked &&
+        CARGO_TARGET_DIR=/target cargo clippy --all-targets --locked -- -D warnings &&
         cargo fmt --check
     '

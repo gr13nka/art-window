@@ -7,8 +7,12 @@
 use anyhow::Result;
 use std::path::Path;
 
+#[cfg(target_os = "linux")]
+mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(target_os = "linux")]
+use linux as platform;
 #[cfg(target_os = "macos")]
 use macos as platform;
 

@@ -106,6 +106,7 @@ impl From<Pick> for Wanted {
 
 /// Runs until the user picks Quit.
 pub fn run(paths: Paths, config: Config, mut state: State) -> Result<()> {
+    #[cfg_attr(target_os = "linux", allow(unused_mut))]
     let mut event_loop = EventLoopBuilder::<Wake>::with_user_event().build();
 
     // No Dock icon, no application menu: this program lives in the menu bar. The
@@ -358,11 +359,13 @@ fn spawn_fetch(config: &Config, state: &State, paths: &Paths, proxy: EventLoopPr
 }
 
 fn build_tray(menu: &Menu) -> Result<TrayIcon> {
-    TrayIconBuilder::new()
+    let builder = TrayIconBuilder::new()
         .with_menu(Box::new(menu.clone()))
         .with_tooltip("Art Window")
-        .with_icon(glyph()?)
-        .with_icon_as_template(true)
+        .with_icon(glyph()?);
+    #[cfg(target_os = "macos")]
+    let builder = builder.with_icon_as_template(true);
+    builder
         .build()
         .map_err(|e| anyhow!("creating the menu bar icon: {e}"))
 }
@@ -589,9 +592,9 @@ fn shorten(title: &str) -> String {
 }
 
 /// The menu bar glyph: a framed picture with a sun over a hill, drawn a pixel at a
-/// time. Eighteen points of menu bar does not justify an image decoder, and macOS
-/// tints template images itself for light and dark bars, so only the alpha channel
-/// here carries any meaning — `#` is opaque, a space is not.
+/// time. Eighteen points does not justify an image decoder. macOS tints the black
+/// template itself; GNOME does not tint an absolute icon path, so Linux carries
+/// white ink for its dark default panel.
 #[rustfmt::skip]
 const GLYPH: [&str; 18] = [
     "                  ",
@@ -619,6 +622,11 @@ const GLYPH: [&str; 18] = [
 const SCALE: usize = 2;
 
 fn glyph() -> Result<Icon> {
+    #[cfg(target_os = "macos")]
+    const INK: [u8; 3] = [0, 0, 0];
+    #[cfg(target_os = "linux")]
+    const INK: [u8; 3] = [255, 255, 255];
+
     let side = GLYPH.len();
     let mut rgba = Vec::with_capacity(side * side * SCALE * SCALE * 4);
     for row in GLYPH {
@@ -626,7 +634,7 @@ fn glyph() -> Result<Icon> {
             for pixel in row.chars() {
                 let alpha = if pixel == ' ' { 0 } else { 255 };
                 for _ in 0..SCALE {
-                    rgba.extend_from_slice(&[0, 0, 0, alpha]);
+                    rgba.extend_from_slice(&[INK[0], INK[1], INK[2], alpha]);
                 }
             }
         }
@@ -642,6 +650,10 @@ fn wake_run_loop() {
         main.wake_up();
     }
 }
+
+/// GTK's main context is already turning; it needs no AppKit-style nudge.
+#[cfg(target_os = "linux")]
+fn wake_run_loop() {}
 
 /// The menu carries the short version; this is where the whole chain goes. Under
 /// the launchd agent it lands in `~/Library/Logs/ArtWindow.log`.
