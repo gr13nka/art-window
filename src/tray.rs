@@ -74,6 +74,8 @@ enum Wake {
 /// them, it says what it wants and the loop does it.
 enum Wanted {
     Nothing,
+    /// Go back to the source for a different picture, now rather than tomorrow.
+    Next,
     /// Keep the picture on the desktop.
     Keep,
     /// Put a kept picture up in place of whatever the clock had in mind.
@@ -128,6 +130,10 @@ pub fn run(paths: Paths, config: Config, mut state: State) -> Result<()> {
     // Set when a kept picture goes up while a download is still in the air, so that
     // the download does not land on top of a choice just made.
     let mut superseded = false;
+    // Set when the Next picture row is clicked. A fetch is started at the tail of
+    // the loop and nowhere else, so a click asks for one rather than doing it: the
+    // clock is then wound the same way whoever did the asking.
+    let mut asked_for_next = false;
 
     event_loop.run(move |event, _target, control_flow| {
         match event {
@@ -166,6 +172,8 @@ pub fn run(paths: Paths, config: Config, mut state: State) -> Result<()> {
                 let mut chosen: Option<Artwork> = None;
                 match ui.handle(&click, &state) {
                     Wanted::Nothing => {}
+
+                    Wanted::Next => asked_for_next = true,
 
                     Wanted::Keep => {
                         if let Some(art) = &state.shown {
@@ -223,6 +231,7 @@ pub fn run(paths: Paths, config: Config, mut state: State) -> Result<()> {
 
             Event::UserEvent(Wake::Fetched(result)) => {
                 fetching = false;
+                ui.set_fetching(false);
                 // Dropped on the floor when a kept picture went up while this was
                 // in the air: hanging it now would undo a choice just made. The
                 // file stays where it is, for the next rotation to overwrite or
@@ -257,19 +266,23 @@ pub fn run(paths: Paths, config: Config, mut state: State) -> Result<()> {
         // When to wake up next. Recomputed after every event rather than scheduled
         // once, so that a click, a finished download and a tick all leave the clock
         // in the same, correct place.
+        let cooling_off = hold_until
+            .and_then(|until| until.checked_sub(now_secs()))
+            .filter(|left| *left > 0);
         *control_flow = if fetching {
             // The worker will wake us.
             ControlFlow::Wait
-        } else if let Some(left) = hold_until
-            .and_then(|until| until.checked_sub(now_secs()))
-            .filter(|left| *left > 0)
-        {
-            ControlFlow::WaitUntil(Instant::now() + Duration::from_secs(left))
-        } else if state.is_due() {
-            ui.set_status("Fetching…");
+        } else if std::mem::take(&mut asked_for_next) || (cooling_off.is_none() && state.is_due()) {
+            // Being asked jumps both queues. Somebody looking at a picture they do
+            // not like is not waiting out a museum's bad afternoon, and is plainly
+            // not waiting for tomorrow; the request is taken either way, so that one
+            // made while a download was in the air cannot start a second later on.
+            ui.set_fetching(true);
             spawn_fetch(&config, &state, &paths, proxy.clone());
             fetching = true;
             ControlFlow::Wait
+        } else if let Some(left) = cooling_off {
+            ControlFlow::WaitUntil(Instant::now() + Duration::from_secs(left))
         } else {
             ControlFlow::WaitUntil(Instant::now() + TICK)
         };
@@ -305,6 +318,9 @@ struct Ui {
     title: MenuItem,
     byline: MenuItem,
     open: MenuItem,
+    /// Asks the source for a different picture without waiting for tomorrow. Greyed
+    /// while one is already on its way.
+    next: MenuItem,
     keep: MenuItem,
     /// The kept pictures, one submenu each. Rebuilt whole rather than kept in
     /// handles: a click is answered by the id it carries, so nothing here has to be
@@ -325,6 +341,7 @@ impl Ui {
             title: MenuItem::new("", false, None),
             byline: MenuItem::new("", false, None),
             open: MenuItem::new("Open in browser", false, None),
+            next: MenuItem::new("Next picture", true, None),
             keep: MenuItem::new("Add to favourites", false, None),
             favourites: Submenu::new("Favourites", false),
             today: MenuItem::new(NO_WAY_BACK, false, None),
@@ -338,6 +355,7 @@ impl Ui {
                 &ui.byline,
                 &ui.open,
                 &PredefinedMenuItem::separator(),
+                &ui.next,
                 &ui.keep,
                 &ui.favourites,
                 &ui.today,
@@ -431,6 +449,20 @@ impl Ui {
         self.byline.set_text(text);
     }
 
+    /// Says whether a download is in the air.
+    ///
+    /// Greying the row is the half that matters: a second worker started on top of
+    /// the first would race it to the desktop, and the one that lost would still be
+    /// writing a file into the cache the sweep had already been run for. The status
+    /// line is only set on the way in, because whatever comes back replaces it —
+    /// a new painting's byline, or the word that there is none.
+    fn set_fetching(&self, fetching: bool) {
+        self.next.set_enabled(!fetching);
+        if fetching {
+            self.set_status("Fetching…");
+        }
+    }
+
     /// Answers a click, doing what it can and asking for the rest.
     ///
     /// Quit is handled by the caller, which owns the icon.
@@ -444,6 +476,8 @@ impl Ui {
             return Wanted::Keep;
         } else if click.id == self.today.id() {
             return Wanted::Today;
+        } else if click.id == self.next.id() {
+            return Wanted::Next;
         }
 
         if click.id == self.open.id() {

@@ -30,6 +30,7 @@ L'Arlésienne: Madame Joseph-Michel Ginoux
 Vincent van Gogh, 1888–89
 Open in browser
 ─────────────────────
+Next picture
 Add to favourites
 Favourites            ▸   L'Arlésienne: Madame…  ▸  Show
                           Wheat Field with Cyp…     Forget
@@ -40,6 +41,11 @@ Re-apply wallpaper
 ─────────────────────
 Quit Art Window
 ```
+
+**Next picture** fetches another painting there and then, for when you do not care
+for the one you have got. It is the day's rotation asked for early rather than a
+separate thing: the painting that arrives is today's, the one it replaces is gone,
+and tomorrow's still comes with tomorrow.
 
 **Add to favourites** takes a copy of the painting on the desktop and keeps it,
 which is the only thing that saves it: the cache holds one picture, and tomorrow's

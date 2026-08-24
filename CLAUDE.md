@@ -133,7 +133,18 @@ it before touching `src/wallpaper/macos.rs`.
   `is_due` is still the only thing that decides a picture is owed — `record_chosen`
   asks it rather than second-guessing it. A download already in the air is dropped
   rather than hung — see `superseded` in `tray.rs` — because landing it would undo
-  a choice just made.
+  a choice just made. *Next picture* is the other way round and deliberately so: a
+  picture that came from the source is the day's whatever hour it was asked for, so
+  it goes through `record_fetched` like any other rotation. Choosing among pictures
+  that already exist leaves the day alone; going back to the museum spends it.
+- **Only the tail of the event loop starts a fetch.** A click cannot spawn one where
+  it is answered — the tail is what decides whether the loop then waits, holds or
+  ticks, and a worker started behind its back leaves it deciding against a stale
+  `fetching`. So *Next picture* raises `asked_for_next` and the tail reads it,
+  jumping both the cooling-off period and the schedule. The row is greyed while a
+  download is in the air rather than the request being queued: two workers racing
+  for the desktop would leave the loser writing into a cache the sweep had already
+  been run for.
 - **The source's sweep spares `state.fetched`; the favourites' sweep spares
   `state.shown`.** Getting these the wrong way round is not a hypothetical: it is
   the bug that made coming back to today's picture impossible, because handing the
