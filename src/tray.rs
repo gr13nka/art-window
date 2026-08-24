@@ -6,6 +6,13 @@
 //! A countdown cannot survive a closed lid, and a machine that sleeps through the
 //! moment a timer was set for is the normal case, not the edge one.
 //!
+//! Which is why every deadline here is a wall-clock instant and `TICK` is the one
+//! remaining countdown — it schedules a *question*, not an answer, and being late
+//! with it costs nothing. What being awake to ask at all costs is [`wake`]: a
+//! monotonic timer stops while the lid is shut, so without something to say the
+//! machine is back, the first painting of a new day would wait for whatever poked
+//! the loop next.
+//!
 //! Three threads' worth of constraints meet here and only two threads exist:
 //!
 //! - AppKit will build a status item, and set a wallpaper, on the main thread only.
@@ -18,9 +25,10 @@
 
 use crate::art::Artwork;
 use crate::autostart;
-use crate::config::{Config, Paths, State};
+use crate::config::{now_secs, Config, Paths, State};
 use crate::favourites::Favourites;
 use crate::rotation;
+use crate::wake;
 use crate::wallpaper;
 use anyhow::{anyhow, Result};
 use std::path::Path;
@@ -33,10 +41,11 @@ use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 #[cfg(target_os = "macos")]
 use tao::platform::macos::{ActivationPolicy, EventLoopExtMacOS};
 
-/// How often to look at the clock. Only has to be often enough that a picture owed
-/// while the machine was asleep appears shortly after it wakes; the refresh interval
-/// itself is measured in hours, so five minutes is already far finer than anyone can
-/// notice, and rare enough to leave an idle laptop alone.
+/// How often to look at the clock while the machine is plainly awake. The waking
+/// itself is announced — see [`wake`] — so this is only the backstop for a day that
+/// turns over with nobody asleep and nothing else happening. A day is a day, so five
+/// minutes is already far finer than anyone can notice, and rare enough to leave an
+/// idle laptop alone.
 const TICK: Duration = Duration::from_secs(5 * 60);
 
 /// How long to leave a failed attempt alone. Without this a museum that is down, or
@@ -52,6 +61,10 @@ enum Wake {
     Menu(MenuEvent),
     /// The worker finished, for better or worse.
     Fetched(Result<Artwork>),
+    /// The machine came back from sleep. Carries nothing, and its arm does nothing:
+    /// the clock at the tail of the loop is re-read after every event, which is the
+    /// whole reason it lives there rather than in an arm of its own.
+    Woke,
 }
 
 /// What a click asks of the event loop.
@@ -87,6 +100,18 @@ pub fn run(paths: Paths, config: Config, mut state: State) -> Result<()> {
         let _ = menu_proxy.send_event(Wake::Menu(event));
     }));
 
+    // Both callbacks do the same thing and for the same reason: they arrive on
+    // somebody else's terms — AppKit's here, the workspace's below — and neither is
+    // a place to touch the state the loop owns. They say what happened; the loop
+    // decides what it means.
+    //
+    // Never dropped, because `run` below never returns. Dropping it would silence
+    // the notifications, which is what the binding is holding them open against.
+    let wake_proxy = proxy.clone();
+    let _woken = wake::watch(move || {
+        let _ = wake_proxy.send_event(Wake::Woke);
+    });
+
     let mut favourites = Favourites::open(&paths.favourites)?;
 
     let ui = Ui::new()?;
@@ -94,8 +119,12 @@ pub fn run(paths: Paths, config: Config, mut state: State) -> Result<()> {
 
     let mut tray: Option<TrayIcon> = None;
     let mut fetching = false;
-    // Set while an attempt is cooling off; cleared by success.
-    let mut hold_until: Option<Instant> = None;
+    // Unix seconds until which a failed attempt is cooling off; cleared by success.
+    // Wall clock rather than an `Instant` for the reason in the module comment: a
+    // fifteen-minute countdown started before the lid closed still owes fifteen
+    // minutes of *waking* time the next morning, which is the very complaint the
+    // schedule exists to answer.
+    let mut hold_until: Option<u64> = None;
     // Set when a kept picture goes up while a download is still in the air, so that
     // the download does not land on top of a choice just made.
     let mut superseded = false;
@@ -212,12 +241,15 @@ pub fn run(paths: Paths, config: Config, mut state: State) -> Result<()> {
                         }
                         Err(e) => {
                             report(&e);
-                            hold_until = Some(Instant::now() + RETRY);
+                            hold_until = Some(now_secs() + RETRY.as_secs());
                             ui.set_status("Last attempt failed — will retry");
                         }
                     }
                 }
             }
+
+            // Nothing to do but arrive: the clock below is what this is for.
+            Event::UserEvent(Wake::Woke) => {}
 
             _ => {}
         }
@@ -228,9 +260,12 @@ pub fn run(paths: Paths, config: Config, mut state: State) -> Result<()> {
         *control_flow = if fetching {
             // The worker will wake us.
             ControlFlow::Wait
-        } else if let Some(until) = hold_until.filter(|u| Instant::now() < *u) {
-            ControlFlow::WaitUntil(until)
-        } else if state.is_due(config.refresh_hours) {
+        } else if let Some(left) = hold_until
+            .and_then(|until| until.checked_sub(now_secs()))
+            .filter(|left| *left > 0)
+        {
+            ControlFlow::WaitUntil(Instant::now() + Duration::from_secs(left))
+        } else if state.is_due() {
             ui.set_status("Fetching…");
             spawn_fetch(&config, &state, &paths, proxy.clone());
             fetching = true;

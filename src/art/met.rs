@@ -12,7 +12,7 @@ use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const API: &str = "https://collectionapi.metmuseum.org/public/collection/v1";
 /// Department 11 is European Paintings.
@@ -25,6 +25,22 @@ const MAX_IMAGE_BYTES: u64 = 96 * 1024 * 1024;
 /// How many objects to try before giving up. Records occasionally lack a usable
 /// `primaryImage` despite the `hasImages` filter.
 const CANDIDATES: usize = 8;
+
+/// How long any one request may take. Generous enough for an original-resolution
+/// painting on a link that has just woken up with the rest of the machine, and no
+/// more, because a fetch is a chain of these rather than one of them.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(45);
+
+/// How long the whole of a fetch may take before it gives up and leaves the day for
+/// the next attempt.
+///
+/// The tray parks its clock entirely while a fetch is in the air, so the chain has
+/// to have an end: seventeen requests at two minutes each once left a menu bar
+/// reading "Fetching…" for half an hour, with no tick scheduled behind it. Checked
+/// between attempts rather than during one, so a request already in flight when the
+/// budget runs out still gets to finish — the real ceiling is this plus one
+/// [`REQUEST_TIMEOUT`].
+const BUDGET: Duration = Duration::from_secs(90);
 
 pub struct Met {
     agent: ureq::Agent,
@@ -82,7 +98,7 @@ impl Met {
                 env!("CARGO_PKG_VERSION"),
                 " (+https://github.com/gr13nka/art-window)"
             ))
-            .timeout_global(Some(Duration::from_secs(120)))
+            .timeout_global(Some(REQUEST_TIMEOUT))
             .build();
         Self {
             agent: ureq::Agent::new_with_config(config),
@@ -164,8 +180,18 @@ impl Source for Met {
         let avoid = avoid.and_then(|a| id_of(&a.path));
         let ids = self.candidate_ids()?;
         let mut last_error = None;
+        let deadline = Instant::now() + BUDGET;
 
         for attempt in 0..CANDIDATES {
+            if Instant::now() >= deadline {
+                // Kept only if nothing more specific went wrong: a museum that
+                // refused is worth more to whoever reads the log than the clock
+                // that ran out waiting for it.
+                last_error
+                    .get_or_insert_with(|| anyhow!("gave up after {} seconds", BUDGET.as_secs()));
+                break;
+            }
+
             let id = ids[pick_index(ids.len(), attempt as u64)];
             if Some(id) == avoid {
                 continue;

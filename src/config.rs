@@ -6,6 +6,7 @@
 //! freely and nobody is expected to read it.
 
 use crate::art::{Artwork, SourceSpec};
+use crate::day;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -19,15 +20,18 @@ pub struct Config {
     /// [`SourceSpec`]; it is decoded while the file is read and nothing downstream
     /// ever sees the string.
     pub source: SourceSpec,
-    /// How long a picture stays up before another is fetched.
-    pub refresh_hours: u64,
+    /// Retired: the schedule is a calendar day now and has no knob to turn. Still
+    /// parsed, and thrown away, because `deny_unknown_fields` would otherwise turn
+    /// every `config.toml` written by an earlier version into a startup failure —
+    /// and one that happens before there is a menu bar to report it in.
+    refresh_hours: serde::de::IgnoredAny,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
             source: SourceSpec::Met,
-            refresh_hours: 24,
+            refresh_hours: serde::de::IgnoredAny,
         }
     }
 }
@@ -36,7 +40,9 @@ impl Default for Config {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct State {
-    /// Unix seconds of the moment the day was last settled. A failure leaves this
+    /// Unix seconds of the moment the day was last settled — kept as an instant
+    /// rather than a date because [`day::local`] can read the day back out of it,
+    /// while a date could not answer how long ago it was. A failure leaves this
     /// alone, so the next run retries rather than writing the day off. Private,
     /// because the only correct moments to move it are [`State::record_fetched`]
     /// and — when a picture was already owed — [`State::record_chosen`].
@@ -108,9 +114,6 @@ impl Config {
                 "# or a path to a folder of your own pictures, e.g.\n",
                 "#   source = \"/Users/you/Pictures/Wallpapers\"\n",
                 "source = \"met\"\n",
-                "\n",
-                "# Hours a picture stays up before the next one is fetched.\n",
-                "refresh_hours = 24\n",
             ),
         )
         .with_context(|| format!("writing {}", path.display()))
@@ -151,13 +154,8 @@ impl State {
     /// desktop was changed in between.
     ///
     /// Callers must have hung the wallpaper first — see [`crate::rotation::revisit`].
-    pub fn record_chosen(
-        &mut self,
-        artwork: &Artwork,
-        refresh_hours: u64,
-        path: &Path,
-    ) -> Result<()> {
-        if self.is_due(refresh_hours) {
+    pub fn record_chosen(&mut self, artwork: &Artwork, path: &Path) -> Result<()> {
+        if self.is_due() {
             self.last_success = Some(now_secs());
         }
         self.shown = Some(artwork.clone());
@@ -172,22 +170,26 @@ impl State {
             .with_context(|| format!("writing {}", path.display()))
     }
 
-    /// Whether enough time has passed to warrant a new picture.
+    /// Whether the local date has changed since the last picture was settled.
     ///
-    /// A clock that has moved backwards (timezone change, NTP correction) reads as
-    /// due rather than blocking refreshes until real time catches up.
-    pub fn is_due(&self, refresh_hours: u64) -> bool {
+    /// A calendar day and not an elapsed interval, because an interval anchored to
+    /// the last success drifts: a machine asleep past the appointed moment settles
+    /// the day whenever it wakes, and that becomes the new anchor. Left long enough
+    /// the changeover walks right around the clock, and "a new day, a new painting"
+    /// stops being true in the only sense anyone means it.
+    ///
+    /// Compared for difference rather than for order, so a clock that has moved
+    /// backwards (timezone change, NTP correction) reads as due rather than
+    /// stopping the rotation until real time catches up.
+    pub fn is_due(&self) -> bool {
         match self.last_success {
             None => true,
-            Some(last) => match now_secs().checked_sub(last) {
-                None => true,
-                Some(elapsed) => elapsed >= refresh_hours.saturating_mul(3600),
-            },
+            Some(last) => day::local(now_secs()) != day::local(last),
         }
     }
 }
 
-fn now_secs() -> u64 {
+pub(crate) fn now_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())

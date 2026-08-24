@@ -59,12 +59,24 @@ it before touching `src/wallpaper/macos.rs`.
   original bug this project exists to fix.
 - **`pin` must run on the main thread.** `NSScreen::screens` demands a
   `MainThreadMarker`. It errors rather than trusting a doc comment. This is why
-  `rotation` is split: `fetch` blocks for up to two minutes and runs on a worker,
-  `show` touches AppKit and runs on the event loop's thread.
-- **The scheduler compares wall-clock times; it never counts down.** `State::is_due`
-  against `now_secs()` is the only thing that decides a picture is owed. A timer
-  cannot survive a closed lid, and a machine asleep at the appointed moment is the
-  normal case. The tray's `TICK` only decides how *often* to ask the question.
+  `rotation` is split: `fetch` blocks for a couple of minutes and runs on a worker,
+  `show` touches AppKit and runs on the event loop's thread. `fetch` is bounded by
+  `met::BUDGET` rather than by its per-request timeouts alone, because the tray parks
+  its clock entirely while a fetch is in the air — a chain of seventeen requests with
+  no overall limit is a menu bar reading "Fetching…" for half an hour and no tick
+  scheduled behind it.
+- **The scheduler compares calendar days; it never counts down and never counts
+  hours.** `State::is_due` asks `day::local` whether the date has changed since
+  `last_success`, and that is the only thing that decides a picture is owed. Both
+  halves of that are load-bearing and both were once wrong. An *interval* — the
+  original `refresh_hours` — drifts, because a machine asleep past the appointed
+  moment settles the day whenever it wakes and that becomes the new anchor; left
+  alone the changeover walks right around the clock. A *countdown* cannot survive a
+  closed lid at all, which is why the tray's `TICK` decides only how often to ask the
+  question, and `wake::watch` exists to ask it the moment the lid opens: `Instant`
+  does not advance while macOS sleeps, so nothing monotonic can be trusted to notice
+  midnight. Every deadline in `tray.rs` is therefore wall-clock seconds — `hold_until`
+  included.
 - **Every failure path must set `hold_until`.** The day is marked done only on
   success, so an error with no cooling-off period retries instantly and forever.
 - **`state.last_success` advances only when the day is actually settled.** A failed
@@ -135,6 +147,18 @@ it before touching `src/wallpaper/macos.rs`.
   The menu bar glyph is the one bitmap in the program and it is drawn from ASCII
   art in `tray.rs` for exactly this reason — `tray_icon::Icon::from_path` is
   Windows-only, so the alternative was a decoder for an eighteen-point icon.
+- **A day is a local day, and the OS is asked what that means.** `day::local` is the
+  whole calendar this program has: one number per instant, comparison the only
+  operation. The UTC offset comes from `NSTimeZone` for *the instant in question*
+  rather than for now, so the hours either side of a daylight-saving change do not
+  read as the wrong day. No date crate — the question "does the OS not already do
+  this?" has the same answer here as it does for image decoding.
+- **`config.toml` may name settings that no longer exist.** `Config` has
+  `deny_unknown_fields` so a typo is an error rather than a silent shrug, which means
+  a retired setting cannot simply be deleted: every file written by an earlier
+  version would fail to parse, and it would fail before there is a menu bar to say so
+  in. `refresh_hours` is therefore still a field, typed `IgnoredAny`. Retiring a
+  setting means moving it to that, not removing the line.
 
 ## Deliberate omissions
 
@@ -179,6 +203,15 @@ Three things that are not guessable from the docs:
   sat, so a row nested two submenus deep arrives exactly like a top-level one.
   That is why the favourites rows carry `favourite/show/…` and `favourite/forget/…`
   ids instead of handles — prefixed because muda hands out bare counters otherwise.
+
+**The machine waking is a notification, not something to poll for.**
+`NSWorkspaceDidWakeNotification` arrives on `NSWorkspace`'s own notification centre —
+the default `NSNotificationCenter` never sees it — and `wake::watch` forwards it to
+the loop through the same `EventLoopProxy` the menu uses, for the same reason: it
+arrives on somebody else's terms and is no place to touch the state the loop owns.
+Its match arm is deliberately empty. The clock at the tail of the loop is re-read
+after *every* event, so arriving is the entire message; putting work in the arm would
+be duplicating what the tail already does.
 
 **Start at login is a launchd agent, not `SMAppService`.** `SMAppService.mainApp` is
 the modern answer and needs macOS 13; the development machine runs 12.7. The agent is

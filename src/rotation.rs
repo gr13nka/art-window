@@ -2,9 +2,9 @@
 //! way a picture reaches the desktop, which is that somebody asked for it.
 //!
 //! `fetch` and `show` are split because the halves want opposite things. `fetch`
-//! talks to a museum over the network and can block for two minutes, so it belongs
-//! anywhere but the thread drawing the menu bar; `show` reaches into AppKit and so
-//! may run *only* on that thread. The tray carries an `Artwork` from one to the
+//! talks to a museum over the network and blocks for as long as its budget allows,
+//! so it belongs anywhere but the thread drawing the menu bar; `show` reaches into
+//! AppKit and so may run *only* on that thread. The tray carries an `Artwork` from one to the
 //! other; the one-shot command, having no menu to freeze, simply calls both in a
 //! row.
 //!
@@ -51,7 +51,7 @@ pub fn show(artwork: &Artwork, config: &Config, paths: &Paths, state: &mut State
 /// Must run on the main thread — see [`wallpaper::pin`].
 pub fn revisit(artwork: &Artwork, config: &Config, paths: &Paths, state: &mut State) -> Result<()> {
     wallpaper::pin(&artwork.path)?;
-    state.record_chosen(artwork, config.refresh_hours, &paths.state)?;
+    state.record_chosen(artwork, &paths.state)?;
     sweep(config, paths, state);
     Ok(())
 }

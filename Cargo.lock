@@ -19,6 +19,7 @@ name = "art-window"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "block2",
  "directories",
  "objc2",
  "objc2-app-kit",

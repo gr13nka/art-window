@@ -50,7 +50,7 @@ from the list; if it happens to be the one on the desktop, its file waits until 
 desktop has moved on.
 
 Choosing a painting by hand does not disturb the schedule: today's stays today's,
-and tomorrow's arrives at its usual hour no matter how often you change your mind in
+and tomorrow's arrives with tomorrow no matter how often you change your mind in
 between. The exception is a painting that was already overdue — then whatever you
 choose settles the day, since something had to.
 
@@ -61,10 +61,12 @@ whole collection is one thing to copy or throw away.
 effect at your next login — switching it on cannot start a program that is already
 running, and switching it off should not stop one.
 
-While it runs, Art Window checks the clock every few minutes and fetches a new
-painting once the current one has had its `refresh_hours`. It compares wall-clock
-times rather than counting down, so a laptop that spent the week shut wakes up owing
-exactly one painting, not seven.
+While it runs, Art Window watches the date rather than a stopwatch: a new painting
+is owed once the local day has turned over, and one is owed however long the machine
+was away, so a laptop that spent the week shut wakes up owing exactly one painting,
+not seven. It is told when the machine wakes, so the day's painting arrives with the
+lid opening rather than some minutes after it, and it looks at the clock every few
+minutes besides, for a day that turns over while nobody is asleep.
 
 ## Use
 
@@ -94,10 +96,11 @@ your comments survive.
 # "met" for public-domain paintings from the Metropolitan Museum,
 # or a path to a folder of your own pictures.
 source = "met"
-
-# Hours a picture stays up before the next one is fetched.
-refresh_hours = 24
 ```
+
+One painting a day is the whole schedule and there is nothing to set. A
+`refresh_hours` left over from an earlier version is read and ignored rather than
+refused, so an existing file keeps working.
 
 Pointing `source` at a folder inside `~/Pictures` or `~/Documents` will make macOS
 ask for access. A process started by launchd cannot show that prompt, so run

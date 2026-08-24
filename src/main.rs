@@ -9,9 +9,11 @@
 mod art;
 mod autostart;
 mod config;
+mod day;
 mod favourites;
 mod rotation;
 mod tray;
+mod wake;
 mod wallpaper;
 
 use anyhow::Result;
@@ -54,7 +56,7 @@ fn main() -> Result<()> {
         Mode::Where => unreachable!("handled above, before the config is read"),
         Mode::Tray => tray::run(paths, config, state),
         Mode::Once { only_if_due } => {
-            if only_if_due && !state.is_due(config.refresh_hours) {
+            if only_if_due && !state.is_due() {
                 return Ok(());
             }
             let artwork = rotation::fetch(&config, &state, &paths.cache)?;
