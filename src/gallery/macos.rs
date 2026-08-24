@@ -491,7 +491,7 @@ impl Content {
     /// at `on_pick`.
     ///
     /// Must run on the main thread, and says so with an error rather than a comment,
-    /// for the same reason [`crate::wallpaper::pin`] does.
+    /// for the same reason [`crate::desktop::pin`] does.
     pub fn install(window: &Window, on_pick: Rc<dyn Fn(Pick)>) -> Result<Self> {
         let mtm = MainThreadMarker::new()
             .ok_or_else(|| anyhow!("the favourites window must be built on the main thread"))?;

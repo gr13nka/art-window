@@ -8,7 +8,8 @@
 //! of a new day waits for whatever happens to poke the loop next.
 //!
 //! Small enough to be one file rather than the folder `wallpaper` needs, and the
-//! same shape as `autostart`: a macOS body, and elsewhere an honest nothing.
+//! Its implementation is another platform seam: a real macOS body, and elsewhere
+//! an honest nothing until that desktop grows one.
 
 /// Calls `on_wake` on the main thread each time the machine wakes from sleep.
 ///

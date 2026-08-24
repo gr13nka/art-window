@@ -24,13 +24,12 @@
 //! between the two; the worker gets copies and returns a value.
 
 use crate::art::Artwork;
-use crate::autostart;
 use crate::config::{now_secs, Config, Paths, State};
+use crate::desktop;
 use crate::favourites::Favourites;
 use crate::gallery::{Gallery, Pick};
 use crate::rotation;
 use crate::wake;
-use crate::wallpaper;
 use anyhow::{anyhow, Result};
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -186,7 +185,7 @@ pub fn run(paths: Paths, config: Config, mut state: State) -> Result<()> {
             // The tick. Someone may have changed the login setting in System
             // Settings since the last one.
             Event::NewEvents(StartCause::ResumeTimeReached { .. }) => {
-                ui.login.set_checked(autostart::is_enabled());
+                ui.login.set_checked(desktop::starts_at_login());
                 Wanted::Nothing
             }
 
@@ -412,7 +411,7 @@ impl Ui {
             gallery: Gallery::new(on_pick),
             today: MenuItem::new(NO_WAY_BACK, false, None),
             reapply: MenuItem::new("Re-apply wallpaper", false, None),
-            login: CheckMenuItem::new("Start at login", true, autostart::is_enabled(), None),
+            login: CheckMenuItem::new("Start at login", true, desktop::starts_at_login(), None),
             quit: MenuItem::new("Quit Art Window", true, None),
         };
         ui.menu
@@ -550,13 +549,11 @@ impl Ui {
 
         if click.id == self.open.id() {
             if let Some(url) = state.shown.as_ref().and_then(|a| a.details_url.as_deref()) {
-                let _ = std::process::Command::new("/usr/bin/open")
-                    .arg(url)
-                    .status();
+                desktop::browse(url);
             }
         } else if click.id == self.reapply.id() {
             if let Some(art) = &state.shown {
-                if let Err(e) = wallpaper::pin(&art.path) {
+                if let Err(e) = desktop::pin(&art.path) {
                     report(&e);
                     self.set_status("Could not re-apply the wallpaper");
                 }
@@ -565,7 +562,7 @@ impl Ui {
             // muda has already flipped the tick; the setting has to catch up with it,
             // and put it back if it cannot.
             let wanted = self.login.is_checked();
-            if let Err(e) = autostart::set(wanted) {
+            if let Err(e) = desktop::set_start_at_login(wanted) {
                 report(&e);
                 self.login.set_checked(!wanted);
             }

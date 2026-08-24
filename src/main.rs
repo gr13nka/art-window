@@ -7,15 +7,14 @@
 //! the answer is visible.
 
 mod art;
-mod autostart;
 mod config;
 mod day;
+mod desktop;
 mod favourites;
 mod gallery;
 mod rotation;
 mod tray;
 mod wake;
-mod wallpaper;
 
 use anyhow::Result;
 use config::{Config, Paths, State};
@@ -45,7 +44,11 @@ fn main() -> Result<()> {
         println!("kept    {}", paths.favourites.display());
         println!(
             "login   {}",
-            if autostart::is_enabled() { "on" } else { "off" }
+            if desktop::starts_at_login() {
+                "on"
+            } else {
+                "off"
+            }
         );
         return Ok(());
     }

@@ -14,7 +14,7 @@
 
 use crate::art::{self, Artwork};
 use crate::config::{Config, Paths, State};
-use crate::wallpaper;
+use crate::desktop;
 use anyhow::{Context, Result};
 use std::path::Path;
 
@@ -33,9 +33,10 @@ pub fn fetch(config: &Config, state: &State, cache: &Path) -> Result<Artwork> {
 /// The clock advances only once the wallpaper is actually up, so a failure here
 /// leaves the day unspent and the next attempt retries.
 ///
-/// Must run on the main thread — see [`wallpaper::pin`].
+/// Kept on the event-loop thread because the macOS [`desktop::pin`] backend
+/// requires it.
 pub fn show(artwork: &Artwork, config: &Config, paths: &Paths, state: &mut State) -> Result<()> {
-    wallpaper::pin(&artwork.path)?;
+    desktop::pin(&artwork.path)?;
     state.record_fetched(artwork, &paths.state)?;
     sweep(config, paths, state);
     Ok(())
@@ -48,9 +49,10 @@ pub fn show(artwork: &Artwork, config: &Config, paths: &Paths, state: &mut State
 /// there is to come back to. Neither, in the ordinary case, is the schedule — see
 /// [`State::record_chosen`].
 ///
-/// Must run on the main thread — see [`wallpaper::pin`].
+/// Kept on the event-loop thread because the macOS [`desktop::pin`] backend
+/// requires it.
 pub fn revisit(artwork: &Artwork, config: &Config, paths: &Paths, state: &mut State) -> Result<()> {
-    wallpaper::pin(&artwork.path)?;
+    desktop::pin(&artwork.path)?;
     state.record_chosen(artwork, &paths.state)?;
     sweep(config, paths, state);
     Ok(())
