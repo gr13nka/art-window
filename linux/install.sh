@@ -25,6 +25,8 @@ if ! command -v pkg-config >/dev/null 2>&1 \
     || ! pkg-config --exists gtk+-3.0 dbus-1; then
     echo "GTK 3 and D-Bus development files are required" >&2
     echo "Debian/Ubuntu: sudo apt install libgtk-3-dev libdbus-1-dev pkg-config" >&2
+    echo "Arch Linux: sudo pacman -S --needed pkgconf gtk3 dbus" >&2
+    echo "NixOS: nix-shell -p rustc cargo pkg-config gtk3 dbus --run './linux/install.sh'" >&2
     exit 1
 fi
 

@@ -35,7 +35,18 @@ Install GTK and D-Bus development files, then run the user-local installer:
 ```sh
 # Debian or Ubuntu
 sudo apt install build-essential pkg-config libgtk-3-dev libdbus-1-dev
-./linux/install.sh
+
+# Arch Linux
+sudo pacman -S --needed base-devel pkgconf gtk3 dbus rust
+```
+
+Then run `./linux/install.sh`.
+
+On NixOS, build and install from a temporary development shell instead:
+
+```sh
+nix-shell -p rustc cargo pkg-config gtk3 dbus \
+  --run './linux/install.sh'
 ```
 
 This installs the binary under `~/.local/bin` and a GNOME launcher and icon under
