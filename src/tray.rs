@@ -27,15 +27,17 @@ use crate::art::Artwork;
 use crate::autostart;
 use crate::config::{now_secs, Config, Paths, State};
 use crate::favourites::Favourites;
+use crate::gallery::{Gallery, Pick};
 use crate::rotation;
 use crate::wake;
 use crate::wallpaper;
 use anyhow::{anyhow, Result};
 use std::path::Path;
 use std::time::{Duration, Instant};
-use tao::event::{Event, StartCause};
-use tao::event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy};
-use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
+use tao::event::{Event, StartCause, WindowEvent};
+use tao::event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy, EventLoopWindowTarget};
+use tao::window::WindowId;
+use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 
 #[cfg(target_os = "macos")]
@@ -59,6 +61,10 @@ enum Wake {
     /// A menu item was clicked. Forwarded rather than acted on where it arrives,
     /// because that is one of AppKit's own callbacks and no place to do work.
     Menu(MenuEvent),
+    /// A picture in the favourites window was picked. Forwarded for the same
+    /// reason as a menu click, and by the same route: it arrives mid-click on
+    /// AppKit's thread, which owns nothing this loop does.
+    Picked(Pick),
     /// The worker finished, for better or worse.
     Fetched(Result<Artwork>),
     /// The machine came back from sleep. Carries nothing, and its arm does nothing:
@@ -67,11 +73,13 @@ enum Wake {
     Woke,
 }
 
-/// What a click asks of the event loop.
+/// What an event asks of the event loop.
 ///
 /// The menu can open a browser and tick a box by itself, but it owns neither the
 /// state nor the settings, and hanging a picture needs both. Rather than borrow
-/// them, it says what it wants and the loop does it.
+/// them, it says what it wants and the loop does it. The window says the same two
+/// things in its own words — see [`Pick`] — so that neither surface has to know
+/// the other's vocabulary and neither is answered twice over.
 enum Wanted {
     Nothing,
     /// Go back to the source for a different picture, now rather than tomorrow.
@@ -84,6 +92,17 @@ enum Wanted {
     Today,
     /// Drop a kept picture from the list.
     Forget(String),
+    /// Open the window where the kept pictures can be looked at.
+    Gallery,
+}
+
+impl From<Pick> for Wanted {
+    fn from(pick: Pick) -> Self {
+        match pick {
+            Pick::Show(key) => Self::Show(key),
+            Pick::Forget(key) => Self::Forget(key),
+        }
+    }
 }
 
 /// Runs until the user picks Quit.
@@ -116,7 +135,12 @@ pub fn run(paths: Paths, config: Config, mut state: State) -> Result<()> {
 
     let mut favourites = Favourites::open(&paths.favourites)?;
 
-    let ui = Ui::new()?;
+    // The window answers a click the same way the menu does: by saying what
+    // happened and letting the loop decide what it means.
+    let pick_proxy = proxy.clone();
+    let mut ui = Ui::new(move |pick| {
+        let _ = pick_proxy.send_event(Wake::Picked(pick));
+    })?;
     ui.describe(&state, &favourites);
 
     let mut tray: Option<TrayIcon> = None;
@@ -135,8 +159,12 @@ pub fn run(paths: Paths, config: Config, mut state: State) -> Result<()> {
     // clock is then wound the same way whoever did the asking.
     let mut asked_for_next = false;
 
-    event_loop.run(move |event, _target, control_flow| {
-        match event {
+    event_loop.run(move |event, target, control_flow| {
+        // Every event is first read for what it asks of the loop, and only then
+        // acted on. The two halves are separate because the same two things can be
+        // asked from two places — a menu row and a picture in the window — and
+        // answering them twice over is how the two would drift apart.
+        let wanted = match event {
             // The status item is built here and not before `run`, because tray-icon
             // wants a run loop that is already turning — otherwise it goes missing
             // in front of full-screen apps.
@@ -152,81 +180,44 @@ pub fn run(paths: Paths, config: Config, mut state: State) -> Result<()> {
                     }
                 }
                 wake_run_loop();
+                Wanted::Nothing
             }
 
             // The tick. Someone may have changed the login setting in System
             // Settings since the last one.
             Event::NewEvents(StartCause::ResumeTimeReached { .. }) => {
                 ui.login.set_checked(autostart::is_enabled());
+                Wanted::Nothing
             }
 
             Event::UserEvent(Wake::Menu(click)) => {
                 if click.id == ui.quit.id() {
-                    // Dropping the icon is what takes it out of the menu bar.
+                    // Dropping the icon is what takes it out of the menu bar, and
+                    // dropping the window is what shuts it.
                     tray.take();
+                    ui.dismiss();
                     *control_flow = ControlFlow::Exit;
                     return;
                 }
-                // Both ways of picking a picture by hand end in the same place, so
-                // the arms only say which picture and the work happens once, below.
-                let mut chosen: Option<Artwork> = None;
-                match ui.handle(&click, &state) {
-                    Wanted::Nothing => {}
+                ui.handle(&click, &state)
+            }
 
-                    Wanted::Next => asked_for_next = true,
+            // The window asks for the same two things the submenu used to, in its
+            // own two words.
+            Event::UserEvent(Wake::Picked(pick)) => pick.into(),
 
-                    Wanted::Keep => {
-                        if let Some(art) = &state.shown {
-                            match favourites.keep(art) {
-                                Ok(()) => ui.describe(&state, &favourites),
-                                Err(e) => {
-                                    report(&e);
-                                    ui.set_status("Could not keep that picture");
-                                }
-                            }
-                        }
-                    }
-
-                    // Cloned out of their owners because hanging one needs `state`
-                    // mutably, and it is about to become the picture `state`
-                    // remembers.
-                    Wanted::Show(key) => chosen = favourites.get(&key).cloned(),
-                    Wanted::Today => chosen = state.fetched.clone(),
-
-                    Wanted::Forget(key) => match favourites.forget(&key) {
-                        Ok(()) => {
-                            // An empty path names no file, which is the right thing
-                            // to spare when nothing is on the desktop.
-                            let on_desktop = state
-                                .shown
-                                .as_ref()
-                                .map_or(Path::new(""), |art| art.path.as_path());
-                            favourites.discard_all_but(on_desktop);
-                            ui.describe(&state, &favourites);
-                        }
-                        Err(e) => {
-                            report(&e);
-                            ui.set_status("Could not drop that favourite");
-                        }
-                    },
+            // Shutting the window is not quitting: the program lives in the menu
+            // bar and carries on there. Deliberately not returned from, so the
+            // clock below is still wound.
+            Event::WindowEvent {
+                event: WindowEvent::CloseRequested,
+                window_id,
+                ..
+            } => {
+                if ui.owns_window(window_id) {
+                    ui.dismiss();
                 }
-
-                if let Some(art) = chosen {
-                    match rotation::revisit(&art, &config, &paths, &mut state) {
-                        Ok(()) => {
-                            // Nothing is owed that this has not just answered, and a
-                            // download already in the air would only undo it.
-                            hold_until = None;
-                            superseded = fetching;
-                            favourites.discard_all_but(&art.path);
-                            ui.describe(&state, &favourites);
-                        }
-                        Err(e) => {
-                            report(&e);
-                            ui.set_status("Could not put that picture up");
-                        }
-                    }
-                }
+                Wanted::Nothing
             }
 
             Event::UserEvent(Wake::Fetched(result)) => {
@@ -255,12 +246,80 @@ pub fn run(paths: Paths, config: Config, mut state: State) -> Result<()> {
                         }
                     }
                 }
+                Wanted::Nothing
             }
 
             // Nothing to do but arrive: the clock below is what this is for.
-            Event::UserEvent(Wake::Woke) => {}
+            Event::UserEvent(Wake::Woke) => Wanted::Nothing,
 
-            _ => {}
+            _ => Wanted::Nothing,
+        };
+
+        // Both ways of picking a picture by hand end in the same place, so the arms
+        // only say which picture and the work happens once, below.
+        let mut chosen: Option<Artwork> = None;
+        match wanted {
+            Wanted::Nothing => {}
+
+            Wanted::Next => asked_for_next = true,
+
+            Wanted::Gallery => {
+                if let Err(e) = ui.present(target, &favourites) {
+                    report(&e);
+                    ui.set_status("Could not open the favourites window");
+                }
+            }
+
+            Wanted::Keep => {
+                if let Some(art) = &state.shown {
+                    match favourites.keep(art) {
+                        Ok(()) => ui.describe(&state, &favourites),
+                        Err(e) => {
+                            report(&e);
+                            ui.set_status("Could not keep that picture");
+                        }
+                    }
+                }
+            }
+
+            // Cloned out of their owners because hanging one needs `state` mutably,
+            // and it is about to become the picture `state` remembers.
+            Wanted::Show(key) => chosen = favourites.get(&key).cloned(),
+            Wanted::Today => chosen = state.fetched.clone(),
+
+            Wanted::Forget(key) => match favourites.forget(&key) {
+                Ok(()) => {
+                    // An empty path names no file, which is the right thing to
+                    // spare when nothing is on the desktop.
+                    let on_desktop = state
+                        .shown
+                        .as_ref()
+                        .map_or(Path::new(""), |art| art.path.as_path());
+                    favourites.discard_all_but(on_desktop);
+                    ui.describe(&state, &favourites);
+                }
+                Err(e) => {
+                    report(&e);
+                    ui.set_status("Could not drop that favourite");
+                }
+            },
+        }
+
+        if let Some(art) = chosen {
+            match rotation::revisit(&art, &config, &paths, &mut state) {
+                Ok(()) => {
+                    // Nothing is owed that this has not just answered, and a
+                    // download already in the air would only undo it.
+                    hold_until = None;
+                    superseded = fetching;
+                    favourites.discard_all_but(&art.path);
+                    ui.describe(&state, &favourites);
+                }
+                Err(e) => {
+                    report(&e);
+                    ui.set_status("Could not put that picture up");
+                }
+            }
         }
 
         // When to wake up next. Recomputed after every event rather than scheduled
@@ -309,7 +368,12 @@ fn build_tray(menu: &Menu) -> Result<TrayIcon> {
         .map_err(|e| anyhow!("creating the menu bar icon: {e}"))
 }
 
-/// The menu, and the handles needed to keep it telling the truth.
+/// What the program shows, and the handles needed to keep it telling the truth.
+///
+/// Two surfaces, one list: the menu in the bar, and the window of kept pictures
+/// when it is open. They are held together rather than side by side because every
+/// one of the facts below is true of both at once, and a caller that had to
+/// remember to tell the second would eventually forget.
 struct Ui {
     menu: Menu,
     /// The two greyed-out rows at the top. `byline` doubles as the status line:
@@ -322,10 +386,11 @@ struct Ui {
     /// while one is already on its way.
     next: MenuItem,
     keep: MenuItem,
-    /// The kept pictures, one submenu each. Rebuilt whole rather than kept in
-    /// handles: a click is answered by the id it carries, so nothing here has to be
-    /// remembered between one opening of the menu and the next.
-    favourites: Submenu,
+    /// Opens the window the kept pictures can be looked at in. Greyed while there
+    /// is nothing kept, since an empty window says less than a greyed row does.
+    favourites: MenuItem,
+    /// That window. Shut, until this row is clicked.
+    gallery: Gallery,
     /// The way back from a kept picture to the one the rotation brought in. Its
     /// text names that picture, so it says what it would return to.
     today: MenuItem,
@@ -335,7 +400,7 @@ struct Ui {
 }
 
 impl Ui {
-    fn new() -> Result<Self> {
+    fn new(on_pick: impl Fn(Pick) + 'static) -> Result<Self> {
         let ui = Self {
             menu: Menu::new(),
             title: MenuItem::new("", false, None),
@@ -343,7 +408,8 @@ impl Ui {
             open: MenuItem::new("Open in browser", false, None),
             next: MenuItem::new("Next picture", true, None),
             keep: MenuItem::new("Add to favourites", false, None),
-            favourites: Submenu::new("Favourites", false),
+            favourites: MenuItem::new("Favourites…", false, None),
+            gallery: Gallery::new(on_pick),
             today: MenuItem::new(NO_WAY_BACK, false, None),
             reapply: MenuItem::new("Re-apply wallpaper", false, None),
             login: CheckMenuItem::new("Start at login", true, autostart::is_enabled(), None),
@@ -369,8 +435,9 @@ impl Ui {
         Ok(ui)
     }
 
-    /// Points the menu at whatever is on the desktop now, and at what is kept.
-    fn describe(&self, state: &State, favourites: &Favourites) {
+    /// Points everything the user can see at whatever is on the desktop now, and
+    /// at what is kept.
+    fn describe(&mut self, state: &State, favourites: &Favourites) {
         match &state.shown {
             Some(art) => {
                 self.title.set_text(&art.title);
@@ -420,29 +487,33 @@ impl Ui {
         }
     }
 
-    /// Rebuilds the favourites submenu from the list.
+    /// Tells both surfaces what is kept.
     ///
-    /// Wholesale, and not by difference: there are a handful of rows, and this runs
-    /// when a picture changes rather than while anyone is looking at the menu.
-    fn relist(&self, favourites: &Favourites) {
-        while self.favourites.remove_at(0).is_some() {}
-        for (key, art) in favourites.iter() {
-            let row = Submenu::new(shorten(&art.title), true);
-            let _ = row.append(&MenuItem::with_id(
-                format!("{SHOW}{key}"),
-                "Show",
-                true,
-                None,
-            ));
-            let _ = row.append(&MenuItem::with_id(
-                format!("{FORGET}{key}"),
-                "Forget",
-                true,
-                None,
-            ));
-            let _ = self.favourites.append(&row);
-        }
+    /// The window is told even though it is usually shut, because the alternative
+    /// is for every caller to know whether it is open, and the one that got that
+    /// wrong would leave a window showing a painting already thrown away.
+    fn relist(&mut self, favourites: &Favourites) {
         self.favourites.set_enabled(!favourites.is_empty());
+        self.gallery.relist(favourites);
+    }
+
+    /// Opens the window, or brings it forward if it is already up.
+    fn present<T>(
+        &mut self,
+        target: &EventLoopWindowTarget<T>,
+        favourites: &Favourites,
+    ) -> Result<()> {
+        self.gallery.present(target, favourites)
+    }
+
+    /// Whether `id` names the window this program opened.
+    fn owns_window(&self, id: WindowId) -> bool {
+        self.gallery.owns(id)
+    }
+
+    /// Shuts the window, if it is open.
+    fn dismiss(&mut self) {
+        self.gallery.dismiss();
     }
 
     fn set_status(&self, text: &str) {
@@ -467,13 +538,10 @@ impl Ui {
     ///
     /// Quit is handled by the caller, which owns the icon.
     fn handle(&self, click: &MenuEvent, state: &State) -> Wanted {
-        let id: &str = click.id.as_ref();
-        if let Some(key) = id.strip_prefix(SHOW) {
-            return Wanted::Show(key.to_string());
-        } else if let Some(key) = id.strip_prefix(FORGET) {
-            return Wanted::Forget(key.to_string());
-        } else if click.id == self.keep.id() {
+        if click.id == self.keep.id() {
             return Wanted::Keep;
+        } else if click.id == self.favourites.id() {
+            return Wanted::Gallery;
         } else if click.id == self.today.id() {
             return Wanted::Today;
         } else if click.id == self.next.id() {
@@ -505,14 +573,6 @@ impl Ui {
         Wanted::Nothing
     }
 }
-
-/// What the rows of the favourites submenu are called.
-///
-/// muda hands out plain counters otherwise, and a row has to survive the menu being
-/// rebuilt underneath it, so each carries the key of the picture it means. The
-/// prefixes keep those keys clear of the counters.
-const SHOW: &str = "favourite/show/";
-const FORGET: &str = "favourite/forget/";
 
 /// What the way-back row says when there is nowhere to go back to: either the
 /// day's picture is already up, or none has been fetched since the program learnt

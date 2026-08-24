@@ -29,16 +29,27 @@ then walk `menu 1 of menu bar item 1 of menu bar 1` to read every row's name and
 
 **Clicking a row inside a submenu does not.** The tree reads correctly and
 `perform action "AXPress"` returns success, but no `MenuEvent` ever arrives — checked
-by logging every id the event loop received. So *Show* and *Forget* under
-**Favourites** cannot be verified from a script and have to be clicked by hand; put
-the state a click would produce into `state.json` instead if what you need to test is
-what happens afterwards.
+by logging every id the event loop received. The menu has no submenus left, so
+nothing is currently caught by this; it is written down because the next person to
+add one will lose an afternoon to it otherwise.
 
-Two smaller traps. The menu stays open when the script ends, so the *next* click
+The favourites window can be driven the same way, up to the same sort of line.
+`buttons of window 1` finds *Set as wallpaper* and *Forget*, and `perform action
+"AXPress"` on them really does reach the program — that is the way to test showing
+and forgetting from a script. **Clicking a thumbnail cannot be faked.** The shelf is
+one custom-drawn view with no accessibility children, so there is nothing to press,
+and a synthetic `click at {x, y}` does not reach it either: `hitTest:` is asked (the
+cursor moving is enough for that) but no `mouseDown:` ever follows. Real clicks from
+a real mouse work perfectly well. To test what happens *after* a picture is chosen,
+press the button rather than the thumbnail.
+
+Three smaller traps. The menu stays open when the script ends, so the *next* click
 closes it rather than opening it — send `key code 53` before returning, and if a read
-fails with "invalid index", that is why. And the position AppleScript reports for the
+fails with "invalid index", that is why. The position AppleScript reports for the
 status item is not to be believed: it read as far off-screen while clicks on it were
-landing perfectly well.
+landing perfectly well. And the window does not open in the same place twice, so read
+`position of window 1` in the same run you click in — coordinates from the last run
+will land on the desktop and quietly do nothing.
 
 ## The one thing that will waste your afternoon
 
@@ -152,6 +163,42 @@ it before touching `src/wallpaper/macos.rs`.
   was never in its cache, and today's download was deleted. The rule behind both is
   the same — whoever wrote a file may delete it, but never the one on the desktop,
   and never the one there is still a way back to.
+- **The window holds thumbnails, not paintings.** `gallery` decodes one full
+  picture at a time to make each thumbnail and lets go of it before reading the
+  next, so a shelf of any length costs one painting's worth of memory to build
+  rather than the whole folder's. The only picture kept at full size is the one
+  being looked at, and handing the view the next is what releases the last. A
+  thumbnail is made once and cached under its `Favourites` key — by key and never by
+  position, because a list rebuilt around a deletion would otherwise pair a painting
+  with somebody else's picture.
+- **A thumbnail is drawn at twice the size it is shown at.** Many pixels, few
+  points, which is what a sharp image on a Retina display *is*. This is why
+  `thumbnail` builds an `NSBitmapImageRep` of a stated pixel size and then tells it
+  it measures the smaller amount, rather than using `NSImage::lockFocus` — locking
+  focus draws at whatever the screen happens to be, so the same favourite would come
+  out crisp or blurred depending on which display the window was opened on. It is
+  deprecated besides, but that is the lesser reason.
+- **A click in the window is answered by the loop, not where it lands.**
+  `mouseDown:` and a button's action arrive mid-click on AppKit's thread, which owns
+  nothing the loop does. They send a `Pick` through the same `EventLoopProxy` the
+  menu and the wake notification use. `Pick` has two variants and not three because
+  selecting a picture changes nothing outside the window and so has no business
+  leaving it.
+- **The shelf accepts the first mouse.** `acceptsFirstMouse:` returns true, and it
+  has to: this program is an `Accessory` and its window is hardly ever the active
+  one, so the ordinary rule — the first click into an inactive window only wakes it —
+  would put an extra click in front of every visit.
+- **The menu and the window are one list, told once.** `Ui` owns the `Gallery`, so
+  every `ui.describe(…)` keeps both surfaces honest and no caller has to remember
+  the second. The window is told even while it is shut, because the alternative is
+  for callers to know whether it is open and the one that got it wrong would leave a
+  painting on screen that had already been thrown away.
+- **The loop classifies, then acts, then schedules.** `match event` says what was
+  asked, `match wanted` does it, and the clock at the tail is unchanged. The three
+  are separate because the same two things — show this, forget this — can be asked
+  from a menu row or from the window, and answering them in two places is how the
+  two would drift apart. This is also why `Wanted` is reached through
+  `From<Pick>` rather than the window knowing what a `Wanted` is.
 - **Nothing decodes image pixels.** `Artwork` carries a `PathBuf`; the file goes
   straight to the OS. This is why there is no `image` dependency. Do not add one
   without a reason that survives the question "does the OS not already do this?".
@@ -207,13 +254,12 @@ Three things that are not guessable from the docs:
   `run()`. It hides the Dock icon for an unbundled `cargo run`; the bundle's
   `LSUIElement` does the same thing earlier and without the bounce. Both are set.
 - Dropping the `TrayIcon` is what removes it from the menu bar, so Quit does
-  `tray.take()` before `ControlFlow::Exit`. Menu *items* are the opposite: a parent
-  keeps an `Rc` of every child, so the favourites submenu can be rebuilt from
-  throwaway handles and answered later by the id the click carries.
+  `tray.take()` before `ControlFlow::Exit`. The favourites window is the same rule
+  and Quit says it too — see `Gallery::dismiss`.
 - `muda` fires a menu event from the item's own id and says nothing about where it
-  sat, so a row nested two submenus deep arrives exactly like a top-level one.
-  That is why the favourites rows carry `favourite/show/…` and `favourite/forget/…`
-  ids instead of handles — prefixed because muda hands out bare counters otherwise.
+  sat, so a row nested two submenus deep arrives exactly like a top-level one. The
+  favourites submenu is gone — the window replaced it — but that is why it worked
+  while it was there, and why anything nested added later will not need handles.
 
 **The machine waking is a notification, not something to poll for.**
 `NSWorkspaceDidWakeNotification` arrives on `NSWorkspace`'s own notification centre —
@@ -224,6 +270,19 @@ Its match arm is deliberately empty. The clock at the tail of the loop is re-rea
 after *every* event, so arriving is the entire message; putting work in the arm would
 be duplicating what the tail already does.
 
+**The favourites window is tao's, and only what is inside it is AppKit's.** A
+`WindowBuilder` buys the title bar, the close button arriving as
+`WindowEvent::CloseRequested`, resizing, and `Window::set_focus()` — which already
+does `makeKeyAndOrderFront:` followed by `activateIgnoringOtherApps:`, the pair an
+`Accessory` app needs to put a window in front of anything. `gallery/macos.rs`
+reaches through `WindowExtMacOS::ns_view()` and fills it, and lays its own container
+inside that so the arithmetic is written in coordinates this program decides the
+orientation of rather than tao's. Everything resizes by autoresizing mask, so
+`WindowEvent::Resized` never has to be handled at all.
+
+Closing the window is not quitting, and its arm deliberately does not `return` — the
+clock at the tail of the loop still has to be wound.
+
 **Start at login is a launchd agent, not `SMAppService`.** `SMAppService.mainApp` is
 the modern answer and needs macOS 13; the development machine runs 12.7. The agent is
 written and deleted directly and `launchctl` is never called — bootstrapping it would
@@ -233,4 +292,7 @@ setting only means anything at the next login anyway.
 ## Planned, not built
 
 The Windows and Linux backends. `autostart.rs` is macOS-only and would grow the same
-platform split `wallpaper/` has.
+platform split `wallpaper/` has. `gallery/` already has that split — the window
+itself is tao's and portable, and only what is drawn inside it is AppKit — but like
+`wallpaper/` it names no backend for anywhere else, so the crate still does not build
+off macOS.

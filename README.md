@@ -32,8 +32,7 @@ Open in browser
 ─────────────────────
 Next picture
 Add to favourites
-Favourites            ▸   L'Arlésienne: Madame…  ▸  Show
-                          Wheat Field with Cyp…     Forget
+Favourites…
 Back to today's picture
 ─────────────────────
 Re-apply wallpaper
@@ -49,11 +48,34 @@ and tomorrow's still comes with tomorrow.
 
 **Add to favourites** takes a copy of the painting on the desktop and keeps it,
 which is the only thing that saves it: the cache holds one picture, and tomorrow's
-arrival deletes today's. **Favourites ▸ … ▸ Show** puts a kept painting up when the
-day's does not suit, and the last row — which names the painting it means — puts
-today's back when you have had enough of the substitute. **Forget** drops a painting
-from the list; if it happens to be the one on the desktop, its file waits until the
-desktop has moved on.
+arrival deletes today's.
+
+**Favourites…** opens a window to look at what you have kept, because a list of
+titles is no way to recognise a painting. The pictures run down the left; click one
+and it fills the rest of the window, with what it is called underneath.
+
+```
+┌──────────────────────────────────────┐
+│ Favourites                      ─ □ ×│
+├────────┬─────────────────────────────┤
+│ ┌────┐ │      ┌───────────────┐      │
+│ │    │ │      │               │      │
+│ └────┘ │      │               │      │
+│ ┌────┐ │      │               │      │
+│ │    │ │      │               │      │
+│ └────┘ │      └───────────────┘      │
+│ ┌────┐ │                             │
+│ │    │ │  Sahurs Meadows in Morning… │
+│ └────┘ │  Alfred Sisley, 1894        │
+│        │  [Set as wallpaper] [Forget]│
+└────────┴─────────────────────────────┘
+```
+
+**Set as wallpaper** puts that painting up when the day's does not suit — a
+double-click on the picture does the same — and the menu's last row, which names the
+painting it means, puts today's back when you have had enough of the substitute.
+**Forget** drops a painting from the list; if it happens to be the one on the
+desktop, its file waits until the desktop has moved on.
 
 Choosing a painting by hand does not disturb the schedule: today's stays today's,
 and tomorrow's arrives with tomorrow no matter how often you change your mind in

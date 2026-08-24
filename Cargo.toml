@@ -25,10 +25,17 @@ objc2 = "0.6"
 objc2-core-foundation = { version = "0.3", features = ["CFRunLoop"] }
 objc2-foundation = { version = "0.3", features = [
     "NSString", "NSURL", "NSDictionary", "NSValue", "NSArray", "NSError",
-    "NSDate", "NSTimeZone", "NSNotification", "NSOperation", "block2",
+    "NSDate", "NSTimeZone", "NSNotification", "NSOperation", "NSGeometry", "block2",
 ] }
 objc2-app-kit = { version = "0.3", features = [
     "NSWorkspace", "NSScreen", "NSColor", "NSCell", "objc2-core-foundation",
+    # The favourites window. Most of these are already compiled in by way of tao
+    # and tray-icon, but a feature nobody asks for is a feature a dependency may
+    # stop asking for, and then the build breaks for reasons nothing here explains.
+    "NSResponder", "NSView", "NSEvent", "NSGraphics", "NSBezierPath",
+    "NSImage", "NSImageRep", "NSBitmapImageRep", "NSGraphicsContext",
+    "NSImageView", "NSScrollView", "NSClipView",
+    "NSControl", "NSButton", "NSTextField", "NSFont", "NSParagraphStyle",
 ] }
 
 [profile.release]

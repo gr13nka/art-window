@@ -11,6 +11,7 @@ mod autostart;
 mod config;
 mod day;
 mod favourites;
+mod gallery;
 mod rotation;
 mod tray;
 mod wake;
