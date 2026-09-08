@@ -1,10 +1,11 @@
 mod login;
 mod wallpaper;
 
+use super::Pinned;
 use anyhow::Result;
 use std::path::Path;
 
-pub(super) fn pin(path: &Path) -> Result<()> {
+pub(super) fn pin(path: &Path) -> Result<Pinned> {
     wallpaper::pin(path)
 }
 

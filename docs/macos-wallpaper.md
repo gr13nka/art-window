@@ -78,6 +78,36 @@ sqlite3 ~/Library/Application\ Support/Dock/desktoppicture.db \
 Every slot should name the current image. To see what is actually on screen,
 `screencapture -x` and look at it.
 
+## At login the Dock is still building it
+
+The Dock starts a few seconds before Art Window does and spends the first minute or
+so of a session putting this database together. A write during that window is
+refused — `database is locked`, sometimes `disk I/O error` — and refused *in both
+directions*, because neither the Dock nor SQLite's default waits for the other's
+lock.
+
+The evidence, a minute after one login, in a store the Dock had just started over:
+`displays` and `spaces` both empty, `pictures` holding one row naming neither, and
+the Dock's own account of the same failure sitting in `prefs`:
+
+```
+5001|could not add new preferences - err=5 errmsg=database is locked
+     loc=-[DPPictureStorage setDictionary:forDisplay:andSpace:displayID:updateKey:isDefault:]:479
+```
+
+So the Dock lost the wallpaper the supported `NSWorkspace` call had just set, and
+this program lost the other Spaces. Twenty minutes later the same file took a
+`BEGIN IMMEDIATE` without complaint: at login this is congestion, not damage, and
+the answer is to wait a little and ask again rather than to conclude anything.
+
+Both halves of that answer are in the code. `spread_to_every_space` gives the
+connection a `DOCK_BUSY_WAIT` busy timeout, so a moment's overlap is waited out
+instead of failing instantly. What it cannot wait out it reports as
+`Pinned::InPart`, and `tray::Reassert` offers the picture again a minute later, five
+times over. Nothing else would: the day is settled the moment a painting arrives,
+so no rotation comes back to it until tomorrow — which is why beginning a session
+owes one asking whatever the state file says.
+
 ## When the store is not there to be written
 
 macOS can decide the database is bad, rename it to `desktoppicture.db.corrupt` and

@@ -21,18 +21,36 @@ use linux as platform;
 #[cfg(target_os = "macos")]
 use macos as platform;
 
+/// How much of the desktop a picture actually reached.
+///
+/// A desktop can be more than one surface — macOS keeps a wallpaper for every
+/// Mission Control Space on every display — and the store holding the ones the
+/// user is not looking at is not always there to be written. A picture that
+/// reached only the surface in front of them is not a failure worth undoing the
+/// day for; it is a reason to ask again shortly.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Pinned {
+    /// The whole desktop is showing it, and nothing further is owed.
+    Everywhere,
+    /// Part of the desktop is showing it and the rest kept what it had, so this
+    /// has to be asked for again.
+    InPart,
+}
+
 /// Shows `path` on every display, scaled to fit entirely on screen with black
 /// filling the margins, and holds that placement against the things that would
 /// otherwise reset it.
 ///
 /// Re-asserting the placement is deliberately not the caller's job. A caller that
 /// had to remember it would eventually forget, which is exactly the bug this
-/// program exists to stop happening.
+/// program exists to stop happening. What a caller does own is [`Pinned::InPart`]:
+/// the desktop was not in a state to take the picture whole, and only the caller
+/// knows when it is worth interrupting to try again.
 ///
 /// A backend may require this to run on the main thread. macOS does, because
 /// AppKit will only enumerate displays there; the GNOME backend has no such
 /// affinity.
-pub fn pin(path: &Path) -> Result<()> {
+pub fn pin(path: &Path) -> Result<Pinned> {
     let path = path
         .canonicalize()
         .map_err(|e| anyhow::anyhow!("cannot read artwork at {}: {e}", path.display()))?;

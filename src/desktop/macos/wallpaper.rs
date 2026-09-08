@@ -11,8 +11,11 @@
 //! So the rest are written straight into the Dock's own database. That file is
 //! private to Apple and its shape could change, so a failure there is reported and
 //! stepped over rather than treated as fatal: the supported path has already put the
-//! picture on the Space the user is looking at.
+//! picture on the Space the user is looking at. It is reported to the *caller* as
+//! well as to the log, because at login that failure is the ordinary case and
+//! somebody has to come back and ask again — see [`Pinned`].
 
+use crate::desktop::Pinned;
 use anyhow::{anyhow, Context, Result};
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
@@ -24,24 +27,39 @@ use objc2_app_kit::{
 };
 use objc2_foundation::{NSDictionary, NSNumber, NSString, NSURL};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 /// Placement code the Dock stores for "scale to fit, letterbox the remainder".
 /// The same meaning as `NSImageScaling::ScaleProportionallyUpOrDown` with clipping
 /// off, in the Dock's own numbering.
 const DOCK_PLACEMENT_FIT: i64 = 5;
 
-pub fn pin(path: &Path) -> Result<()> {
+/// How long to wait for the Dock to let go of its own database.
+///
+/// The Dock writes this file too, and by default neither side waits for the other:
+/// a moment's overlap makes both fail, which is exactly what happens while a
+/// session is coming up. Waiting costs nothing worth counting — a picture only
+/// goes up on an event loop that has just finished waiting minutes for a download
+/// — and it is the difference between a login-time write landing and not.
+const DOCK_BUSY_WAIT: Duration = Duration::from_millis(500);
+
+pub fn pin(path: &Path) -> Result<Pinned> {
     set_active_space(path)?;
 
     match spread_to_every_space(path) {
-        Ok(true) => restart_dock(),
-        Ok(false) => {}
-        Err(e) => eprintln!(
-            "note: only the active Space was updated; the Dock's wallpaper store was \
-             not usable ({e})"
-        ),
+        Ok(true) => {
+            restart_dock();
+            Ok(Pinned::Everywhere)
+        }
+        Ok(false) => Ok(Pinned::Everywhere),
+        Err(e) => {
+            eprintln!(
+                "note: only the active Space was updated; the Dock's wallpaper store was \
+                 not usable ({e})"
+            );
+            Ok(Pinned::InPart)
+        }
     }
-    Ok(())
 }
 
 /// The supported route: AppKit, for whichever Space is in front right now.
@@ -123,8 +141,14 @@ fn abbreviate(path: &Path) -> String {
 fn spread_to_every_space(path: &Path) -> Result<bool> {
     let stored = abbreviate(path);
     let mut db = rusqlite::Connection::open(dock_store()?)?;
+    db.busy_timeout(DOCK_BUSY_WAIT)?;
 
     let slots: i64 = db.query_row("SELECT count(*) FROM pictures", [], |r| r.get(0))?;
+    // A store with no slots is one macOS has just started over, and it is the one
+    // case where the active Space really is all there is to write: the Dock fills
+    // `pictures` in again as Spaces are visited. Nothing changed, and nothing is
+    // owed — an unwritable store would be asked again, and this one would answer
+    // the same way forever.
     if slots == 0 {
         return Ok(false);
     }

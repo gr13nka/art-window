@@ -2,13 +2,17 @@ mod background;
 mod host;
 mod login;
 
+use super::Pinned;
 use anyhow::{bail, Context, Result};
 use glib::variant::ToVariant;
 use std::collections::HashMap;
 use std::path::Path;
 
-pub(super) fn pin(path: &Path) -> Result<()> {
-    background::pin(path)
+/// GNOME keeps one wallpaper and this backend reads it back before returning, so
+/// there is no half-measure to report: it either took or it errored.
+pub(super) fn pin(path: &Path) -> Result<Pinned> {
+    background::pin(path)?;
+    Ok(Pinned::Everywhere)
 }
 
 pub(super) fn browse(url: &str) {
@@ -67,7 +71,7 @@ pub(super) fn check(shown: Option<&Path>) -> Result<()> {
     match shown {
         None => println!("wallpaper write    skipped (no shown artwork is recorded)"),
         Some(path) => match super::pin(path) {
-            Ok(()) => println!("wallpaper write    accepted and read back"),
+            Ok(_) => println!("wallpaper write    accepted and read back"),
             Err(error) => {
                 println!("wallpaper write    failed ({error:#})");
                 failures.push(error.to_string());

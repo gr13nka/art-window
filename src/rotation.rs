@@ -31,15 +31,23 @@ pub fn fetch(config: &Config, state: &State, cache: &Path) -> Result<Artwork> {
 /// Puts the picture the rotation has just found on the desktop, as the day's.
 ///
 /// The clock advances only once the wallpaper is actually up, so a failure here
-/// leaves the day unspent and the next attempt retries.
+/// leaves the day unspent and the next attempt retries. A picture that reached
+/// only part of the desktop *has* arrived and does spend the day — it is the
+/// desktop that is not ready, not the museum — so the answer is handed back for
+/// the caller to ask again with, rather than turned into a fresh download.
 ///
 /// Kept on the event-loop thread because the macOS [`desktop::pin`] backend
 /// requires it.
-pub fn show(artwork: &Artwork, config: &Config, paths: &Paths, state: &mut State) -> Result<()> {
-    desktop::pin(&artwork.path)?;
+pub fn show(
+    artwork: &Artwork,
+    config: &Config,
+    paths: &Paths,
+    state: &mut State,
+) -> Result<desktop::Pinned> {
+    let pinned = desktop::pin(&artwork.path)?;
     state.record_fetched(artwork, &paths.state)?;
     sweep(config, paths, state);
-    Ok(())
+    Ok(pinned)
 }
 
 /// Puts a picture somebody has picked on the desktop — a favourite, or the day's
@@ -51,11 +59,16 @@ pub fn show(artwork: &Artwork, config: &Config, paths: &Paths, state: &mut State
 ///
 /// Kept on the event-loop thread because the macOS [`desktop::pin`] backend
 /// requires it.
-pub fn revisit(artwork: &Artwork, config: &Config, paths: &Paths, state: &mut State) -> Result<()> {
-    desktop::pin(&artwork.path)?;
+pub fn revisit(
+    artwork: &Artwork,
+    config: &Config,
+    paths: &Paths,
+    state: &mut State,
+) -> Result<desktop::Pinned> {
+    let pinned = desktop::pin(&artwork.path)?;
     state.record_chosen(artwork, &paths.state)?;
     sweep(config, paths, state);
-    Ok(())
+    Ok(pinned)
 }
 
 /// Lets the source clear up after itself, sparing the day's picture.

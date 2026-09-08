@@ -27,7 +27,7 @@
 
 use crate::art::Artwork;
 use crate::config::{now_secs, Config, Paths, State};
-use crate::desktop;
+use crate::desktop::{self, Pinned};
 use crate::favourites::Favourites;
 use crate::gallery::{Control, Gallery, Pick};
 use crate::rotation;
@@ -61,6 +61,19 @@ const TICK: Duration = Duration::from_secs(5 * 60);
 /// again forever: the day is only marked done on success, so nothing else would stop
 /// the loop.
 const RETRY: Duration = Duration::from_secs(15 * 60);
+
+/// How long to leave the desktop alone before offering it a picture it took only
+/// in part, and how many times to offer it.
+///
+/// Measured against the Dock, which is what refuses: at login it spends the first
+/// minute or so building the wallpaper store this program writes into, and a write
+/// during that is refused for both sides at once. A minute apart, five times over,
+/// outlasts that comfortably. It stops there because a store still refusing after
+/// five minutes is not busy but broken — see the quarantined store in
+/// `docs/macos-wallpaper.md` — and asking a broken one all day would restart the
+/// Dock for nothing and fill the log with the saying so.
+const RE_PIN: Duration = Duration::from_secs(60);
+const PATIENCE: u32 = 5;
 
 /// Something that needs the main thread's attention.
 enum Wake {
@@ -127,6 +140,76 @@ impl From<Pick> for Wanted {
             Pick::Show(key) => Self::Show(key),
             Pick::Forget(key) => Self::Forget(key),
         }
+    }
+}
+
+/// What the desktop still owes, and when to ask it for it again.
+///
+/// [`desktop::pin`] can answer that only part of the desktop took a picture — on
+/// macOS, that the Dock's store for every Space but the one in front was not
+/// there to be written. That is not a failed rotation: the painting arrived, the
+/// day is spent, and so nothing in the schedule will ever come back to it. The
+/// desktop would keep what it had until tomorrow, which is precisely the complaint
+/// this program exists to answer, so somebody has to ask again — and the loop is
+/// the only thing here holding a clock.
+///
+/// That clock is wall time like every other deadline in this module, so a machine
+/// that sleeps through the next asking asks on waking rather than a minute of
+/// running time later.
+struct Reassert {
+    /// The second at which to ask again; `None` when the desktop owes nothing.
+    at: Option<u64>,
+    /// How many more askings before the desktop is taken at its word.
+    tries: u32,
+}
+
+impl Reassert {
+    /// Nothing owed.
+    const fn settled() -> Self {
+        Self { at: None, tries: 0 }
+    }
+
+    /// Owes an asking on the next turn of the loop, whatever the desktop last
+    /// said — what beginning a session owes, because a session that has just begun
+    /// is one whose desktop nobody has seen yet.
+    fn owe(&mut self) {
+        self.at = Some(now_secs());
+        self.tries = PATIENCE;
+    }
+
+    /// Records what the desktop made of a picture just put up.
+    fn took(&mut self, pinned: Pinned) {
+        self.tries = PATIENCE;
+        self.at = match pinned {
+            Pinned::Everywhere => None,
+            Pinned::InPart => Some(now_secs() + RE_PIN.as_secs()),
+        };
+    }
+
+    /// Offers the desktop `shown` again, if an asking is owed by now.
+    ///
+    /// `shown` because that is the picture the desktop is failing to show; a
+    /// re-asserted placement is never a new one, and touches neither the day nor
+    /// the state. Each asking spends one of [`PATIENCE`], and an error ends them:
+    /// a picture that cannot be put up at all is not made puttable by asking twice
+    /// more.
+    fn press(&mut self, shown: Option<&Artwork>) -> Result<()> {
+        match self.at {
+            Some(at) if at <= now_secs() => self.at = None,
+            _ => return Ok(()),
+        }
+        let Some(art) = shown else { return Ok(()) };
+
+        self.tries = self.tries.saturating_sub(1);
+        if desktop::pin(&art.path)? == Pinned::InPart && self.tries > 0 {
+            self.at = Some(now_secs() + RE_PIN.as_secs());
+        }
+        Ok(())
+    }
+
+    /// Seconds until the next asking, for the clock at the tail of the loop.
+    fn left(&self) -> Option<u64> {
+        self.at.map(|at| at.saturating_sub(now_secs()))
     }
 }
 
@@ -219,7 +302,10 @@ pub fn run(paths: Paths, config: Config, mut state: State) -> Result<()> {
     let mut tray: Option<TrayIcon> = None;
     #[cfg(target_os = "linux")]
     let mut timer_started = false;
-    #[cfg(target_os = "linux")]
+    // Whether the session has already begun. Linux emits `Init` again for every
+    // later launcher click — that is how a second `art-window` asks this one to show
+    // itself — so "the loop is starting" is a fact worth keeping rather than one to
+    // read off the event.
     let mut initialized = false;
     #[cfg(target_os = "linux")]
     let mut quit_action_added = false;
@@ -241,6 +327,8 @@ pub fn run(paths: Paths, config: Config, mut state: State) -> Result<()> {
     // the loop and nowhere else, so a click asks for one rather than doing it: the
     // clock is then wound the same way whoever did the asking.
     let mut asked_for_next = false;
+    // What the desktop still owes, and when to ask it again.
+    let mut reassert = Reassert::settled();
 
     event_loop.run(move |event, target, control_flow| {
         // Every event is first read for what it asks of the loop, and only then
@@ -249,6 +337,9 @@ pub fn run(paths: Paths, config: Config, mut state: State) -> Result<()> {
         // answering them twice over is how the two would drift apart.
         let wanted = match event {
             Event::NewEvents(StartCause::Init) => {
+                let starting = !initialized;
+                initialized = true;
+
                 #[cfg(target_os = "linux")]
                 if !timer_started {
                     // tao's GTK backend does not register a source for WaitUntil.
@@ -288,10 +379,8 @@ pub fn run(paths: Paths, config: Config, mut state: State) -> Result<()> {
                     // A remote GApplication activation emits Init again. The first
                     // one establishes fallback presence; every later one is the
                     // explicit gesture to bring that window back.
-                    if initialized {
+                    if !starting {
                         window_requested = true;
-                    } else {
-                        initialized = true;
                     }
                     if let Err(error) = ui.present(target, &favourites) {
                         report(&error);
@@ -301,6 +390,17 @@ pub fn run(paths: Paths, config: Config, mut state: State) -> Result<()> {
                     if tray.is_some() && !window_requested {
                         ui.minimize();
                     }
+                }
+
+                // A session that has just begun is the moment the desktop is least
+                // likely to be showing what this program last put there: on macOS
+                // the Dock rebuilds its wallpaper store as it starts and refuses
+                // every write while it does, so the picture that went up at the end
+                // of the last session can have been lost with it. Nothing else
+                // would put that right — the day is settled the moment a picture
+                // arrives, and no rotation is owed until tomorrow.
+                if starting {
+                    reassert.owe();
                 }
                 Wanted::Nothing
             }
@@ -370,10 +470,12 @@ pub fn run(paths: Paths, config: Config, mut state: State) -> Result<()> {
                 // below still has to be wound.
                 if !std::mem::take(&mut superseded) {
                     match result.and_then(|artwork| {
-                        rotation::show(&artwork, &config, &paths, &mut state).map(|()| artwork)
+                        rotation::show(&artwork, &config, &paths, &mut state)
+                            .map(|pinned| (artwork, pinned))
                     }) {
-                        Ok(artwork) => {
+                        Ok((artwork, pinned)) => {
                             cooling_off = None;
+                            reassert.took(pinned);
                             // Where a favourite dropped while it was on the desktop
                             // finally goes.
                             favourites.discard_all_but(&artwork.path);
@@ -426,9 +528,12 @@ pub fn run(paths: Paths, config: Config, mut state: State) -> Result<()> {
 
             Wanted::Reapply => {
                 if let Some(art) = &state.shown {
-                    if let Err(error) = desktop::pin(&art.path) {
-                        report(&error);
-                        ui.set_status("Could not re-apply the wallpaper");
+                    match desktop::pin(&art.path) {
+                        Ok(pinned) => reassert.took(pinned),
+                        Err(error) => {
+                            report(&error);
+                            ui.set_status("Could not re-apply the wallpaper");
+                        }
                     }
                 }
             }
@@ -486,11 +591,12 @@ pub fn run(paths: Paths, config: Config, mut state: State) -> Result<()> {
 
         if let Some(art) = chosen {
             match rotation::revisit(&art, &config, &paths, &mut state) {
-                Ok(()) => {
+                Ok(pinned) => {
                     // Nothing is owed that this has not just answered, and a
                     // download already in the air would only undo it.
                     cooling_off = None;
                     superseded = fetching;
+                    reassert.took(pinned);
                     favourites.discard_all_but(&art.path);
                     ui.describe(&state, &favourites);
                 }
@@ -499,6 +605,14 @@ pub fn run(paths: Paths, config: Config, mut state: State) -> Result<()> {
                     ui.set_status("Could not put that picture up");
                 }
             }
+        }
+
+        // Whatever the desktop still owes, offered to it again. Last of the three,
+        // because a picture that has just gone up in one of them has already said
+        // what it wants asking for and when.
+        if let Err(e) = reassert.press(state.shown.as_ref()) {
+            report(&e);
+            ui.set_status("Could not re-apply the wallpaper");
         }
 
         // When to wake up next. Recomputed after every event rather than scheduled
@@ -519,7 +633,11 @@ pub fn run(paths: Paths, config: Config, mut state: State) -> Result<()> {
             spawn_fetch(&config, &state, &paths, proxy.clone());
             fetching = true;
             ControlFlow::Wait
-        } else if let Some(left) = cooling_off {
+        } else if let Some(left) = [cooling_off, reassert.left()].into_iter().flatten().min() {
+            // The nearer of the two standing deadlines. Either may be further off
+            // than the tick — a cooling-off period is three of them — and waiting
+            // the whole of it is right: the tick asks a question these two have
+            // already answered.
             ControlFlow::WaitUntil(Instant::now() + Duration::from_secs(left))
         } else {
             ControlFlow::WaitUntil(Instant::now() + TICK)

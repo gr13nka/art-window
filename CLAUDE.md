@@ -74,6 +74,16 @@ it before touching `src/desktop/macos/wallpaper.rs`.
   backend sets fit, black margins and the URI together. Callers must never be
   responsible for re-applying—forgetting that is the original bug this project
   exists to fix.
+- **A picture can reach the desktop only in part, and the answer is to ask again.**
+  `pin` returns `Pinned::InPart` when the picture went up where the user is looking
+  but the store holding every other Space would not take it. At login that is the
+  ordinary case rather than a fault: the Dock is still building that store and
+  neither side waits for the other's lock — see `docs/macos-wallpaper.md`. The
+  rotation still spends the day, because the painting *did* arrive and re-downloading
+  it would not help; `tray::Reassert` offers the same picture again a minute later,
+  five times over, and beginning a session owes one asking whatever the state file
+  says. Nothing else would ever put it right: the day is settled, so no schedule
+  returns to it until tomorrow.
 - **The macOS `pin` backend must run on the main thread.** `NSScreen::screens`
   demands a `MainThreadMarker`. It errors rather than trusting a doc comment. This is why
   `rotation` is split: `fetch` blocks for a couple of minutes and runs on a worker,
