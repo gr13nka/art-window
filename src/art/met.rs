@@ -17,8 +17,9 @@ use std::time::{Duration, Instant};
 const API: &str = "https://collectionapi.metmuseum.org/public/collection/v1";
 /// Department 11 is European Paintings.
 // A generic `q=painting` makes portraits disproportionately common in the European
-// Paintings department. Start with a landscape-shaped pool instead; the catalogue
-// metadata check below catches portraits that happen to mention a landscape too.
+// Paintings department. Start from a pool of landscapes instead — the subject, not
+// the shape of the canvas; the catalogue metadata check below catches the portraits
+// that happen to mention a landscape too.
 const SEARCH: &str = "search?departmentId=11&hasImages=true&isPublicDomain=true&q=landscape";
 
 /// Refuse anything implausible for a photograph of a painting. The Met serves

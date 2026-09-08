@@ -250,9 +250,11 @@ Reversing these needs a reason, not a tidy-up impulse.
 
 - **No blur/dim effects.** The app this replaces had them; its user never enabled
   them once. They cost a module, the `image` crate and two menu items.
-- **No landscape filtering of artwork.** Fit-plus-black-letterbox renders a portrait
-  painting as a framed picture on a black wall, which is the intended look. The
-  display policy removed the need for the filter.
+- **No filtering by the shape of a picture.** Fit-plus-black-letterbox renders a
+  tall painting as a framed picture on a black wall, which is the intended look, so
+  nothing here ever measures an image's proportions — and nothing decodes one to be
+  able to. Not to be confused with the *subject* filter under **External services**
+  below: "landscape" there is what the painting is of, not which way round it is.
 - **Not the Art Institute of Chicago.** Its metadata API is fine, but the image host
   `www.artic.edu/iiif/...` sits behind a Cloudflare managed challenge that an
   unattended client cannot answer. The Met has no such gate. Do not switch back.
@@ -263,6 +265,13 @@ The Met's API needs a real `User-Agent`; anonymous traffic is what earns bot
 challenges. One request per day. `art/met.rs` filters to department 11 (European
 Paintings) — an unfiltered collection of 490,000 objects is mostly coins and
 textiles.
+
+The search asks that department for `q=landscape` rather than `q=painting`, because
+a generic query there comes back mostly portraits. The word is then looked for a
+second time, in each candidate's title and catalogue tags: a search for landscapes
+still turns up paintings of people standing in one, and a candidate that reads as a
+portrait is skipped for the next of the eight. Subject only — see the omission
+above; nothing looks at the shape of the picture.
 
 ## The resident app
 
