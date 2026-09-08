@@ -22,9 +22,11 @@ The build requires Rust 1.88 or newer.
 ### macOS
 
 ```sh
-./macos/bundle.sh
-cp -R "target/Art Window.app" /Applications/
+./macos/install.sh
 ```
+
+This rebuilds the current checkout and replaces `/Applications/Art Window.app`.
+Set `ART_WINDOW_APP_DIR` to an absolute directory to install somewhere else.
 
 Open the app to put its framed-picture icon in the menu bar.
 
