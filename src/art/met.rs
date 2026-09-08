@@ -1,7 +1,7 @@
 //! The Metropolitan Museum of Art's open-access collection.
 //!
-//! Two calls and a download: ask which European paintings are public domain and
-//! photographed, pick one, then fetch its record and its image. The department
+//! Two calls and a download: ask which European landscape paintings are public
+//! domain and photographed, pick one, then fetch its record and its image. The department
 //! filter is what keeps the pool to actual paintings rather than the coins,
 //! textiles and armour that dominate an unfiltered collection of 490,000 objects.
 //!
@@ -16,7 +16,10 @@ use std::time::{Duration, Instant};
 
 const API: &str = "https://collectionapi.metmuseum.org/public/collection/v1";
 /// Department 11 is European Paintings.
-const SEARCH: &str = "search?departmentId=11&hasImages=true&isPublicDomain=true&q=painting";
+// A generic `q=painting` makes portraits disproportionately common in the European
+// Paintings department. Start with a landscape-shaped pool instead; the catalogue
+// metadata check below catches portraits that happen to mention a landscape too.
+const SEARCH: &str = "search?departmentId=11&hasImages=true&isPublicDomain=true&q=landscape";
 
 /// Refuse anything implausible for a photograph of a painting. The Met serves
 /// originals with no server-side resizing, so this is the only size control there is.
@@ -85,6 +88,24 @@ struct Object {
     primary_image: String,
     #[serde(rename = "objectURL")]
     object_url: String,
+    #[serde(default)]
+    tags: Vec<Tag>,
+}
+
+#[derive(Deserialize)]
+struct Tag {
+    term: String,
+}
+
+impl Object {
+    fn is_portrait(&self) -> bool {
+        let title = self.title.to_ascii_lowercase();
+        title.contains("portrait")
+            || self
+                .tags
+                .iter()
+                .any(|tag| tag.term.eq_ignore_ascii_case("portraits"))
+    }
 }
 
 impl Met {
@@ -198,8 +219,8 @@ impl Source for Met {
             }
 
             let object = match self.object(id) {
-                Ok(o) if !o.primary_image.is_empty() => o,
-                Ok(_) => continue, // catalogued as having an image, but has none
+                Ok(o) if !o.primary_image.is_empty() && !o.is_portrait() => o,
+                Ok(_) => continue, // no usable image, or catalogued as a portrait
                 Err(e) => {
                     last_error = Some(e);
                     continue;
