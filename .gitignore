@@ -2,3 +2,8 @@
 
 # Serena's project cache and settings: tool state, not this project.
 /.serena
+
+android/.gradle/
+android/.kotlin/
+android/local.properties
+android/**/build/

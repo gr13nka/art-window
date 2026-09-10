@@ -2,7 +2,9 @@
 
 A daily public-domain painting as the desktop wallpaper, fit to screen and
 letterboxed in black. It runs as a macOS menu-bar app or a GNOME GTK application;
-platform wallpaper, browser and login behavior meet behind `desktop/`.
+platform wallpaper, browser and login behavior meet behind `desktop/`. A native
+Kotlin Android app under `android/` sets the same daily painting as the phone
+wallpaper instead — see `docs/android.md`.
 
 ## Commands
 
@@ -14,7 +16,12 @@ cargo fmt --check
 ./macos/bundle.sh          # -> target/Art Window.app
 ./linux/check-container.sh # Linux release build, tests, clippy and formatting
 ./linux/install.sh         # user-local GNOME binary, launcher and icon
+cd android && ./gradlew testDebugUnitTest assembleDebug
+./android/install.sh       # build debug APK and adb install -r
 ```
+
+Run `./gradlew --stop` after a Gradle build, and never run two Gradle builds at
+once — the wrapper's memory limits assume only one is running.
 
 Tests cover the platform-independent action translations and the Linux timezone and
 autostart contracts. They do not make wallpaper integration a pure unit-testable
@@ -250,11 +257,14 @@ Reversing these needs a reason, not a tidy-up impulse.
 
 - **No blur/dim effects.** The app this replaces had them; its user never enabled
   them once. They cost a module, the `image` crate and two menu items.
-- **No filtering by the shape of a picture.** Fit-plus-black-letterbox renders a
-  tall painting as a framed picture on a black wall, which is the intended look, so
-  nothing here ever measures an image's proportions — and nothing decodes one to be
-  able to. Not to be confused with the *subject* filter under **External services**
-  below: "landscape" there is what the painting is of, not which way round it is.
+- **No filtering by the shape of a picture, on the desktop.** Fit-plus-black-letterbox
+  renders a tall painting as a framed picture on a black wall, which is the intended
+  look, so nothing here ever measures an image's proportions — and nothing decodes one
+  to be able to. Not to be confused with the *subject* filter under **External
+  services** below: "landscape" there is what the painting is of, not which way round
+  it is. The Android app is the deliberate exception: a phone screen is too narrow for
+  letterboxing to read as anything but a stripe, so it does measure and filter by
+  shape — see **Android** below and `docs/android.md`.
 - **Not the Art Institute of Chicago.** Its metadata API is fine, but the image host
   `www.artic.edu/iiif/...` sits behind a Cloudflare managed challenge that an
   unattended client cannot answer. The Met has no such gate. Do not switch back.
@@ -338,6 +348,29 @@ than `SMAppService`, because the development machine runs 12.7. On Linux it is
 `$XDG_CONFIG_HOME/autostart/dev.artwindow.desktop`, with the current executable
 quoted under the desktop-entry and Exec grammars. Neither backend bootstraps,
 starts, or stops anything; the setting only means something at the next login.
+
+## Android
+
+A native Kotlin app under `android/`, alongside `linux/` and `macos/`, sharing no
+code with the Rust side. Full detail, including the shape filter's numbers and the
+placement and scheduling design, is in `docs/android.md`. The invariants that
+matter across the boundary:
+
+- **`Screen` owns every hanging rule.** `MAX_TRIM`, `MAX_ENLARGEMENT` and the
+  catalogue-measurement slack all live in `Screen.kt`; nothing else on the Android
+  side decides whether a painting fits.
+- **`Wallpaper.pin` owns placement**, the same way `desktop::pin` does on the
+  desktop: it composes the bitmap at exactly the screen's size before handing it
+  to `WallpaperManager`, so callers never crop, scale or position anything
+  themselves.
+- **Only `Rotation.turn` fetches, and only one turn at a time.** It takes a
+  `tryLock` rather than queuing a second attempt behind the first.
+- **The day is a calendar comparison, never a countdown.** `State.isDue` compares
+  `LocalDate` epoch days — the same rule as the desktop's `is_due`.
+- **The Met protocol is duplicated on purpose, not by accident.** `Met.kt`
+  repeats the rules in `src/art/met.rs` rather than calling into Rust; a change to
+  the search query, the `User-Agent`, or the `met-{id}.{ext}` filename convention
+  belongs in both files.
 
 ## Planned, not built
 

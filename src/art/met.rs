@@ -6,6 +6,11 @@
 //! textiles and armour that dominate an unfiltered collection of 490,000 objects.
 //!
 //! <https://metmuseum.github.io/>
+//!
+//! The Android app keeps its own copy of these rules in
+//! `android/app/src/main/java/dev/artwindow/Met.kt` rather than calling into this
+//! module — see `docs/android.md`. A change to the search query, the `User-Agent`,
+//! or the `met-{id}.{ext}` filename convention belongs in both files.
 
 use super::{pick_index, Artwork, Source};
 use anyhow::{anyhow, Context, Result};

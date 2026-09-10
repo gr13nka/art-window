@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+     Converted from linux/dev.artwindow.svg: a framed landscape (light mat, blue sky,
+     sun, two mountain layers). The SVG's own dark rounded-square tile becomes the
+     adaptive icon's flat background instead (see values/colors.xml), so only the
+     picture is drawn here — scaled in by the group below to sit inside the adaptive
+     icon's safe zone rather than bleeding to the edge of the full 108dp canvas.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="256"
+    android:viewportHeight="256">
+    <group
+        android:pivotX="128"
+        android:pivotY="128"
+        android:scaleX="0.9424"
+        android:scaleY="0.9424">
+        <path
+            android:pathData="M55,45 H201 A10,10 0 0 1 211,55 V201 A10,10 0 0 1 201,211 H55 A10,10 0 0 1 45,201 V55 A10,10 0 0 1 55,45 Z"
+            android:fillColor="#f8f9fa" />
+        <path
+            android:pathData="M62,59 H194 A3,3 0 0 1 197,62 V194 A3,3 0 0 1 194,197 H62 A3,3 0 0 1 59,194 V62 A3,3 0 0 1 62,59 Z"
+            android:fillColor="#5b8def" />
+        <path
+            android:pathData="M75,91 A16,16 0 1 0 107,91 A16,16 0 1 0 75,91 Z"
+            android:fillColor="#ffd166" />
+        <path
+            android:pathData="M59,158 L97,116 L126,147 L148,123 L197,175 V197 H59 Z"
+            android:fillColor="#285943" />
+        <path
+            android:pathData="M59,178 L102,143 L127,162 L155,143 L197,178 V197 H59 Z"
+            android:fillColor="#183b2c" />
+    </group>
+</vector>

@@ -12,8 +12,9 @@ independent rewrite and shares no code with either.
 
 ## Status
 
-Art Window supports macOS and Linux with GNOME. The GNOME port uses GTK 3,
-GSettings, logind, and the XDG directory conventions. Windows is not implemented.
+Art Window supports macOS and Linux with GNOME as desktop wallpaper apps, and
+Android as a native Kotlin phone app. The GNOME port uses GTK 3, GSettings,
+logind, and the XDG directory conventions. Windows is not implemented.
 
 ## Install
 
@@ -60,6 +61,16 @@ library and a StatusNotifier extension are available, Art Window also adds a pan
 menu and can stay out of the way there. Those are optional; their absence never
 makes the app unusable. See [GNOME wallpaper integration](docs/gnome-wallpaper.md)
 for the exact behavior and diagnostic commands.
+
+### Android
+
+Needs the Android SDK plus JDK 17, and a phone with USB debugging enabled. Then
+run `./android/install.sh` to build and install the debug APK.
+
+It replaces both the home and lock screen wallpaper, and — unlike the desktop —
+fills the screen rather than letterboxing, picking only paintings tall enough for
+that to look right. See [Art Window for Android](docs/android.md) for why. The
+painting changes on the first hourly check after midnight, over Wi-Fi.
 
 ## Interface
 
