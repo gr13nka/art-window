@@ -15,6 +15,7 @@ internal const val LOG_TAG = "ArtWindow"
 sealed interface Status {
     data object Idle : Status
     data object Fetching : Status
+    data object Applying : Status
     data class Failed(val message: String) : Status
 }
 
@@ -46,9 +47,10 @@ object Rotation {
             _status.value = Status.Fetching
             try {
                 val screen = context.screen()
+                val preferences = WallpaperPreferencesStore(context).load()
                 val met = Met(context.cacheDir)
-                val artwork = met.fetch(state.artwork, screen)
-                Wallpaper.pin(context, artwork.path, screen)
+                val artwork = met.fetch(state.artwork, screen, preferences)
+                Wallpaper.pin(context, artwork.path, screen, preferences)
                 state.recordFetched(artwork, today)
                 met.discardAllBut(artwork.path)
                 _status.value = Status.Idle
@@ -56,6 +58,29 @@ object Rotation {
                 Log.e(LOG_TAG, "rotation failed", e)
                 _status.value = Status.Failed(e.message ?: e.toString())
             }
+        } finally {
+            running.set(false)
+        }
+    }
+
+    /** Re-renders the cached painting and commits [preferences] as one serialized user action. */
+    fun applyPreferences(context: Context, preferences: WallpaperPreferences): Boolean {
+        if (!running.compareAndSet(false, true)) return false
+        return try {
+            _status.value = Status.Applying
+            val artwork = State(context).artwork
+            if (artwork != null && artwork.path.isFile) {
+                Wallpaper.pin(context, artwork.path, context.screen(), preferences)
+            }
+            if (!WallpaperPreferencesStore(context).save(preferences)) {
+                throw IllegalStateException("Could not save wallpaper settings")
+            }
+            _status.value = Status.Idle
+            true
+        } catch (e: Exception) {
+            Log.e(LOG_TAG, "applying wallpaper settings failed", e)
+            _status.value = Status.Failed(e.message ?: e.toString())
+            false
         } finally {
             running.set(false)
         }

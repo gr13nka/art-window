@@ -70,4 +70,33 @@ class ScreenTest {
         assertEquals(1080, screen.width)
         assertEquals(2340, screen.height)
     }
+
+    @Test
+    fun `cover accepts a horizontal painting when the user allows cropping`() {
+        val placement = Screen(1080, 2340).cover(4000, 2000)
+
+        assertTrue(placement != null)
+        placement!!
+        assertEquals(1080, placement.crop.right - placement.crop.left)
+        assertEquals(2340, placement.crop.bottom - placement.crop.top)
+        assertTrue(placement.crop.left > 0)
+    }
+
+    @Test
+    fun `fit centers a complete horizontal painting with top and bottom space`() {
+        val placement = Screen(1080, 2340).fit(4000, 2000)
+
+        assertTrue(placement != null)
+        placement!!
+        assertEquals(1080, placement.scaledWidth)
+        assertEquals(540, placement.scaledHeight)
+        assertEquals(900, placement.destination.top)
+        assertEquals(1440, placement.destination.bottom)
+    }
+
+    @Test
+    fun `stretch still protects against excessive enlargement`() {
+        assertTrue(Screen(1080, 2340).canStretch(1080, 2340))
+        assertTrue(!Screen(1080, 2340).canStretch(200, 400))
+    }
 }

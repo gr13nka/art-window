@@ -26,17 +26,16 @@ change to the search query, the `User-Agent`, or the `met-{id}.{ext}` filename
 convention belongs in both files, and each carries a comment pointing at the
 other so that isn't easy to forget.
 
-## Why the phone filters by shape when the desktop deliberately doesn't
+## Artwork shape is a preference on Android
 
 The desktop's **No filtering by the shape of a picture** rule (see the main
-`CLAUDE.md`) holds because fit-plus-letterbox already renders any painting well —
-a tall canvas reads as a framed picture on a black wall regardless of its
-proportions. A phone screen is roughly 0.45 units wide per unit of height, close
-to nothing in the Met's collection. Letterboxing a landscape painting there
-would leave a thin, useless strip down the middle. So the Android app fills the
-screen instead of framing the picture, and to fill a screen that narrow without
-grotesque cropping, it has to be selective about which paintings it will even
-consider. `Screen.kt` is where that selectivity lives — see below.
+`CLAUDE.md`) holds because fit-plus-letterbox renders any painting well. A phone
+screen is roughly 0.45 units wide per unit of height, close to nothing in the
+Met's collection, so the Android default remains **Phone-shaped**: paintings that
+Zoom can fill without grotesque cropping. Settings can broaden that pool to
+include near-square work (up to a 1.25 width/height ratio) or any shape, including
+fully horizontal work. This artwork-shape choice is independent of the rendering
+style.
 
 ## The numbers behind the pool
 
@@ -74,19 +73,19 @@ much they disagree depends on the department:
 
 So each candidate passes three checks, cheapest first:
 
-1. **Catalogue, with slack.** `Screen.mightHold` asks whether any catalogued
-   element is close enough to be worth a look. It checks plausibility, not
-   correctness.
-2. **The web-sized copy's shape.** `Screen.holds` is run against
+1. **Catalogue, with slack.** The selected `ArtworkShape` asks whether any
+   catalogued element is close enough to be worth a look. Missing measurements
+   pass through because the photograph can still give the real verdict.
+2. **The web-sized copy's shape.** The same preference is run against
    `primaryImageSmall`, a few hundred kilobytes with the photograph's real
    proportions. In sampling, four of every five candidates that passed the
    catalogue failed here. They were folding screens and triptychs that list one
    tall panel among their measurements and are photographed whole. Without this
    step each one cost a full original download, up to tens of megabytes on a
    phone's data plan.
-3. **The original's pixels.** `Screen.place` is run against the downloaded
-   original's header, without decoding it. It adds the enlargement limit, which
-   a web-sized copy cannot answer.
+3. **The original's pixels.** The downloaded original must match the selected
+   shape and have enough pixels for the chosen rendering style. This adds the
+   enlargement limit, which a web-sized copy cannot answer.
 
 A candidate that fails any step is discarded, and the search moves to the next
 one.
@@ -110,17 +109,38 @@ a misleading HTTP 404.
 
 ## Placement is baked into the pixels
 
-`Wallpaper.pin` decodes the downloaded file straight into a bitmap sized to
-exactly the screen — `ImageDecoder`'s target size plus a crop, computed once by
-`Screen.place` — rather than handing the system a full-resolution image to crop
-or scale itself. That leaves Android nothing to zoom, crop, or parallax-scroll
-at display time: the bitmap already *is* the wallpaper, pixel for pixel. The
-placement math enforces two limits so a mismatched painting is rejected rather
-than mangled: at most 15% trimmed from either axis, and at most 1.25× enlargement.
+`WallpaperRenderer` always produces a bitmap exactly the size of the screen,
+rather than leaving placement to Android. Zoom centre-crops, Stretch scales each
+axis, Blur either puts a sharp fitted painting over a blurred fill or blurs the
+whole fill, and Borders fits the painting over black, a custom colour or a colour
+averaged from its edge. The Settings preview uses this same renderer at a smaller
+size, so it cannot disagree with the applied result. The 1.25× enlargement limit
+still prevents a small source from becoming a soft wallpaper.
+
+Blur runs on a 256-pixel-wide intermediate bitmap with three box-blur passes.
+That keeps the saved 0–100 strength control usable on API 30 without adding a
+library or relying on API 31's `RenderEffect`. Custom borders use a colour wheel,
+curated swatches and five common colours quantized from the current painting.
 
 The screen size comes from `DisplayManager`'s current display mode, not
 `WindowManager`, because the daily rotation runs from a `JobService` with no
 Activity to ask. Home and lock screens receive the same bitmap in one call.
+
+## Activity and Settings UI
+
+The activity always opens on the existing dark artwork view. **Next picture**
+stays above the bottom navigation instead of falling below the tall preview and
+requiring a scroll. A two-segment artwork/settings control sits above the gesture
+area; its final geometry is a compact rounded rectangle about 115 dp wide and 50
+dp high, with 8 dp selected-segment corners rather than a capsule silhouette.
+
+Settings uses the same near-black gallery atmosphere as the artwork view. Its
+wallpaper preview is a centred 150 dp-wide phone frame rendered at the physical
+screen's aspect ratio. The four placement modes live in one slim horizontal
+strip, with extra blur or border controls revealed only for the selected mode.
+Blur preview rendering has no release-time debounce: every changed slider value
+updates the preview while the thumb is moving. Settings remain staged until
+**Apply changes** re-renders the current cached painting and saves them.
 
 ## Scheduling
 
@@ -141,9 +161,8 @@ Activity to ask. Home and lock screens receive the same bitmap in one call.
   permission is granted at install without a prompt, but the build and unit
   tests cannot see it missing; the first real launch crashed in
   `MainActivity.onCreate`.
-- **One turn at a time.** `Rotation.turn` takes a `tryLock` rather than
-  queuing, so a second trigger while a fetch is already running is simply
-  dropped instead of piling up behind it.
+- **One wallpaper operation at a time.** Rotation and Settings Apply share the
+  same try-lock, so a fetch and a re-render cannot race for the wallpaper or cache.
 - **No libraries beyond Compose, core-ktx and coroutines.** HTTP, JSON,
   scheduling and decoding all come from the OS. Besides the habit, the
   development machine sits behind a TLS-intercepting proxy that can stop Gradle
@@ -161,6 +180,5 @@ adb logcat -s ArtWindow       # the fetch and placement trail
 
 ## Out of scope for now
 
-Favourites and the gallery window, the folder source, and a settings screen.
-`MAX_TRIM` and `MAX_ENLARGEMENT` are named constants in `Screen.kt` rather than
-configurable values.
+Favourites and the gallery window, and the folder source. The crop and
+enlargement safety limits remain named constants rather than user-facing tuning.

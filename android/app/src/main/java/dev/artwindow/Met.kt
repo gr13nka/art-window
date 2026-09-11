@@ -35,8 +35,8 @@ internal fun idOf(file: File): Long? {
 }
 
 /**
- * The Metropolitan Museum of Art's open-access collection, filtered down to
- * paintings a phone screen can hang.
+ * The Metropolitan Museum of Art's open-access collection, filtered to the
+ * artwork-shape breadth chosen in Settings.
  *
  * Mirrors `src/art/met.rs` on the desktop side: the same User-Agent, the same
  * landscape-subject query and portrait skip, and the same `met-{id}.{ext}` filename
@@ -51,7 +51,7 @@ internal fun idOf(file: File): Long? {
 class Met(private val cacheDir: File) {
 
     /**
-     * Finds a painting [screen] can hang without trimming or enlarging it too far,
+     * Finds a painting matching the saved shape and rendering preferences,
      * downloads it, and returns it. [avoid]'s object id, if any, is skipped, so a
      * rotation does not repeat yesterday's picture.
      *
@@ -59,7 +59,7 @@ class Met(private val cacheDir: File) {
      * Met's API get blocked — up to [CANDIDATES] of them or [BUDGET_MS], whichever
      * comes first.
      */
-    fun fetch(avoid: Artwork?, screen: Screen): Artwork {
+    fun fetch(avoid: Artwork?, screen: Screen, preferences: WallpaperPreferences): Artwork {
         val avoidId = avoid?.let { idOf(it.path) }
         val ids = candidateIds()
         val deadline = System.currentTimeMillis() + BUDGET_MS
@@ -72,9 +72,9 @@ class Met(private val cacheDir: File) {
             looked++
 
             try {
-                val obj = fetchObject(id, screen) ?: continue // no image, a portrait, or a catalogued shape no phone suits
-                if (!previewHolds(obj, screen)) continue // the catalogue passed it; the photograph's own shape did not
-                val file = downloadAndPlace(obj, screen) ?: continue // the right shape, too few pixels to fill the screen
+                val obj = fetchObject(id, screen, preferences.artworkShape) ?: continue
+                if (!previewHolds(obj, screen, preferences.artworkShape)) continue
+                val file = downloadAndPlace(obj, screen, preferences) ?: continue
 
                 Log.i(LOG_TAG, "object $id fits after $looked lookups")
                 return Artwork(
@@ -118,7 +118,7 @@ class Met(private val cacheDir: File) {
     }
 
     /** Null means "skip this candidate": no usable image, not classified as a painting, a portrait, or a shape no measurement supports. */
-    private fun fetchObject(id: Long, screen: Screen): MetObject? {
+    private fun fetchObject(id: Long, screen: Screen, shape: ArtworkShape): MetObject? {
         val json = getJson("$API/objects/$id")
         val primaryImage = json.optString("primaryImage", "")
         if (primaryImage.isEmpty()) return null
@@ -133,13 +133,13 @@ class Met(private val cacheDir: File) {
         if (isPortrait) return null
 
         val measurements = json.optJSONArray("measurements") ?: JSONArray()
-        val plausibleShape = (0 until measurements.length()).any { i ->
+        val measuredAspects = (0 until measurements.length()).mapNotNull { i ->
             val element = measurements.getJSONObject(i).optJSONObject("elementMeasurements")
             val w = element?.optDouble("Width") ?: Double.NaN
             val h = element?.optDouble("Height") ?: Double.NaN
-            w.isFinite() && h.isFinite() && h != 0.0 && screen.mightHold(w / h)
+            if (w.isFinite() && h.isFinite() && h > 0.0) w / h else null
         }
-        if (!plausibleShape) return null
+        if (measuredAspects.isNotEmpty() && measuredAspects.none { shape.mightAccept(it, screen) }) return null
 
         val artist = json.optString("artistDisplayName", "").trim()
         val date = json.optString("objectDate", "").trim()
@@ -169,7 +169,7 @@ class Met(private val cacheDir: File) {
      * The copy costs a few hundred kilobytes where the original costs up to tens of
      * megabytes, and a phone pays for every one of them.
      */
-    private fun previewHolds(obj: MetObject, screen: Screen): Boolean {
+    private fun previewHolds(obj: MetObject, screen: Screen, shape: ArtworkShape): Boolean {
         if (obj.primaryImageSmall.isEmpty()) return true // nothing cheaper to ask; the original decides
         val connection = openConnection(obj.primaryImageSmall)
         val bytes = try {
@@ -182,15 +182,29 @@ class Met(private val cacheDir: File) {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
         return bounds.outWidth > 0 && bounds.outHeight > 0 &&
-            screen.holds(bounds.outWidth.toDouble() / bounds.outHeight)
+            shape.accepts(bounds.outWidth.toDouble() / bounds.outHeight, screen)
     }
 
-    /** Downloads [obj]'s image and checks its real pixels against [screen]; deletes the file and returns `null` if they do not fit. */
-    private fun downloadAndPlace(obj: MetObject, screen: Screen): File? {
+    /** Downloads [obj]'s image and checks its real shape and usable resolution. */
+    private fun downloadAndPlace(obj: MetObject, screen: Screen, preferences: WallpaperPreferences): File? {
         val file = download(obj.primaryImage, obj.objectId)
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeFile(file.path, bounds)
-        if (screen.place(bounds.outWidth, bounds.outHeight) == null) {
+        val width = bounds.outWidth
+        val height = bounds.outHeight
+        val shapeFits = width > 0 && height > 0 &&
+            preferences.artworkShape.accepts(width.toDouble() / height, screen)
+        val renderable = when (preferences.style) {
+            WallpaperStyle.ZOOM -> screen.cover(width, height) != null
+            WallpaperStyle.STRETCH -> screen.canStretch(width, height)
+            WallpaperStyle.BLUR -> if (preferences.blurVariant == BlurVariant.BACKDROP) {
+                screen.fit(width, height) != null
+            } else {
+                screen.cover(width, height) != null
+            }
+            WallpaperStyle.BORDERS -> screen.fit(width, height) != null
+        }
+        if (!shapeFits || !renderable) {
             file.delete()
             return null
         }
