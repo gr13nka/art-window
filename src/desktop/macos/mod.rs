@@ -9,6 +9,10 @@ pub(super) fn pin(path: &Path) -> Result<Pinned> {
     wallpaper::pin(path)
 }
 
+pub(super) fn catch_up() {
+    wallpaper::catch_up();
+}
+
 pub(super) fn browse(url: &str) {
     let _ = std::process::Command::new("/usr/bin/open")
         .arg(url)

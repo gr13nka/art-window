@@ -47,9 +47,12 @@ Four things about this that will cost time if forgotten:
 - **A trigger prunes orphans.** `preferences_deleted` removes `data` rows that lose
   their last referrer. Anything inserted *before* the delete can be swept away
   before it is pointed at, so **delete first, then insert**.
-- **The Dock caches all of it in memory.** A write is invisible until `killall Dock`,
-  which relaunches immediately and closes nothing. Restart only when the image
-  actually changed, or the Dock blinks on every no-op.
+- **The Dock caches all of it in memory.** A write is invisible until `killall Dock`.
+  The Dock relaunches on its own and closes nothing, but the desktop is blank until
+  it has finished coming back — around **half a minute** on the development machine,
+  which is a long time to watch nothing after asking for a painting. So restart only
+  when the image actually changed, and not while anybody is waiting on it: see
+  *Publishing costs a blank desktop* below.
 
 ## AppKit details
 
@@ -103,10 +106,37 @@ the answer is to wait a little and ask again rather than to conclude anything.
 Both halves of that answer are in the code. `spread_to_every_space` gives the
 connection a `DOCK_BUSY_WAIT` busy timeout, so a moment's overlap is waited out
 instead of failing instantly. What it cannot wait out it reports as
-`Pinned::InPart`, and `tray::Reassert` offers the picture again a minute later, five
+`Pinned::InPart`, and `tray::Owed` offers the picture again a minute later, five
 times over. Nothing else would: the day is settled the moment a painting arrives,
 so no rotation comes back to it until tomorrow — which is why beginning a session
 owes one asking whatever the state file says.
+
+## Publishing costs a blank desktop
+
+Making those writes visible means restarting the Dock, and the whole desktop is
+blank until it is back. That was measured here at about half a minute — long enough
+that doing it the instant a picture changes reads as a fault rather than a feature:
+press *Next picture*, watch the desktop and the Finder's icons vanish, and see the
+painting a slow thirty seconds later.
+
+Nothing about it is urgent, which is the way out. The Space the user is looking at
+was set by `NSWorkspace` before the store was ever opened, and the Spaces waiting on
+the restart are the ones they are not looking at. So `pin` writes and answers
+`Pinned::AfterRedraw`, `desktop::catch_up` performs the restart, and the loop calls
+it only where a blank desktop costs nothing: waking, and beginning a session. The
+debt survives in `tray::Owed` until one of those arrives, so a picture set at three
+in the morning is everywhere by the time the lid is opened.
+
+That debt names the path it belongs to. If another picture reaches the active Space
+but its store write fails, the earlier debt is discarded rather than restarting the
+Dock and publishing the older picture everywhere else. Re-asserting the same path,
+on the other hand, keeps its pending redraw even when the store reports no changes.
+
+Two deliberate exceptions ask for the disruption outright: the *Re-apply the
+wallpaper* row, which restarts whenever the store accepted or already held the
+picture, and `--once`, which does the same because it has no next redraw to wait for
+and a terminal in front of it. Neither restarts after `Pinned::InPart`: a failed
+write would only make the Dock publish stale data.
 
 ## When the store is not there to be written
 

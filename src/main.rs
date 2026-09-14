@@ -85,7 +85,13 @@ fn main() -> Result<()> {
                 return Ok(());
             }
             let artwork = rotation::fetch(&config, &state, &paths.cache)?;
-            rotation::show(&artwork, &config, &paths, &mut state)?;
+            let pinned = rotation::show(&artwork, &config, &paths, &mut state)?;
+            // A one-shot command has no next redraw to wait for and nobody to
+            // surprise: whoever typed it is watching a terminal and asked for the
+            // wallpaper to change now. See `desktop::catch_up`.
+            if pinned != desktop::Pinned::InPart {
+                desktop::catch_up();
+            }
 
             println!("{}", artwork.title);
             if !artwork.byline.is_empty() {

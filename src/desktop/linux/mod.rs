@@ -15,6 +15,10 @@ pub(super) fn pin(path: &Path) -> Result<Pinned> {
     Ok(Pinned::Everywhere)
 }
 
+/// Nothing to publish: GNOME Shell watches the settings this backend writes, so a
+/// picture is visible everywhere the moment `pin` returns.
+pub(super) fn catch_up() {}
+
 pub(super) fn browse(url: &str) {
     let _ = std::process::Command::new("xdg-open").arg(url).status();
 }

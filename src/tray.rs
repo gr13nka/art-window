@@ -33,7 +33,7 @@ use crate::gallery::{Control, Gallery, Pick};
 use crate::rotation;
 use crate::wake;
 use anyhow::{anyhow, Result};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use tao::event::{Event, StartCause, WindowEvent};
 use tao::event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy, EventLoopWindowTarget};
@@ -143,30 +143,43 @@ impl From<Pick> for Wanted {
     }
 }
 
-/// What the desktop still owes, and when to ask it for it again.
+/// What the desktop still owes, and when it is worth interrupting the user to
+/// collect it.
 ///
-/// [`desktop::pin`] can answer that only part of the desktop took a picture — on
-/// macOS, that the Dock's store for every Space but the one in front was not
-/// there to be written. That is not a failed rotation: the painting arrived, the
-/// day is spent, and so nothing in the schedule will ever come back to it. The
-/// desktop would keep what it had until tomorrow, which is precisely the complaint
-/// this program exists to answer, so somebody has to ask again — and the loop is
-/// the only thing here holding a clock.
+/// [`desktop::pin`] answers with two kinds of debt and this holds both, because
+/// both are settled by the loop and by nothing else.
 ///
-/// That clock is wall time like every other deadline in this module, so a machine
-/// that sleeps through the next asking asks on waking rather than a minute of
-/// running time later.
-struct Reassert {
-    /// The second at which to ask again; `None` when the desktop owes nothing.
+/// [`Pinned::InPart`] is the Dock's store refusing to be written — at login the
+/// ordinary case, while the Dock is still building it. That is not a failed
+/// rotation: the painting arrived and the day is spent, so no schedule will ever
+/// come back to it and the desktop would keep what it had until tomorrow. So the
+/// picture is offered again on a clock, and that clock is wall time like every
+/// other deadline in this module: a machine that sleeps through the next asking
+/// asks on waking rather than a minute of running time later.
+///
+/// [`Pinned::AfterRedraw`] is the opposite problem — the writing worked, and
+/// showing it costs a Dock restart that blanks the desktop for half a minute. That
+/// debt is not settled on a clock but at a moment: waking, or beginning a session,
+/// when the desktop is going to be redrawn regardless and nobody is watching a
+/// picture fail to appear.
+struct Owed {
+    /// The second at which to offer the picture again; `None` when nothing is owed.
     at: Option<u64>,
     /// How many more askings before the desktop is taken at its word.
     tries: u32,
+    /// The picture written but not yet made visible. Naming it prevents a failed
+    /// write for a newer picture from publishing an older one by mistake.
+    unseen: Option<PathBuf>,
 }
 
-impl Reassert {
+impl Owed {
     /// Nothing owed.
     const fn settled() -> Self {
-        Self { at: None, tries: 0 }
+        Self {
+            at: None,
+            tries: 0,
+            unseen: None,
+        }
     }
 
     /// Owes an asking on the next turn of the loop, whatever the desktop last
@@ -178,12 +191,13 @@ impl Reassert {
     }
 
     /// Records what the desktop made of a picture just put up.
-    fn took(&mut self, pinned: Pinned) {
+    fn took(&mut self, pinned: Pinned, path: &Path) {
         self.tries = PATIENCE;
         self.at = match pinned {
-            Pinned::Everywhere => None,
             Pinned::InPart => Some(now_secs() + RE_PIN.as_secs()),
+            _ => None,
         };
+        self.remember_visibility(pinned, path);
     }
 
     /// Offers the desktop `shown` again, if an asking is owed by now.
@@ -201,10 +215,37 @@ impl Reassert {
         let Some(art) = shown else { return Ok(()) };
 
         self.tries = self.tries.saturating_sub(1);
-        if desktop::pin(&art.path)? == Pinned::InPart && self.tries > 0 {
+        let pinned = desktop::pin(&art.path)?;
+        self.remember_visibility(pinned, &art.path);
+        if pinned == Pinned::InPart && self.tries > 0 {
             self.at = Some(now_secs() + RE_PIN.as_secs());
         }
         Ok(())
+    }
+
+    /// Shows whatever has been written for the Spaces nobody is looking at.
+    ///
+    /// Only ever called where a blanked desktop costs nothing — see
+    /// [`desktop::catch_up`] — and cheap to call anywhere, because a desktop that
+    /// owes nothing is not disturbed.
+    fn catch_up(&mut self) {
+        if self.unseen.take().is_some() {
+            desktop::catch_up();
+        }
+    }
+
+    /// Records which picture a future Dock restart would publish. A later picture
+    /// supersedes that debt unless the store says it already contains the same path.
+    fn remember_visibility(&mut self, pinned: Pinned, path: &Path) {
+        if pinned == Pinned::AfterRedraw {
+            self.unseen = Some(path.to_path_buf());
+        } else if self.unseen.as_deref() != Some(path) {
+            self.unseen = None;
+        }
+    }
+
+    fn caught_up(&mut self) {
+        self.unseen = None;
     }
 
     /// Seconds until the next asking, for the clock at the tail of the loop.
@@ -328,9 +369,15 @@ pub fn run(paths: Paths, config: Config, mut state: State) -> Result<()> {
     // clock is then wound the same way whoever did the asking.
     let mut asked_for_next = false;
     // What the desktop still owes, and when to ask it again.
-    let mut reassert = Reassert::settled();
+    let mut owed = Owed::settled();
 
     event_loop.run(move |event, target, control_flow| {
+        // Whether the desktop is being redrawn around this event anyway, which is
+        // what makes it a free moment to show a picture the Spaces out of sight are
+        // still waiting for. Two events say so and no state outlives them, so this
+        // belongs to the pass rather than to the loop.
+        let mut redrawing = false;
+
         // Every event is first read for what it asks of the loop, and only then
         // acted on. The two halves are separate because the same two things can be
         // asked from two places — a menu row and a picture in the window — and
@@ -400,7 +447,8 @@ pub fn run(paths: Paths, config: Config, mut state: State) -> Result<()> {
                 // would put that right — the day is settled the moment a picture
                 // arrives, and no rotation is owed until tomorrow.
                 if starting {
-                    reassert.owe();
+                    owed.owe();
+                    redrawing = true;
                 }
                 Wanted::Nothing
             }
@@ -475,7 +523,7 @@ pub fn run(paths: Paths, config: Config, mut state: State) -> Result<()> {
                     }) {
                         Ok((artwork, pinned)) => {
                             cooling_off = None;
-                            reassert.took(pinned);
+                            owed.took(pinned, &artwork.path);
                             // Where a favourite dropped while it was on the desktop
                             // finally goes.
                             favourites.discard_all_but(&artwork.path);
@@ -491,8 +539,13 @@ pub fn run(paths: Paths, config: Config, mut state: State) -> Result<()> {
                 Wanted::Nothing
             }
 
-            // Nothing to do but arrive: the clock below is what this is for.
-            Event::UserEvent(Wake::Woke) => Wanted::Nothing,
+            // Nothing to do but arrive: the clock below is what this is for. The
+            // screen is coming back with it, which makes this one of the two
+            // moments a blanked desktop costs nothing.
+            Event::UserEvent(Wake::Woke) => {
+                redrawing = true;
+                Wanted::Nothing
+            }
 
             _ => Wanted::Nothing,
         };
@@ -526,10 +579,21 @@ pub fn run(paths: Paths, config: Config, mut state: State) -> Result<()> {
                 }
             }
 
+            // The one place the desktop is blanked while somebody is watching, and
+            // rightly: this row exists to say *put it right now*, and waiting for
+            // the next redraw is not what it means.
             Wanted::Reapply => {
                 if let Some(art) = &state.shown {
                     match desktop::pin(&art.path) {
-                        Ok(pinned) => reassert.took(pinned),
+                        Ok(pinned) => {
+                            owed.took(pinned, &art.path);
+                            if pinned != Pinned::InPart {
+                                // Explicitly disruptive: even an unchanged store may
+                                // be newer than the Dock's in-memory copy.
+                                desktop::catch_up();
+                                owed.caught_up();
+                            }
+                        }
                         Err(error) => {
                             report(&error);
                             ui.set_status("Could not re-apply the wallpaper");
@@ -596,7 +660,7 @@ pub fn run(paths: Paths, config: Config, mut state: State) -> Result<()> {
                     // download already in the air would only undo it.
                     cooling_off = None;
                     superseded = fetching;
-                    reassert.took(pinned);
+                    owed.took(pinned, &art.path);
                     favourites.discard_all_but(&art.path);
                     ui.describe(&state, &favourites);
                 }
@@ -609,10 +673,20 @@ pub fn run(paths: Paths, config: Config, mut state: State) -> Result<()> {
 
         // Whatever the desktop still owes, offered to it again. Last of the three,
         // because a picture that has just gone up in one of them has already said
-        // what it wants asking for and when.
-        if let Err(e) = reassert.press(state.shown.as_ref()) {
-            report(&e);
-            ui.set_status("Could not re-apply the wallpaper");
+        // what it wants asking for and when. Not while a download is in the air,
+        // though: that picture is about to be replaced, and the loop would be
+        // pressing for a painting nobody will see.
+        if !fetching {
+            if let Err(e) = owed.press(state.shown.as_ref()) {
+                report(&e);
+                ui.set_status("Could not re-apply the wallpaper");
+            }
+        }
+
+        // A desktop that is being redrawn anyway can be shown what was written for
+        // the Spaces out of sight, at no cost anyone will notice.
+        if redrawing {
+            owed.catch_up();
         }
 
         // When to wake up next. Recomputed after every event rather than scheduled
@@ -633,7 +707,7 @@ pub fn run(paths: Paths, config: Config, mut state: State) -> Result<()> {
             spawn_fetch(&config, &state, &paths, proxy.clone());
             fetching = true;
             ControlFlow::Wait
-        } else if let Some(left) = [cooling_off, reassert.left()].into_iter().flatten().min() {
+        } else if let Some(left) = [cooling_off, owed.left()].into_iter().flatten().min() {
             // The nearer of the two standing deadlines. Either may be further off
             // than the tick — a cooling-off period is three of them — and waiting
             // the whole of it is right: the tick asks a question these two have
@@ -985,5 +1059,26 @@ mod tests {
             Wanted::from(Pick::Forget("two".into())),
             Wanted::Forget(key) if key == "two"
         ));
+    }
+
+    #[test]
+    fn a_new_picture_supersedes_an_older_unseen_write() {
+        let mut owed = Owed::settled();
+        owed.took(Pinned::AfterRedraw, Path::new("old.jpg"));
+        assert_eq!(owed.unseen.as_deref(), Some(Path::new("old.jpg")));
+
+        owed.took(Pinned::InPart, Path::new("new.jpg"));
+        assert!(owed.unseen.is_none());
+        assert!(owed.at.is_some());
+    }
+
+    #[test]
+    fn reasserting_the_same_picture_keeps_its_redraw_debt() {
+        let mut owed = Owed::settled();
+        owed.took(Pinned::AfterRedraw, Path::new("same.jpg"));
+        owed.took(Pinned::Everywhere, Path::new("same.jpg"));
+
+        assert_eq!(owed.unseen.as_deref(), Some(Path::new("same.jpg")));
+        assert!(owed.at.is_none());
     }
 }

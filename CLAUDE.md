@@ -81,16 +81,27 @@ it before touching `src/desktop/macos/wallpaper.rs`.
   backend sets fit, black margins and the URI together. Callers must never be
   responsible for re-applying—forgetting that is the original bug this project
   exists to fix.
-- **A picture can reach the desktop only in part, and the answer is to ask again.**
-  `pin` returns `Pinned::InPart` when the picture went up where the user is looking
-  but the store holding every other Space would not take it. At login that is the
-  ordinary case rather than a fault: the Dock is still building that store and
-  neither side waits for the other's lock — see `docs/macos-wallpaper.md`. The
-  rotation still spends the day, because the painting *did* arrive and re-downloading
-  it would not help; `tray::Reassert` offers the same picture again a minute later,
-  five times over, and beginning a session owes one asking whatever the state file
-  says. Nothing else would ever put it right: the day is settled, so no schedule
-  returns to it until tomorrow.
+- **A picture reaches the Space in front of the user at once, and the rest on the
+  loop's terms.** `pin` answers with all three of `Pinned`, and `tray::Owed` holds
+  what each one leaves owing. `InPart` is the Dock's store refusing the write — at
+  login the ordinary case, because the Dock is still building it and neither side
+  waits for the other's lock. The rotation still spends the day, since the painting
+  *did* arrive and re-downloading it would not help; the same picture is offered
+  again a minute later, five times over, and beginning a session owes one asking
+  whatever the state file says. Nothing else would ever put it right: the day is
+  settled, so no schedule returns to it until tomorrow.
+- **Publishing to the other Spaces is deferred, because it blanks the desktop.**
+  Writing the Dock's store changes nothing anyone can see; only restarting the Dock
+  does, and every desktop is blank for as long as that takes — half a minute on the
+  development machine. So `pin` writes and answers `Pinned::AfterRedraw`, and
+  `desktop::catch_up` is the restart, called only where the desktop was going to be
+  redrawn anyway: waking, and beginning a session. Never at the moment a picture
+  changes — the Space being looked at is already right by then, and the ones waiting
+  are by definition not being looked at. The two exceptions are *Re-apply the
+  wallpaper*, which is a request for exactly that disruption, and `--once`, which has
+  no next redraw to wait for and a terminal in front of it.
+  The deferred debt names its picture: a later `InPart` clears an older picture's
+  pending redraw, so catching up can never publish a superseded wallpaper.
 - **The macOS `pin` backend must run on the main thread.** `NSScreen::screens`
   demands a `MainThreadMarker`. It errors rather than trusting a doc comment. This is why
   `rotation` is split: `fetch` blocks for a couple of minutes and runs on a worker,
@@ -322,10 +333,12 @@ Platform facts that are not guessable from the docs:
 `NSWorkspaceDidWakeNotification` from `NSWorkspace`'s own notification centre—the
 default `NSNotificationCenter` never sees it. Linux uses logind's
 `PrepareForSleep(false)` system-bus signal. `wake::watch` forwards either to the
-loop through the same `EventLoopProxy` the menu uses. Its match arm is deliberately
-empty: the clock at the tail is re-read after *every* event, so arriving is the
-entire message. A failed logind subscription is nonfatal because the GLib timer is
-the backstop.
+loop through the same `EventLoopProxy` the menu uses. Its match arm asks for
+nothing: the clock at the tail is re-read after *every* event, so arriving is very
+nearly the entire message. The one thing it does say is that the screen is coming
+back, which makes it a free moment to restart the Dock for any Space still waiting
+on a picture — see `desktop::catch_up`. A failed logind subscription is nonfatal
+because the GLib timer is the backstop.
 
 **The favourites window is tao's, and only what is inside it is AppKit's.** A
 `WindowBuilder` buys the title bar, the close button arriving as

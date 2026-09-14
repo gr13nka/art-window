@@ -14,6 +14,15 @@
 //! picture on the Space the user is looking at. It is reported to the *caller* as
 //! well as to the log, because at login that failure is the ordinary case and
 //! somebody has to come back and ask again — see [`Pinned`].
+//!
+//! And the writing alone changes nothing anybody can see. The Dock keeps the whole
+//! store in memory and re-reads it only when it starts, so publishing a change to
+//! the other Spaces means restarting the Dock — which blanks every desktop, for
+//! half a minute on a tired machine. That is far too much to spend at the moment a
+//! picture changes, when the Space being looked at is already correct and the ones
+//! waiting are by definition not being looked at. So [`pin`] writes and says
+//! [`Pinned::AfterRedraw`]; [`catch_up`] is the restart, for a moment the desktop
+//! was going to be redrawn anyway.
 
 use crate::desktop::Pinned;
 use anyhow::{anyhow, Context, Result};
@@ -47,10 +56,7 @@ pub fn pin(path: &Path) -> Result<Pinned> {
     set_active_space(path)?;
 
     match spread_to_every_space(path) {
-        Ok(true) => {
-            restart_dock();
-            Ok(Pinned::Everywhere)
-        }
+        Ok(true) => Ok(Pinned::AfterRedraw),
         Ok(false) => Ok(Pinned::Everywhere),
         Err(e) => {
             eprintln!(
@@ -221,8 +227,18 @@ intern!(intern_text, &str);
 intern!(intern_int, i64);
 intern!(intern_real, f64);
 
-/// The Dock holds the wallpaper in memory, so a written change is invisible until
-/// it reloads. It relaunches immediately and closes nothing.
+/// Makes the Dock re-read the store, which is the only way a write into it becomes
+/// something anybody can see.
+///
+/// Restarting is the whole mechanism, and the reason this is not done where the
+/// writing is. The Dock relaunches on its own and closes nothing, but every desktop
+/// is blank until it has finished coming back — measured at around half a minute on
+/// the development machine, which is a long time to look at nothing having asked
+/// for a painting.
+pub fn catch_up() {
+    restart_dock();
+}
+
 fn restart_dock() {
     let _ = std::process::Command::new("/usr/bin/killall")
         .arg("Dock")

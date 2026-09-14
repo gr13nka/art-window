@@ -24,17 +24,34 @@ use macos as platform;
 /// How much of the desktop a picture actually reached.
 ///
 /// A desktop can be more than one surface — macOS keeps a wallpaper for every
-/// Mission Control Space on every display — and the store holding the ones the
-/// user is not looking at is not always there to be written. A picture that
-/// reached only the surface in front of them is not a failure worth undoing the
-/// day for; it is a reason to ask again shortly.
+/// Mission Control Space on every display — and the surface in front of the user is
+/// the only one that answers immediately. The rest are written to, and what becomes
+/// of that writing is the difference between these three.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Pinned {
-    /// The whole desktop is showing it, and nothing further is owed.
+    /// The backend had nothing new to publish: every surface updates immediately,
+    /// or its store already named this picture. A caller may still retain an older
+    /// redraw debt for that same path.
     Everywhere,
-    /// Part of the desktop is showing it and the rest kept what it had, so this
-    /// has to be asked for again.
+    /// It is up where the user is looking, and written for everywhere else — but
+    /// those surfaces go on showing the old picture until the desktop is next
+    /// redrawn. See [`catch_up`].
+    AfterRedraw,
+    /// It is up where the user is looking and nowhere else: the rest of the desktop
+    /// would not take the writing at all, so this has to be asked for again.
     InPart,
+}
+
+/// Shows what [`Pinned::AfterRedraw`] left written but not yet visible.
+///
+/// Disruptive, and that is the whole reason it is a separate call: on macOS it
+/// restarts the Dock, which blanks every desktop until the Dock is back — half a
+/// minute on a tired machine. So it belongs to moments when the desktop is being
+/// redrawn anyway, waking and beginning a session, rather than to the moment a
+/// picture changes. What the user is actually looking at is never waiting on this;
+/// that went up when it was pinned.
+pub fn catch_up() {
+    platform::catch_up();
 }
 
 /// Shows `path` on every display, scaled to fit entirely on screen with black
@@ -43,9 +60,10 @@ pub enum Pinned {
 ///
 /// Re-asserting the placement is deliberately not the caller's job. A caller that
 /// had to remember it would eventually forget, which is exactly the bug this
-/// program exists to stop happening. What a caller does own is [`Pinned::InPart`]:
-/// the desktop was not in a state to take the picture whole, and only the caller
-/// knows when it is worth interrupting to try again.
+/// program exists to stop happening. What a caller does own is *when to interrupt
+/// the user* — see [`Pinned::InPart`], which is worth asking again about, and
+/// [`Pinned::AfterRedraw`], which is worth showing at a moment of the caller's
+/// choosing. Neither is knowable from here.
 ///
 /// A backend may require this to run on the main thread. macOS does, because
 /// AppKit will only enumerate displays there; the GNOME backend has no such
