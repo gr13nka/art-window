@@ -16,6 +16,7 @@ sealed interface Status {
     data object Idle : Status
     data object Fetching : Status
     data object Applying : Status
+    data object SavingFavourite : Status
     data class Failed(val message: String) : Status
 }
 
@@ -49,10 +50,14 @@ object Rotation {
                 val screen = context.screen()
                 val preferences = WallpaperPreferencesStore(context).load()
                 val met = Met(context.cacheDir)
-                val artwork = met.fetch(state.artwork, screen, preferences)
+                // The shown work is the one tomorrow must avoid. Favourite copies keep
+                // their met-{id} name precisely so the source can recognise them here.
+                val artwork = met.fetch(state.shownArtwork, screen, preferences)
                 Wallpaper.pin(context, artwork.path, screen, preferences)
                 state.recordFetched(artwork, today)
                 met.discardAllBut(artwork.path)
+                runCatching { Favourites(context).discardAllBut(artwork.path) }
+                    .onFailure { Log.w(LOG_TAG, "cleaning favourites failed", it) }
                 _status.value = Status.Idle
             } catch (e: Exception) {
                 Log.e(LOG_TAG, "rotation failed", e)
@@ -68,7 +73,7 @@ object Rotation {
         if (!running.compareAndSet(false, true)) return false
         return try {
             _status.value = Status.Applying
-            val artwork = State(context).artwork
+            val artwork = State(context).shownArtwork
             if (artwork != null && artwork.path.isFile) {
                 Wallpaper.pin(context, artwork.path, context.screen(), preferences)
             }
@@ -79,6 +84,59 @@ object Rotation {
             true
         } catch (e: Exception) {
             Log.e(LOG_TAG, "applying wallpaper settings failed", e)
+            _status.value = Status.Failed(e.message ?: e.toString())
+            false
+        } finally {
+            running.set(false)
+        }
+    }
+
+    /** Adds or removes the shown painting while sharing the wallpaper/cache action lock. */
+    fun toggleFavourite(context: Context): Boolean = runLocked(
+        status = Status.SavingFavourite,
+        failure = "updating favourites",
+    ) {
+        val shown = State(context).shownArtwork ?: throw IllegalStateException("There is no painting to save")
+        val favourites = Favourites(context)
+        val existing = favourites.list().firstOrNull { sameArtwork(it.artwork, shown) }
+        if (existing == null) favourites.keep(shown) else favourites.forget(existing.key)
+        favourites.discardAllBut(shown.path)
+    }
+
+    /** Pins one saved painting without replacing the source picture recorded for the day. */
+    fun showFavourite(context: Context, key: String): Boolean = runLocked(
+        status = Status.Applying,
+        failure = "showing favourite",
+    ) {
+        val favourites = Favourites(context)
+        val artwork = favourites.get(key) ?: throw IllegalStateException("That favourite no longer exists")
+        val state = State(context)
+        val preferences = WallpaperPreferencesStore(context).load()
+        Wallpaper.pin(context, artwork.path, context.screen(), preferences)
+        state.recordChosen(artwork, LocalDate.now())
+        state.fetchedArtwork?.path?.let { Met(context.cacheDir).discardAllBut(it) }
+        favourites.discardAllBut(artwork.path)
+    }
+
+    fun forgetFavourite(context: Context, key: String): Boolean = runLocked(
+        status = Status.SavingFavourite,
+        failure = "removing favourite",
+    ) {
+        val state = State(context)
+        val favourites = Favourites(context)
+        favourites.forget(key)
+        favourites.discardAllBut(state.shownArtwork?.path)
+    }
+
+    private fun runLocked(status: Status, failure: String, action: () -> Unit): Boolean {
+        if (!running.compareAndSet(false, true)) return false
+        return try {
+            _status.value = status
+            action()
+            _status.value = Status.Idle
+            true
+        } catch (e: Exception) {
+            Log.e(LOG_TAG, "$failure failed", e)
             _status.value = Status.Failed(e.message ?: e.toString())
             false
         } finally {

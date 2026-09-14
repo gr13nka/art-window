@@ -76,7 +76,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private enum class Destination { ARTWORK, SETTINGS }
+private enum class Destination { ARTWORK, FAVOURITES, SETTINGS }
 
 private val settingsColors = darkColorScheme(
     primary = Color(0xffa990ff),
@@ -90,7 +90,10 @@ private val settingsColors = darkColorScheme(
 private fun MainActivity.ArtWindowApp(context: Context) {
     var destination by remember { mutableStateOf(Destination.ARTWORK) }
     val status by Rotation.status.collectAsState()
-    var artwork by remember { mutableStateOf(State(context).artwork) }
+    var artwork by remember { mutableStateOf(State(context).shownArtwork) }
+    val initialFavourites = remember { runCatching { Favourites(context).list() } }
+    var favourites by remember { mutableStateOf(initialFavourites.getOrDefault(emptyList())) }
+    var favouritesError by remember { mutableStateOf(initialFavourites.exceptionOrNull()?.message) }
     val store = remember { WallpaperPreferencesStore(context) }
     var savedPreferences by remember { mutableStateOf(store.load()) }
     var draftPreferences by remember { mutableStateOf(savedPreferences) }
@@ -98,7 +101,7 @@ private fun MainActivity.ArtWindowApp(context: Context) {
     val scope = rememberCoroutineScope()
     val physicalScreen = remember { context.screen() }
 
-    BackHandler(enabled = destination == Destination.SETTINGS) {
+    BackHandler(enabled = destination != Destination.ARTWORK) {
         destination = Destination.ARTWORK
     }
 
@@ -109,7 +112,15 @@ private fun MainActivity.ArtWindowApp(context: Context) {
         }
     }
     LaunchedEffect(status) {
-        if (status is Status.Idle) artwork = State(context).artwork
+        if (status is Status.Idle) {
+            artwork = State(context).shownArtwork
+            runCatching { Favourites(context).list() }
+                .onSuccess {
+                    favourites = it
+                    favouritesError = null
+                }
+                .onFailure { favouritesError = it.message ?: it.toString() }
+        }
     }
 
     val scheme = if (destination == Destination.SETTINGS) settingsColors else darkColorScheme()
@@ -122,7 +133,46 @@ private fun MainActivity.ArtWindowApp(context: Context) {
             ) {
                 Box(modifier = Modifier.weight(1f)) {
                     when (destination) {
-                        Destination.ARTWORK -> ArtworkScreen(context, artwork)
+                        Destination.ARTWORK -> ArtworkScreen(
+                            context = context,
+                            artwork = artwork,
+                            isFavourite = artwork?.let { shown ->
+                                favourites.any { saved -> sameArtwork(saved.artwork, shown) }
+                            } == true,
+                            favouriteCount = favourites.size,
+                            favouritesError = favouritesError,
+                            actionsEnabled = !status.isBusy,
+                            onToggleFavourite = {
+                                scope.launch {
+                                    val changed = withContext(Dispatchers.IO) { Rotation.toggleFavourite(context) }
+                                    if (!changed && Rotation.status.value !is Status.Failed) {
+                                        favouritesError = "Another wallpaper update is already running"
+                                    }
+                                }
+                            },
+                            onViewFavourites = { destination = Destination.FAVOURITES },
+                        )
+                        Destination.FAVOURITES -> FavouritesScreen(
+                            favourites = favourites,
+                            enabled = !status.isBusy,
+                            error = favouritesError ?: (status as? Status.Failed)?.message,
+                            onShow = { key ->
+                                scope.launch {
+                                    val changed = withContext(Dispatchers.IO) { Rotation.showFavourite(context, key) }
+                                    if (!changed && Rotation.status.value !is Status.Failed) {
+                                        favouritesError = "Another wallpaper update is already running"
+                                    }
+                                }
+                            },
+                            onForget = { key ->
+                                scope.launch {
+                                    val changed = withContext(Dispatchers.IO) { Rotation.forgetFavourite(context, key) }
+                                    if (!changed && Rotation.status.value !is Status.Failed) {
+                                        favouritesError = "Another wallpaper update is already running"
+                                    }
+                                }
+                            },
+                        )
                         Destination.SETTINGS -> SettingsScreen(
                             artwork = artwork,
                             screen = physicalScreen,
@@ -138,7 +188,7 @@ private fun MainActivity.ArtWindowApp(context: Context) {
                 if (destination == Destination.ARTWORK) {
                     Button(
                         onClick = { RotationJob.scheduleNow(context, force = true) },
-                        enabled = status !is Status.Fetching && status !is Status.Applying,
+                        enabled = !status.isBusy,
                         modifier = Modifier
                             .align(Alignment.CenterHorizontally)
                             .size(width = 220.dp, height = 44.dp),
@@ -152,7 +202,7 @@ private fun MainActivity.ArtWindowApp(context: Context) {
                             .align(Alignment.CenterHorizontally)
                             .padding(top = 6.dp),
                     )
-                } else {
+                } else if (destination == Destination.SETTINGS) {
                     Button(
                         onClick = {
                             val requested = draftPreferences
@@ -172,9 +222,7 @@ private fun MainActivity.ArtWindowApp(context: Context) {
                                 }
                             }
                         },
-                        enabled = status !is Status.Fetching &&
-                            status !is Status.Applying &&
-                            draftPreferences != savedPreferences,
+                        enabled = !status.isBusy && draftPreferences != savedPreferences,
                         modifier = Modifier
                             .align(Alignment.CenterHorizontally)
                             .size(width = 220.dp, height = 44.dp),
@@ -194,7 +242,7 @@ private fun MainActivity.ArtWindowApp(context: Context) {
                 }
 
                 NavigationPill(
-                    destination = destination,
+                    destination = if (destination == Destination.FAVOURITES) Destination.ARTWORK else destination,
                     onDestination = { destination = it },
                     modifier = Modifier
                         .align(Alignment.CenterHorizontally)
@@ -206,7 +254,16 @@ private fun MainActivity.ArtWindowApp(context: Context) {
 }
 
 @Composable
-private fun ArtworkScreen(context: Context, artwork: Artwork?) {
+private fun ArtworkScreen(
+    context: Context,
+    artwork: Artwork?,
+    isFavourite: Boolean,
+    favouriteCount: Int,
+    favouritesError: String?,
+    actionsEnabled: Boolean,
+    onToggleFavourite: () -> Unit,
+    onViewFavourites: () -> Unit,
+) {
     var preview by remember { mutableStateOf<Bitmap?>(null) }
     val screen = remember { context.screen() }
 
@@ -241,6 +298,27 @@ private fun ArtworkScreen(context: Context, artwork: Artwork?) {
                     modifier = Modifier.fillMaxSize(),
                 )
             }
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(10.dp)
+                    .size(42.dp)
+                    .semantics {
+                        contentDescription = if (isFavourite) "Remove from favourites" else "Add to favourites"
+                        role = Role.Button
+                    }
+                    .clickable(enabled = artwork != null && actionsEnabled, onClick = onToggleFavourite),
+                color = Color(0xcc17121f),
+                shape = RoundedCornerShape(21.dp),
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Text(
+                        if (isFavourite) "♥" else "♡",
+                        color = if (isFavourite) Color(0xffff8aa3) else Color.White,
+                        style = MaterialTheme.typography.titleLarge,
+                    )
+                }
+            }
         }
 
         Column(modifier = Modifier.padding(top = 16.dp)) {
@@ -258,6 +336,29 @@ private fun ArtworkScreen(context: Context, artwork: Artwork?) {
                     modifier = Modifier
                         .padding(top = 4.dp)
                         .clickable { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) },
+                )
+            }
+            artwork?.origin?.let {
+                Text(
+                    "Origin: $it",
+                    color = MaterialTheme.colorScheme.primary,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+            }
+            Text(
+                "View favourites ($favouriteCount)",
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier
+                    .padding(top = 12.dp)
+                    .clickable(onClick = onViewFavourites),
+            )
+            favouritesError?.let {
+                Text(
+                    it,
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(top = 6.dp),
                 )
             }
         }
@@ -280,7 +381,7 @@ private fun NavigationPill(
             modifier = Modifier.padding(4.dp),
             horizontalArrangement = Arrangement.spacedBy(3.dp),
         ) {
-            Destination.entries.forEach { item ->
+            listOf(Destination.ARTWORK, Destination.SETTINGS).forEach { item ->
                 val isSelected = item == destination
                 Box(
                     modifier = Modifier
@@ -314,7 +415,7 @@ private fun NavigationPill(
 private fun NavigationIcon(destination: Destination, color: Color) {
     Canvas(modifier = Modifier.size(21.dp)) {
         val stroke = 1.7.dp.toPx()
-        if (destination == Destination.ARTWORK) {
+        if (destination == Destination.ARTWORK || destination == Destination.FAVOURITES) {
             drawRoundRect(color, style = Stroke(stroke), cornerRadius = androidx.compose.ui.geometry.CornerRadius(3.dp.toPx()))
             drawCircle(color, radius = 1.7.dp.toPx(), center = Offset(size.width * 0.72f, size.height * 0.28f))
             drawLine(color, Offset(size.width * 0.12f, size.height * 0.78f), Offset(size.width * 0.42f, size.height * 0.48f), stroke, StrokeCap.Round)
@@ -334,13 +435,14 @@ private fun NavigationIcon(destination: Destination, color: Color) {
 private fun statusLine(status: Status, owed: Boolean): String = when (status) {
     is Status.Fetching -> "Fetching…"
     is Status.Applying -> "Applying wallpaper…"
+    is Status.SavingFavourite -> "Updating favourites…"
     is Status.Failed -> status.message
     is Status.Idle -> if (owed) "Today's painting arrives on the next Wi-Fi check" else "A new painting arrives tomorrow"
 }
 
 private const val TARGET_PREVIEW_WIDTH = 720
 
-private fun decodeSampled(file: File, targetWidth: Int): Bitmap? {
+internal fun decodeSampled(file: File, targetWidth: Int): Bitmap? {
     val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
     BitmapFactory.decodeFile(file.path, bounds)
     if (bounds.outWidth <= 0) return null
@@ -349,3 +451,6 @@ private fun decodeSampled(file: File, targetWidth: Int): Bitmap? {
     while (bounds.outWidth / (sampleSize * 2) >= targetWidth) sampleSize *= 2
     return BitmapFactory.decodeFile(file.path, BitmapFactory.Options().apply { inSampleSize = sampleSize })
 }
+
+private val Status.isBusy: Boolean
+    get() = this is Status.Fetching || this is Status.Applying || this is Status.SavingFavourite

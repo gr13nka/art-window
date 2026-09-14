@@ -286,6 +286,33 @@ fun SettingsScreen(
                 onClick = { onPreferencesChange(preferences.copy(artworkShape = shape)) },
             )
         }
+
+        SectionTitle("Artwork origins")
+        Text(
+            "Choose one or more regions for future downloads. Europe and Asia are used if the selected pool has no suitable painting.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f),
+            modifier = Modifier.padding(bottom = 8.dp),
+        )
+        ArtworkRegion.entries.forEach { region ->
+            SelectionRow(
+                title = when (region) {
+                    ArtworkRegion.EUROPE -> "Europe"
+                    ArtworkRegion.ASIA -> "Asia"
+                    ArtworkRegion.AFRICA -> "Africa"
+                    ArtworkRegion.NORTH_AMERICA -> "North America"
+                    ArtworkRegion.SOUTH_AMERICA -> "South America"
+                    ArtworkRegion.OCEANIA -> "Oceania"
+                },
+                detail = if (region in ArtworkRegion.DEFAULT) "Part of the default painting pool" else "May have a smaller phone-shaped selection",
+                selected = region in preferences.artworkRegions,
+                onClick = {
+                    onPreferencesChange(
+                        preferences.copy(artworkRegions = toggleRegion(preferences.artworkRegions, region)),
+                    )
+                },
+            )
+        }
         Spacer(Modifier.height(12.dp))
     }
 }

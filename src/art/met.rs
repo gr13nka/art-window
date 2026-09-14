@@ -20,12 +20,15 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 const API: &str = "https://collectionapi.metmuseum.org/public/collection/v1";
+const SEARCH_API: &str = "https://collectionapi.metmuseum.org/public/collection/v1.1/search";
 /// Department 11 is European Paintings.
 // A generic `q=painting` makes portraits disproportionately common in the European
 // Paintings department. Start from a pool of landscapes instead — the subject, not
 // the shape of the canvas; the catalogue metadata check below catches the portraits
 // that happen to mention a landscape too.
-const SEARCH: &str = "search?departmentId=11&hasImages=true&isPublicDomain=true&q=landscape";
+const SEARCH: &str = "departmentId=11&hasImages=true&isPublicDomain=true&q=landscape";
+const SEARCH_PAGE: usize = 500;
+const MAX_SEARCH_RESULTS: usize = 10_000;
 
 /// Refuse anything implausible for a photograph of a painting. The Met serves
 /// originals with no server-side resizing, so this is the only size control there is.
@@ -77,6 +80,7 @@ fn id_of(path: &Path) -> Option<u64> {
 
 #[derive(Deserialize)]
 struct SearchResults {
+    total: usize,
     #[serde(rename = "objectIDs")]
     object_ids: Option<Vec<u64>>,
 }
@@ -134,19 +138,36 @@ impl Met {
     }
 
     fn candidate_ids(&self) -> Result<Vec<u64>> {
-        let results: SearchResults = self
-            .agent
-            .get(&format!("{API}/{SEARCH}"))
-            .call()
-            .context("asking the Met which paintings are available")?
-            .body_mut()
-            .read_json()
-            .context("reading the Met's list of paintings")?;
+        let mut ids = Vec::new();
+        let mut offset = 0;
+        loop {
+            let results: SearchResults = self
+                .agent
+                .get(&format!(
+                    "{SEARCH_API}?{SEARCH}&limit={SEARCH_PAGE}&offset={offset}"
+                ))
+                .call()
+                .context("asking the Met which paintings are available")?
+                .body_mut()
+                .read_json()
+                .context("reading the Met's list of paintings")?;
+            let total = results.total.min(MAX_SEARCH_RESULTS);
+            let page = results.object_ids.unwrap_or_default();
+            if page.is_empty() {
+                break;
+            }
+            ids.extend(page);
+            offset += SEARCH_PAGE;
+            if offset >= total {
+                break;
+            }
+        }
 
-        results
-            .object_ids
-            .filter(|ids| !ids.is_empty())
-            .ok_or_else(|| anyhow!("the Met returned no public-domain paintings"))
+        if ids.is_empty() {
+            Err(anyhow!("the Met returned no public-domain paintings"))
+        } else {
+            Ok(ids)
+        }
     }
 
     fn object(&self, id: u64) -> Result<Object> {

@@ -41,20 +41,22 @@ style.
 
 Measured 2026-09-10 by sampling the Met's API:
 
-- Only about 1–4% of European Paintings (department 11) are phone-shaped
+- Only about 1–4% of sampled European paintings are phone-shaped
   (width/height between 0.40 and 0.53). Asian hanging scrolls run around 18% —
   a scroll is already a tall, narrow format.
-- A `q=landscape` search against Asian Art (department 6) also returns ceramics,
-  prints and textiles — nearly half of a 50-object sample. The search therefore
+- A `q=landscape` search across Asian origins also returns ceramics, prints and
+  textiles. The search therefore
   asks for `medium=Paintings`, which removes them before a single lookup is
   spent. The `classification == "Paintings"` check on each record stays as a guard.
 - Across the whole pipeline, about **one candidate in sixty** ends up fitting.
   The first run on a real phone looked at 120 and found none.
 
-Because department 11 alone is too thin a pool at phone proportions, the
-candidate pool is **both** department 11 and department 6, each searched with
-`q=landscape` for the same reason the desktop does: a generic query returns
-mostly portraits.
+The default candidate pool is **Europe and Asia**. Settings can instead select
+any combination of Europe, Asia, Africa, North America, South America and
+Oceania. These are artwork origins from the Met's `geoLocation` search filter,
+not artist nationalities. A smaller selected pool gets first use of the fetch
+budget; if it produces no fit, the remaining budget falls back to Europe and
+Asia rather than silently widening to every region.
 
 ## Pre-filter, then verdict
 
@@ -64,7 +66,7 @@ much they disagree depends on the department:
 - For European paintings, the catalogue `measurements` "Overall" figure (in cm)
   matches the photograph's proportions to within about 0.03 — close enough to
   trust.
-- For scrolls it does not. The catalogue lists several elements — "Image",
+- For many Asian scrolls it does not. The catalogue lists several elements — "Image",
   "Overall with mounting", "Overall with knobs" — and the photograph is sometimes
   of the painted image and sometimes of the whole mounting, with nothing in the
   record saying which. So any one element can be well off from what the photo
@@ -142,6 +144,22 @@ Blur preview rendering has no release-time debounce: every changed slider value
 updates the preview while the thumb is moving. Settings remain staged until
 **Apply changes** re-renders the current cached painting and saves them.
 
+The heart in the artwork preview copies the shown painting into durable app
+storage. **View favourites** opens a full-screen lazy gallery whose visible
+cards hold sampled thumbnails; selecting one provides a larger preview plus
+*Set as wallpaper* and *Remove*. A chosen favourite changes the shown wallpaper
+without replacing the source painting recorded for the day, so normal rotation
+resumes on the next local day. If a favourite is chosen while a painting is
+already owed, that choice settles the day so an overdue job cannot immediately
+undo it.
+
+The Met search uses the paginated v1.1 endpoint. Android pages through each
+selected geography query, merges them, then shuffles candidates; the desktop
+client uses the same endpoint while retaining its European Paintings department
+query. Although the API describes `geoLocation` values separated by `|`, v1.1
+returned an empty pool for `Europe|Asia` while returning both regions separately.
+Keep the requests separate unless that behavior is verified to have changed.
+
 ## Scheduling
 
 - **`JobScheduler`, not WorkManager.** It's the OS's own scheduler with no
@@ -170,9 +188,24 @@ updates the preview while the thumb is moving. Settings remain staged until
 
 ## Verification
 
+Android builds run on `ios_macmini`, following the same cache-preserving rsync
+workflow as Calendar Puzzle:
+
+```sh
+./remote.sh             # tests and assembles on the mini
+./remote.sh check       # compileDebugKotlin only
+./remote.sh apk         # build and fetch android/out/ArtWindow.apk
+./remote.sh <tasks...>  # run custom Gradle tasks remotely
+```
+
+The remote wrapper uses the mini's unpacked JDK 17 and Android SDK, preserves
+Gradle build state between syncs, and always stops the Gradle daemon. The APK is
+fetched back because the phone remains attached to this machine.
+
 With a phone attached over USB debugging:
 
 ```sh
+./remote.sh apk
 ./android/install.sh
 adb shell dumpsys wallpaper   # confirms the stored wallpaper's size
 adb logcat -s ArtWindow       # the fetch and placement trail
@@ -180,5 +213,5 @@ adb logcat -s ArtWindow       # the fetch and placement trail
 
 ## Out of scope for now
 
-Favourites and the gallery window, and the folder source. The crop and
-enlargement safety limits remain named constants rather than user-facing tuning.
+The folder source remains desktop-only. The crop and enlargement safety limits
+remain named constants rather than user-facing tuning.

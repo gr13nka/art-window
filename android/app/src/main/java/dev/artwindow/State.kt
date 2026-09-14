@@ -5,8 +5,8 @@ import java.io.File
 import java.time.LocalDate
 
 /**
- * What survives the process: the day the last picture settled on, and the picture
- * itself. [Rotation] is this class's only writer.
+ * What survives the process: the day the last picture settled on, the picture fetched
+ * for that day, and the picture currently shown. [Rotation] is this class's only writer.
  *
  * `settledDay` is a calendar day (an epoch day), never a timestamp or a countdown —
  * the same rule `state.json`'s scheduler invariant states on the Rust side, and for
@@ -21,29 +21,50 @@ class State(context: Context) {
 
     fun isDue(today: LocalDate): Boolean = settledDay != today.toEpochDay()
 
-    /** The picture currently on the wallpaper, or `null` before the first rotation ever completes. */
-    val artwork: Artwork?
-        get() {
-            val path = prefs.getString(KEY_PATH, null) ?: return null
-            return Artwork(
-                title = prefs.getString(KEY_TITLE, "") ?: "",
-                byline = prefs.getString(KEY_BYLINE, "") ?: "",
-                attribution = prefs.getString(KEY_ATTRIBUTION, "") ?: "",
-                detailsUrl = prefs.getString(KEY_DETAILS_URL, null),
-                path = File(path),
-            )
-        }
+    /** The source picture that settled the day and must survive while a favourite is shown. */
+    val fetchedArtwork: Artwork?
+        get() = readArtwork("")
+
+    /** The picture currently represented by the app, falling back to the legacy single record. */
+    val shownArtwork: Artwork?
+        get() = readArtwork(SHOWN_PREFIX) ?: fetchedArtwork
 
     /** Stamps [today] and records [artwork] in one commit, so a crash mid-write can never split the two apart. */
     fun recordFetched(artwork: Artwork, today: LocalDate) {
-        prefs.edit()
-            .putLong(KEY_SETTLED_DAY, today.toEpochDay())
-            .putString(KEY_TITLE, artwork.title)
-            .putString(KEY_BYLINE, artwork.byline)
-            .putString(KEY_ATTRIBUTION, artwork.attribution)
-            .putString(KEY_DETAILS_URL, artwork.detailsUrl)
-            .putString(KEY_PATH, artwork.path.path)
-            .commit()
+        prefs.edit().apply {
+            putLong(KEY_SETTLED_DAY, today.toEpochDay())
+            putArtwork("", artwork)
+            putArtwork(SHOWN_PREFIX, artwork)
+        }.commit()
+    }
+
+    /** Records a hand-picked picture without replacing the source picture for the day. */
+    fun recordChosen(artwork: Artwork, today: LocalDate) {
+        prefs.edit().apply {
+            if (isDue(today)) putLong(KEY_SETTLED_DAY, today.toEpochDay())
+            putArtwork(SHOWN_PREFIX, artwork)
+        }.commit()
+    }
+
+    private fun readArtwork(prefix: String): Artwork? {
+        val path = prefs.getString(prefix + KEY_PATH, null) ?: return null
+        return Artwork(
+            title = prefs.getString(prefix + KEY_TITLE, "") ?: "",
+            byline = prefs.getString(prefix + KEY_BYLINE, "") ?: "",
+            attribution = prefs.getString(prefix + KEY_ATTRIBUTION, "") ?: "",
+            detailsUrl = prefs.getString(prefix + KEY_DETAILS_URL, null),
+            origin = prefs.getString(prefix + KEY_ORIGIN, null),
+            path = File(path),
+        )
+    }
+
+    private fun android.content.SharedPreferences.Editor.putArtwork(prefix: String, artwork: Artwork) {
+        putString(prefix + KEY_TITLE, artwork.title)
+        putString(prefix + KEY_BYLINE, artwork.byline)
+        putString(prefix + KEY_ATTRIBUTION, artwork.attribution)
+        putString(prefix + KEY_DETAILS_URL, artwork.detailsUrl)
+        putString(prefix + KEY_ORIGIN, artwork.origin)
+        putString(prefix + KEY_PATH, artwork.path.path)
     }
 
     private companion object {
@@ -54,5 +75,7 @@ class State(context: Context) {
         const val KEY_ATTRIBUTION = "attribution"
         const val KEY_DETAILS_URL = "details_url"
         const val KEY_PATH = "path"
+        const val KEY_ORIGIN = "origin"
+        const val SHOWN_PREFIX = "shown_"
     }
 }

@@ -8,6 +8,7 @@ import java.io.File
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
+import java.net.URLEncoder
 
 /** "Wheat Field with Cypresses" — one picture, ready to hang, with what a viewer would want to know about it. Mirrors Rust's `Artwork` in `art/mod.rs`. */
 data class Artwork(
@@ -15,6 +16,7 @@ data class Artwork(
     val byline: String,
     val attribution: String,
     val detailsUrl: String?,
+    val origin: String?,
     val path: File,
 )
 
@@ -43,10 +45,10 @@ internal fun idOf(file: File): Long? {
  * convention [idOf] reads back. A change to the query, the User-Agent, or the
  * filename convention belongs in both files.
  *
- * Two departments feed the pool rather than one. European Paintings (11) is almost
- * entirely canvases too wide for a phone; Asian Art (6) holds hanging scrolls that
- * are close to phone-shaped already. Both searches ask for the same subject, for the
- * same reason as the desktop app: a generic query returns mostly portraits.
+ * The saved origin set feeds the pool. Europe and Asia are the default because
+ * European canvases provide breadth while Asian hanging scrolls are often close to
+ * phone-shaped already. Every geography asks for the same subject as the desktop app:
+ * a generic query returns mostly portraits.
  */
 class Met(private val cacheDir: File) {
 
@@ -61,32 +63,47 @@ class Met(private val cacheDir: File) {
      */
     fun fetch(avoid: Artwork?, screen: Screen, preferences: WallpaperPreferences): Artwork {
         val avoidId = avoid?.let { idOf(it.path) }
-        val ids = candidateIds()
-        val deadline = System.currentTimeMillis() + BUDGET_MS
+        val started = System.currentTimeMillis()
+        val deadline = started + BUDGET_MS
+        val needsFallback = !preferences.artworkRegions.containsAll(ArtworkRegion.DEFAULT)
+        val primaryDeadline = if (needsFallback) started + PRIMARY_BUDGET_MS else deadline
+        val primaryLimit = if (needsFallback) PRIMARY_CANDIDATES else CANDIDATES
         var looked = 0
         var lastError: Exception? = null
+        val tried = mutableSetOf<Long>()
 
-        for (id in ids.take(CANDIDATES)) {
-            if (System.currentTimeMillis() >= deadline) break
-            if (id == avoidId) continue
-            looked++
+        fun tryCandidates(ids: List<Long>, limit: Int, phaseDeadline: Long): Artwork? {
+            for (id in ids) {
+                if (looked >= limit || System.currentTimeMillis() >= phaseDeadline) break
+                if (id == avoidId || !tried.add(id)) continue
+                looked++
 
-            try {
-                val obj = fetchObject(id, screen, preferences.artworkShape) ?: continue
-                if (!previewHolds(obj, screen, preferences.artworkShape)) continue
-                val file = downloadAndPlace(obj, screen, preferences) ?: continue
+                try {
+                    val obj = fetchObject(id, screen, preferences.artworkShape) ?: continue
+                    if (!previewHolds(obj, screen, preferences.artworkShape)) continue
+                    val file = downloadAndPlace(obj, screen, preferences) ?: continue
 
-                Log.i(LOG_TAG, "object $id fits after $looked lookups")
-                return Artwork(
-                    title = obj.title,
-                    byline = obj.byline,
-                    attribution = "The Metropolitan Museum of Art",
-                    detailsUrl = obj.objectUrl,
-                    path = file,
-                )
-            } catch (e: Exception) {
-                lastError = e
+                    Log.i(LOG_TAG, "object $id fits after $looked lookups")
+                    return Artwork(
+                        title = obj.title,
+                        byline = obj.byline,
+                        attribution = "The Metropolitan Museum of Art",
+                        detailsUrl = obj.objectUrl,
+                        origin = obj.origin,
+                        path = file,
+                    )
+                } catch (e: Exception) {
+                    lastError = e
+                }
             }
+            return null
+        }
+
+        val primary = candidateIds(preferences.artworkRegions)
+        tryCandidates(primary, primaryLimit, primaryDeadline)?.let { return it }
+        if (needsFallback && System.currentTimeMillis() < deadline) {
+            val fallback = candidateIds(ArtworkRegion.DEFAULT)
+            tryCandidates(fallback, CANDIDATES, deadline)?.let { return it }
         }
 
         // Nearly every candidate is turned away rather than failing, so the last network
@@ -105,16 +122,29 @@ class Met(private val cacheDir: File) {
         }
     }
 
-    private fun candidateIds(): List<Long> {
-        val ids = (searchIds(SEARCH_EUROPEAN) + searchIds(SEARCH_ASIAN)).distinct().shuffled()
-        if (ids.isEmpty()) throw IOException("the Met returned no public-domain paintings")
+    private fun candidateIds(regions: Set<ArtworkRegion>): List<Long> {
+        return searchIds(regions).distinct().shuffled()
+    }
+
+    private fun searchIds(regions: Set<ArtworkRegion>): List<Long> {
+        val ids = mutableListOf<Long>()
+        regions.sortedBy { it.ordinal }.forEach { region -> ids += searchIds(region) }
         return ids
     }
 
-    private fun searchIds(query: String): List<Long> {
-        val results = getJson("$API/$query")
-        val ids = results.optJSONArray("objectIDs") ?: JSONArray()
-        return List(ids.length()) { ids.getLong(it) }
+    private fun searchIds(region: ArtworkRegion): List<Long> {
+        val ids = mutableListOf<Long>()
+        var offset = 0
+        var total: Int
+        do {
+            val results = getJson(searchUrl(region, offset))
+            total = results.optInt("total", 0).coerceAtMost(MAX_SEARCH_RESULTS)
+            val page = results.optJSONArray("objectIDs") ?: JSONArray()
+            if (page.length() == 0) break
+            repeat(page.length()) { ids += page.getLong(it) }
+            offset += SEARCH_PAGE_SIZE
+        } while (offset < total)
+        return ids
     }
 
     /** Null means "skip this candidate": no usable image, not classified as a painting, a portrait, or a shape no measurement supports. */
@@ -143,6 +173,9 @@ class Met(private val cacheDir: File) {
 
         val artist = json.optString("artistDisplayName", "").trim()
         val date = json.optString("objectDate", "").trim()
+        val origin = json.optString("country", "").trim()
+            .ifEmpty { json.optString("culture", "").trim() }
+            .takeIf { it.isNotEmpty() }
         val byline = when {
             artist.isEmpty() && date.isEmpty() -> ""
             artist.isEmpty() -> date
@@ -157,6 +190,7 @@ class Met(private val cacheDir: File) {
             objectUrl = json.optString("objectURL", ""),
             primaryImage = primaryImage,
             primaryImageSmall = json.optString("primaryImageSmall", ""),
+            origin = origin,
         )
     }
 
@@ -274,21 +308,16 @@ class Met(private val cacheDir: File) {
         val objectUrl: String,
         val primaryImage: String,
         val primaryImageSmall: String,
+        val origin: String?,
     )
 
     companion object {
         private const val API = "https://collectionapi.metmuseum.org/public/collection/v1"
+        private const val SEARCH_API = "https://collectionapi.metmuseum.org/public/collection/v1.1/search"
 
-        // European Paintings (11) is almost entirely too wide for a phone; Asian Art (6) is
-        // where the hanging scrolls are. Both ask for the same subject, for the same reason
-        // as src/art/met.rs: a generic query there comes back mostly portraits. `medium`
-        // is what keeps Asian Art's landscapes to paintings: without it nearly half of
-        // what comes back is ceramics, prints and textiles, each a lookup spent for nothing.
-        private const val SEARCH_EUROPEAN =
-            "search?departmentId=11&medium=Paintings&hasImages=true&isPublicDomain=true&q=landscape"
-        private const val SEARCH_ASIAN =
-            "search?departmentId=6&medium=Paintings&hasImages=true&isPublicDomain=true&q=landscape"
-
+        // Every chosen geography asks for the same subject as src/art/met.rs: a generic
+        // query comes back mostly portraits. `medium` keeps regions with broad collections
+        // to paintings rather than spending object lookups on ceramics and textiles.
         private const val USER_AGENT = "ArtWindow-Android/0.1.0 (+https://github.com/gr13nka/art-window)"
 
         /** The Met serves originals with no server-side resizing; this is the only size control there is. */
@@ -303,11 +332,21 @@ class Met(private val cacheDir: File) {
          * that usually binds.
          */
         private const val CANDIDATES = 400
+        private const val PRIMARY_CANDIDATES = 300
+        private const val SEARCH_PAGE_SIZE = 500
+        private const val MAX_SEARCH_RESULTS = 10_000
 
         /** Generous enough for an original-resolution painting on a link that has just woken up, and no more. */
         private const val REQUEST_TIMEOUT_MS = 45_000
 
         /** How long a whole fetch may take before it gives up and leaves the day for the next attempt. */
         private const val BUDGET_MS = 3 * 60 * 1000L
+        private const val PRIMARY_BUDGET_MS = 2 * 60 * 1000L
+
+        internal fun searchUrl(region: ArtworkRegion, offset: Int): String {
+            val encoded = URLEncoder.encode(region.apiName, Charsets.UTF_8.name())
+            return "$SEARCH_API?medium=Paintings&hasImages=true&isPublicDomain=true" +
+                "&q=landscape&geoLocation=$encoded&limit=$SEARCH_PAGE_SIZE&offset=$offset"
+        }
     }
 }

@@ -38,4 +38,30 @@ class WallpaperPreferencesTest {
         assertEquals(WallpaperStyle.ZOOM, enumValue("future-value", WallpaperStyle.ZOOM))
         assertEquals(WallpaperStyle.BLUR, enumValue("BLUR", WallpaperStyle.ZOOM))
     }
+
+    @Test
+    fun `missing and unknown region settings retain the established pool`() {
+        assertEquals(ArtworkRegion.DEFAULT, regionValues(null))
+        assertEquals(ArtworkRegion.DEFAULT, regionValues("FUTURE_REGION"))
+    }
+
+    @Test
+    fun `stored regions support multiple choices`() {
+        assertEquals(
+            setOf(ArtworkRegion.AFRICA, ArtworkRegion.SOUTH_AMERICA),
+            regionValues("AFRICA,SOUTH_AMERICA"),
+        )
+    }
+
+    @Test
+    fun `the final selected region cannot be removed`() {
+        assertEquals(
+            setOf(ArtworkRegion.OCEANIA),
+            toggleRegion(setOf(ArtworkRegion.OCEANIA), ArtworkRegion.OCEANIA),
+        )
+        assertEquals(
+            setOf(ArtworkRegion.EUROPE, ArtworkRegion.ASIA),
+            toggleRegion(setOf(ArtworkRegion.EUROPE), ArtworkRegion.ASIA),
+        )
+    }
 }

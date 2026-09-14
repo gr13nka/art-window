@@ -38,6 +38,19 @@ enum class ArtworkShape {
     }
 }
 
+enum class ArtworkRegion(val apiName: String) {
+    EUROPE("Europe"),
+    ASIA("Asia"),
+    AFRICA("Africa"),
+    NORTH_AMERICA("North America"),
+    SOUTH_AMERICA("South America"),
+    OCEANIA("Oceania");
+
+    companion object {
+        val DEFAULT = setOf(EUROPE, ASIA)
+    }
+}
+
 enum class BorderColorMode { BLACK, AUTOMATIC, CUSTOM }
 
 data class WallpaperPreferences(
@@ -47,6 +60,7 @@ data class WallpaperPreferences(
     val blurStrength: Int = DEFAULT_BLUR_STRENGTH,
     val borderColorMode: BorderColorMode = BorderColorMode.BLACK,
     val customBorderColor: Int = DEFAULT_CUSTOM_COLOR,
+    val artworkRegions: Set<ArtworkRegion> = ArtworkRegion.DEFAULT,
 ) {
     companion object {
         const val DEFAULT_BLUR_STRENGTH = 50
@@ -64,6 +78,7 @@ class WallpaperPreferencesStore(context: Context) {
         blurStrength = prefs.getInt(KEY_BLUR_STRENGTH, WallpaperPreferences.DEFAULT_BLUR_STRENGTH).coerceIn(0, 100),
         borderColorMode = enumValue(prefs.getString(KEY_BORDER_MODE, null), BorderColorMode.BLACK),
         customBorderColor = prefs.getInt(KEY_CUSTOM_COLOR, WallpaperPreferences.DEFAULT_CUSTOM_COLOR) or (0xff shl 24),
+        artworkRegions = regionValues(prefs.getString(KEY_REGIONS, null)),
     )
 
     fun save(value: WallpaperPreferences): Boolean = prefs.edit()
@@ -73,6 +88,7 @@ class WallpaperPreferencesStore(context: Context) {
         .putInt(KEY_BLUR_STRENGTH, value.blurStrength.coerceIn(0, 100))
         .putString(KEY_BORDER_MODE, value.borderColorMode.name)
         .putInt(KEY_CUSTOM_COLOR, value.customBorderColor or (0xff shl 24))
+        .putString(KEY_REGIONS, value.artworkRegions.sortedBy { it.ordinal }.joinToString(",") { it.name })
         .commit()
 
     private companion object {
@@ -83,8 +99,25 @@ class WallpaperPreferencesStore(context: Context) {
         const val KEY_BLUR_STRENGTH = "blur_strength"
         const val KEY_BORDER_MODE = "border_color_mode"
         const val KEY_CUSTOM_COLOR = "custom_border_color"
+        const val KEY_REGIONS = "artwork_regions"
     }
 }
 
 internal inline fun <reified T : Enum<T>> enumValue(raw: String?, fallback: T): T =
     enumValues<T>().firstOrNull { it.name == raw } ?: fallback
+
+internal fun regionValues(raw: String?): Set<ArtworkRegion> {
+    val regions = raw
+        ?.split(',')
+        ?.mapNotNull { stored -> ArtworkRegion.entries.firstOrNull { it.name == stored } }
+        ?.toSet()
+        .orEmpty()
+    return regions.ifEmpty { ArtworkRegion.DEFAULT }
+}
+
+internal fun toggleRegion(current: Set<ArtworkRegion>, region: ArtworkRegion): Set<ArtworkRegion> =
+    if (region in current) {
+        if (current.size == 1) current else current - region
+    } else {
+        current + region
+    }
