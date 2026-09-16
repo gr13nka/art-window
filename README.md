@@ -14,7 +14,7 @@ screen with the margins filled black.
 
 [Guide](docs/GUIDE.md) · [Android](docs/android.md) · [The Met's API](https://metmuseum.github.io/)
 
-<img src="docs/images/hero.png" width="100%" alt="A round gilt-framed Medici panel painting centred on a black desktop, the letterboxing filling the rest of the screen">
+<img src="docs/images/hero.png" width="100%" alt="A laptop and a phone side by side: the laptop hangs a round gilt-framed panel painting whole, with black margins either side; the phone has a tall van Gogh portrait filling its screen edge to edge">
 
 </div>
 
@@ -22,9 +22,9 @@ screen with the margins filled black.
 <img src="docs/images/demo.gif" width="440" alt="Three paintings of different proportions in turn, each fit whole to the screen on black">
 </div>
 
-A tall painting reads as a framed picture on a black wall. That is what the
-letterboxing is for, so nothing here measures a picture's proportions or crops
-one to fill.
+On a desktop a tall painting reads as a framed picture on a black wall. That is
+what the letterboxing is for, so nothing on that side measures a picture's
+proportions or crops one to fill. The phone is the deliberate exception below.
 
 ## Quick start with an agent
 
