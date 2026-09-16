@@ -6,6 +6,9 @@ platform wallpaper, browser and login behavior meet behind `desktop/`. A native
 Kotlin Android app under `android/` sets the same daily painting as the phone
 wallpaper instead — see `docs/android.md`.
 
+README.md is the landing page; depth lives in `docs/GUIDE.md`. Documentation edits
+belong in the guide, not in the README.
+
 ## Commands
 
 ```sh

@@ -1,214 +1,112 @@
+<!-- craft-readme: voice=quiet -->
+<div align="center">
+
 # Art Window
 
-A daily painting on your desktop, always fit to the screen with black borders.
+**A painting a day. Never cropped.**
 
-Art Window fetches a public-domain painting once a day and sets it as your
-wallpaper—scaled to fit entirely on screen, never cropped, with the margins filled
-black. A portrait painting reads as a framed picture on a black wall.
+Art Window puts one public-domain painting on your desktop each day, fit to the
+screen with the margins filled black.
 
-Inspired by [Muzei](https://github.com/romannurik/muzei) by Roman Nurik and its
-[macOS port](https://github.com/naman14/Muzei-macOS) by Naman Dwivedi. This is an
-independent rewrite and shares no code with either.
+[![CI](https://img.shields.io/github/actions/workflow/status/gr13nka/art-window/ci.yml?style=flat-square)](https://github.com/gr13nka/art-window/actions/workflows/ci.yml)
+![platforms](https://img.shields.io/badge/macOS%20%C2%B7%20GNOME%20%C2%B7%20Android-8b8b8b?style=flat-square)
+![rust](https://img.shields.io/badge/rust-1.88%2B-8b8b8b?style=flat-square)
 
-## Status
+[Guide](docs/GUIDE.md) · [Android](docs/android.md) · [The Met's API](https://metmuseum.github.io/)
 
-Art Window supports macOS and Linux with GNOME as desktop wallpaper apps, and
-Android as a native Kotlin phone app. The GNOME port uses GTK 3, GSettings,
-logind, and the XDG directory conventions. Windows is not implemented.
+<img src="docs/images/hero.png" width="100%" alt="A round gilt-framed Medici panel painting centred on a black desktop, the letterboxing filling the rest of the screen">
 
-## Install
+</div>
 
-The build requires Rust 1.88 or newer.
+<div align="center">
+<img src="docs/images/demo.gif" width="440" alt="Three paintings of different proportions in turn, each fit whole to the screen on black">
+</div>
 
-### macOS
+A tall painting reads as a framed picture on a black wall. That is what the
+letterboxing is for, so nothing here measures a picture's proportions or crops
+one to fill.
 
-```sh
-./macos/install.sh
-```
+## Quick start with an agent
 
-This rebuilds the current checkout and replaces `/Applications/Art Window.app`.
-Set `ART_WINDOW_APP_DIR` to an absolute directory to install somewhere else.
+> Read `CLAUDE.md` first. Then run `cargo build --release` and `cargo test
+> --all-targets` to check the checkout builds. Install it with `./macos/install.sh`
+> on macOS or `./linux/install.sh` on GNOME, then run `./target/release/art-window
+> --once` and show me the painting it printed.
 
-Open the app to put its framed-picture icon in the menu bar.
+## Quick start
 
-### Linux/GNOME
-
-Install GTK and D-Bus development files, then run the user-local installer:
-
-```sh
-# Debian or Ubuntu
-sudo apt install build-essential pkg-config libgtk-3-dev libdbus-1-dev
-
-# Arch Linux
-sudo pacman -S --needed base-devel pkgconf gtk3 dbus rust
-```
-
-Then run `./linux/install.sh`.
-
-On NixOS, build and install from a temporary development shell instead:
+Rust 1.88 or newer.
 
 ```sh
-nix-shell -p rustc cargo pkg-config gtk3 dbus \
-  --run './linux/install.sh'
+./macos/install.sh    # macOS: builds and replaces /Applications/Art Window.app
+./linux/install.sh    # GNOME: user-local binary, launcher and icon
 ```
 
-This installs the binary under `~/.local/bin` and a GNOME launcher and icon under
-`~/.local/share`. Set `ART_WINDOW_PREFIX` or `XDG_DATA_HOME` before running the
-script to override those locations.
+Open the app to put its framed-picture icon in the menu bar. On GNOME the GTK
+window is the whole interface. A panel menu appears only where an AppIndicator
+library and a StatusNotifier extension are present.
 
-The GTK window is the complete interface on stock GNOME. If an AppIndicator
-library and a StatusNotifier extension are available, Art Window also adds a panel
-menu and can stay out of the way there. Those are optional; their absence never
-makes the app unusable. See [GNOME wallpaper integration](docs/gnome-wallpaper.md)
-for the exact behavior and diagnostic commands.
+Debian and Arch need GTK and D-Bus development files first, and NixOS installs
+from a `nix-shell`. [Every platform's install →](docs/GUIDE.md#install)
 
-### Android
+## Favourites
 
-Needs the Android SDK plus JDK 17, and a phone with USB debugging enabled. Then
-run `./android/install.sh` to build and install the debug APK.
+The cache holds one picture, and the next rotation deletes it. Adding a painting
+to favourites copies it somewhere safe first, which is the only thing that keeps
+it. A kept painting can go back on the desktop at any time, and choosing one by
+hand leaves the day's schedule alone. [Every menu action →](docs/GUIDE.md#interface)
 
-It replaces both the home and lock screen wallpaper, and — unlike the desktop —
-fills the screen rather than letterboxing, picking only paintings tall enough for
-that to look right. See [Art Window for Android](docs/android.md) for why. The
-painting changes on the first hourly check after midnight, over Wi-Fi.
+## Android
 
-## Interface
-
-On macOS, the menu is the primary interface. On GNOME, the same actions appear in
-one GTK window with the favourites browser below them; the optional panel menu is a
-compact second surface.
-
-```text
-L'Arlésienne: Madame Joseph-Michel Ginoux
-Vincent van Gogh, 1888–89
-Open in browser
-─────────────────────
-Next picture
-Add to favourites
-Favourites…
-Back to today's picture
-─────────────────────
-Re-apply wallpaper
-✓ Start at login
-─────────────────────
-Quit Art Window
-```
-
-**Next picture** fetches another painting immediately. It is the day's rotation
-asked for early rather than a separate thing: the painting that arrives is today's,
-the one it replaces is gone, and tomorrow's still comes with tomorrow.
-
-**Add to favourites** copies the painting on the desktop into safe storage. The
-ordinary cache holds one picture, so this is the only action that saves it from the
-next rotation.
-
-**Favourites…** opens the macOS favourites window. On GNOME that browser is already
-part of the main window. Pictures run down the left; selecting one loads its larger
-preview on the right.
-
-```text
-┌────────┬─────────────────────────────┐
-│ ┌────┐ │      ┌───────────────┐      │
-│ │    │ │      │               │      │
-│ └────┘ │      │               │      │
-│ ┌────┐ │      │               │      │
-│ │    │ │      │               │      │
-│ └────┘ │      └───────────────┘      │
-│        │  Sahurs Meadows in Morning… │
-│        │  Alfred Sisley, 1894        │
-│        │  [Set as wallpaper] [Forget]│
-└────────┴─────────────────────────────┘
-```
-
-**Set as wallpaper** puts a kept painting up—a double-click does the same—and
-**Back to today's picture** restores the rotation's painting. **Forget** removes a
-painting from the list; if it is currently on the desktop, its file waits until the
-desktop has moved on.
-
-Choosing an existing painting by hand does not disturb the schedule. The exception
-is a painting that was already overdue: that choice settles the day, since
-otherwise an overdue fetch would immediately replace it.
-
-**Start at login** writes a launchd agent on macOS or an XDG autostart entry on
-Linux. It takes effect at the next login; changing it neither starts nor stops the
-current process.
-
-Art Window watches the local date rather than a stopwatch. A machine that sleeps
-through several days wakes owing one painting, not one per missed day. macOS and
-Linux both subscribe to their native wake notifications and also retain a timer as
-a backstop.
-
-## Use
-
-Art Window remains useful as a command:
+A native Kotlin app under `android/`, sharing no code with the Rust side. It sets
+the home and lock screen wallpaper, and fills the screen rather than letterboxing:
+a phone is too narrow for black margins to read as anything but a stripe, so it
+picks only paintings tall enough for that to look right.
 
 ```sh
-art-window            # run the resident app
-art-window --once     # fetch a painting now, print it, then exit
-art-window --if-due   # the same, but only if the local day is unsettled
-art-window --where    # print config, state, cache and favourites locations
-art-window --check    # diagnose GNOME integration (Linux only)
-art-window --quit     # stop the running GNOME instance (Linux only)
+./android/install.sh    # builds the debug APK and installs it over adb
 ```
 
-Launching the GNOME app a second time brings the existing window forward instead
-of starting another rotation process.
+[Art Window for Android →](docs/android.md)
 
-The macOS binary lives inside the bundle. Link it onto your path if you want the
-one-shot commands:
+## Questions
 
-```sh
-mkdir -p ~/.local/bin
-ln -s "/Applications/Art Window.app/Contents/MacOS/art-window" ~/.local/bin/
-```
+**Windows?** Not implemented. The platform seams under `desktop/`, `gallery/`,
+`day` and `wake` are there for it. The backend has not been written.
 
-## Settings
+**What happens when the machine is asleep at midnight?** Art Window compares
+calendar dates rather than counting hours. A machine that sleeps through several
+days wakes owing a single painting.
 
-`config.toml` lives at the location `--where` reports. It is read and never
-rewritten, so comments survive.
+**How much traffic is this?** One search and one image download a day, from the
+Metropolitan Museum's open-access API.
 
-```toml
-# "met" for public-domain paintings from the Metropolitan Museum,
-# or a path to a folder of your own pictures.
-source = "met"
-```
+**Can I use my own pictures?** Point `source` at a folder in `config.toml`. Art
+Window deletes only files it downloaded itself, so a folder of your own pictures
+is never pruned. [Settings →](docs/GUIDE.md#settings)
 
-One painting a day is the whole schedule and there is nothing to tune. A
-`refresh_hours` left over from an older version is accepted and ignored so an
-existing config keeps working.
+**Why is the wallpaper right on one Space and not the others?** macOS keeps a
+wallpaper per Mission Control Space per display. The Space in front of you is set
+at once. The rest are published when the desktop was going to be redrawn anyway,
+because publishing them blanks every desktop for as long as the Dock takes to
+restart.
 
-Pointing `source` at a folder inside `~/Pictures` or `~/Documents` can make macOS
-ask for access. A launchd process cannot show that prompt, so run
-`art-window --once` from a terminal to approve it.
+## Docs
 
-Settings are read when Art Window starts. After editing `config.toml`, quit and
-reopen it.
+[The guide](docs/GUIDE.md) carries the rest: [install](docs/GUIDE.md#install),
+[the menu and the favourites window](docs/GUIDE.md#interface),
+[the command-line flags](docs/GUIDE.md#use),
+[settings](docs/GUIDE.md#settings) and [uninstall](docs/GUIDE.md#uninstall).
 
-## Uninstall
-
-Turn off **Start at login** and quit Art Window first.
-
-On macOS:
-
-```sh
-rm -rf "/Applications/Art Window.app"
-rm -rf ~/Library/Application\ Support/ArtWindow
-```
-
-On Linux, for the default installer locations:
-
-```sh
-rm -f ~/.local/bin/art-window
-rm -f ~/.local/share/applications/dev.artwindow.desktop
-rm -f ~/.local/share/icons/hicolor/scalable/apps/dev.artwindow.svg
-rm -f ~/.config/autostart/dev.artwindow.desktop
-rm -rf ~/.config/artwindow ~/.local/share/artwindow ~/.cache/artwindow
-```
-
-Adjust those paths if the installer or XDG directories were overridden. The
-wallpaper stays as it is; choose another in system settings to change it back.
+Two notes on the platform wallpaper APIs sit beside it:
+[macOS](docs/macos-wallpaper.md) and [GNOME](docs/gnome-wallpaper.md).
 
 ## Credits
 
 Artwork metadata and images come from [The Metropolitan Museum of Art Collection
-API](https://metmuseum.github.io/), under its open-access terms.
+API](https://metmuseum.github.io/), under its open-access terms. Inspired by
+[Muzei](https://github.com/romannurik/muzei) by Roman Nurik and its
+[macOS port](https://github.com/naman14/Muzei-macOS) by Naman Dwivedi. This is an
+independent rewrite and shares no code with either.
+
+MIT or Apache-2.0, at your option.
