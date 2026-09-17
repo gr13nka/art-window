@@ -107,6 +107,7 @@ Artwork metadata and images come from [The Metropolitan Museum of Art Collection
 API](https://metmuseum.github.io/), under its open-access terms. Inspired by
 [Muzei](https://github.com/romannurik/muzei) by Roman Nurik and its
 [macOS port](https://github.com/naman14/Muzei-macOS) by Naman Dwivedi. This is an
-independent rewrite and shares no code with either.
+independent rewrite and shares no code with either. The device frames in the
+picture above come from [frames](https://github.com/bunlongheng/frames), MIT.
 
 MIT or Apache-2.0, at your option.
