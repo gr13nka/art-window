@@ -54,14 +54,37 @@ class WallpaperPreferencesTest {
     }
 
     @Test
-    fun `the final selected region cannot be removed`() {
+    fun `missing and unknown subject settings retain the established pool`() {
+        assertEquals(ArtworkSubject.DEFAULT, subjectValues(null))
+        assertEquals(ArtworkSubject.DEFAULT, subjectValues(""))
+        assertEquals(ArtworkSubject.DEFAULT, subjectValues("FUTURE_SUBJECT"))
+    }
+
+    @Test
+    fun `stored subjects support multiple choices`() {
+        assertEquals(
+            setOf(ArtworkSubject.SEASCAPE, ArtworkSubject.CITY),
+            subjectValues("SEASCAPE,CITY"),
+        )
+    }
+
+    @Test
+    fun `toggled keeps the last item, for regions and subjects alike`() {
         assertEquals(
             setOf(ArtworkRegion.OCEANIA),
-            toggleRegion(setOf(ArtworkRegion.OCEANIA), ArtworkRegion.OCEANIA),
+            toggled(setOf(ArtworkRegion.OCEANIA), ArtworkRegion.OCEANIA),
         )
         assertEquals(
             setOf(ArtworkRegion.EUROPE, ArtworkRegion.ASIA),
-            toggleRegion(setOf(ArtworkRegion.EUROPE), ArtworkRegion.ASIA),
+            toggled(setOf(ArtworkRegion.EUROPE), ArtworkRegion.ASIA),
+        )
+        assertEquals(
+            setOf(ArtworkSubject.LANDSCAPE),
+            toggled(setOf(ArtworkSubject.LANDSCAPE), ArtworkSubject.LANDSCAPE),
+        )
+        assertEquals(
+            setOf(ArtworkSubject.LANDSCAPE, ArtworkSubject.CITY),
+            toggled(setOf(ArtworkSubject.LANDSCAPE), ArtworkSubject.CITY),
         )
     }
 }

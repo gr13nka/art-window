@@ -41,14 +41,16 @@ internal fun idOf(file: File): Long? {
  * artwork-shape breadth chosen in Settings.
  *
  * Mirrors `src/art/met.rs` on the desktop side: the same User-Agent, the same
- * landscape-subject query and portrait skip, and the same `met-{id}.{ext}` filename
- * convention [idOf] reads back. A change to the query, the User-Agent, or the
- * filename convention belongs in both files.
+ * portrait skip, and the same `met-{id}.{ext}` filename convention [idOf] reads
+ * back. The subject queried and the religious-scene filter are Android-only
+ * preferences for now — the desktop keeps a fixed `q=landscape` and no religious
+ * filter; see the exception CLAUDE.md's Android section names. A change to the
+ * User-Agent or the filename convention still belongs in both files.
  *
  * The saved origin set feeds the pool. Europe and Asia are the default because
  * European canvases provide breadth while Asian hanging scrolls are often close to
- * phone-shaped already. Every geography asks for the same subject as the desktop app:
- * a generic query returns mostly portraits.
+ * phone-shaped already. Every geography asks for the same chosen subject: a generic
+ * query returns mostly portraits.
  */
 class Met(private val cacheDir: File) {
 
@@ -61,11 +63,21 @@ class Met(private val cacheDir: File) {
      * Met's API get blocked — up to [CANDIDATES] of them or [BUDGET_MS], whichever
      * comes first.
      */
-    fun fetch(avoid: Artwork?, screen: Screen, preferences: WallpaperPreferences): Artwork {
+    fun fetch(
+        avoid: Artwork?,
+        screen: Screen,
+        preferences: WallpaperPreferences,
+        onProgress: (FetchProgress) -> Unit = {},
+    ): Artwork {
         val avoidId = avoid?.let { idOf(it.path) }
         val started = System.currentTimeMillis()
         val deadline = started + BUDGET_MS
-        val needsFallback = !preferences.artworkRegions.containsAll(ArtworkRegion.DEFAULT)
+        // One subject for this attempt; the fallback below may widen to the rest of
+        // preferences.artworkSubjects, but this is the one the primary pass — and the
+        // "Searching" progress line, which can only narrate one subject at a time — uses.
+        val subject = preferences.artworkSubjects.random()
+        val needsFallback = !preferences.artworkRegions.containsAll(ArtworkRegion.DEFAULT) ||
+            preferences.artworkSubjects.size > 1
         val primaryDeadline = if (needsFallback) started + PRIMARY_BUDGET_MS else deadline
         val primaryLimit = if (needsFallback) PRIMARY_CANDIDATES else CANDIDATES
         var looked = 0
@@ -77,11 +89,12 @@ class Met(private val cacheDir: File) {
                 if (looked >= limit || System.currentTimeMillis() >= phaseDeadline) break
                 if (id == avoidId || !tried.add(id)) continue
                 looked++
+                onProgress(FetchProgress.Checking(looked))
 
                 try {
-                    val obj = fetchObject(id, screen, preferences.artworkShape) ?: continue
+                    val obj = fetchObject(id, screen, preferences) ?: continue
                     if (!previewHolds(obj, screen, preferences.artworkShape)) continue
-                    val file = downloadAndPlace(obj, screen, preferences) ?: continue
+                    val file = downloadAndPlace(obj, screen, preferences, onProgress) ?: continue
 
                     Log.i(LOG_TAG, "object $id fits after $looked lookups")
                     return Artwork(
@@ -99,10 +112,22 @@ class Met(private val cacheDir: File) {
             return null
         }
 
-        val primary = candidateIds(preferences.artworkRegions)
+        onProgress(FetchProgress.Searching(subject))
+        val primaryPairs = subject.queries.flatMap { query ->
+            preferences.artworkRegions.sortedBy { it.ordinal }.map { query to it }
+        }
+        val primary = candidateIds(primaryPairs)
         tryCandidates(primary, primaryLimit, primaryDeadline)?.let { return it }
         if (needsFallback && System.currentTimeMillis() < deadline) {
-            val fallback = candidateIds(ArtworkRegion.DEFAULT)
+            onProgress(FetchProgress.Searching(subject))
+            // Generalised fallback: every subject the user chose, not just this attempt's
+            // one, paired with the chosen regions widened to include the established
+            // default pool — the same widening the region-only fallback always did.
+            val fallbackRegions = preferences.artworkRegions + ArtworkRegion.DEFAULT
+            val fallbackPairs = preferences.artworkSubjects.flatMap { s ->
+                s.queries.flatMap { query -> fallbackRegions.sortedBy { it.ordinal }.map { query to it } }
+            }
+            val fallback = candidateIds(fallbackPairs)
             tryCandidates(fallback, CANDIDATES, deadline)?.let { return it }
         }
 
@@ -122,22 +147,22 @@ class Met(private val cacheDir: File) {
         }
     }
 
-    private fun candidateIds(regions: Set<ArtworkRegion>): List<Long> {
-        return searchIds(regions).distinct().shuffled()
+    private fun candidateIds(pairs: List<Pair<String, ArtworkRegion>>): List<Long> {
+        return searchIds(pairs).distinct().shuffled()
     }
 
-    private fun searchIds(regions: Set<ArtworkRegion>): List<Long> {
+    private fun searchIds(pairs: List<Pair<String, ArtworkRegion>>): List<Long> {
         val ids = mutableListOf<Long>()
-        regions.sortedBy { it.ordinal }.forEach { region -> ids += searchIds(region) }
+        pairs.forEach { (query, region) -> ids += searchIds(query, region) }
         return ids
     }
 
-    private fun searchIds(region: ArtworkRegion): List<Long> {
+    private fun searchIds(query: String, region: ArtworkRegion): List<Long> {
         val ids = mutableListOf<Long>()
         var offset = 0
         var total: Int
         do {
-            val results = getJson(searchUrl(region, offset))
+            val results = getJson(searchUrl(query, region, offset))
             total = results.optInt("total", 0).coerceAtMost(MAX_SEARCH_RESULTS)
             val page = results.optJSONArray("objectIDs") ?: JSONArray()
             if (page.length() == 0) break
@@ -147,8 +172,12 @@ class Met(private val cacheDir: File) {
         return ids
     }
 
-    /** Null means "skip this candidate": no usable image, not classified as a painting, a portrait, or a shape no measurement supports. */
-    private fun fetchObject(id: Long, screen: Screen, shape: ArtworkShape): MetObject? {
+    /**
+     * Null means "skip this candidate": no usable image, not classified as a
+     * painting, a portrait, a shape no measurement supports, or — when
+     * [WallpaperPreferences.hideReligious] is on — a religious scene.
+     */
+    private fun fetchObject(id: Long, screen: Screen, preferences: WallpaperPreferences): MetObject? {
         val json = getJson("$API/objects/$id")
         val primaryImage = json.optString("primaryImage", "")
         if (primaryImage.isEmpty()) return null
@@ -156,11 +185,12 @@ class Met(private val cacheDir: File) {
 
         val title = json.optString("title", "").trim()
         val tags = json.optJSONArray("tags")
+        val tagTerms = tags?.let { array -> (0 until array.length()).map { array.getJSONObject(it).optString("term") } }.orEmpty()
+
         val isPortrait = title.contains("portrait", ignoreCase = true) ||
-            (tags != null && (0 until tags.length()).any {
-                tags.getJSONObject(it).optString("term").equals("Portraits", ignoreCase = true)
-            })
+            tagTerms.any { it.equals("Portraits", ignoreCase = true) }
         if (isPortrait) return null
+        if (preferences.hideReligious && isReligious(title, tagTerms)) return null
 
         val measurements = json.optJSONArray("measurements") ?: JSONArray()
         val measuredAspects = (0 until measurements.length()).mapNotNull { i ->
@@ -169,7 +199,7 @@ class Met(private val cacheDir: File) {
             val h = element?.optDouble("Height") ?: Double.NaN
             if (w.isFinite() && h.isFinite() && h > 0.0) w / h else null
         }
-        if (measuredAspects.isNotEmpty() && measuredAspects.none { shape.mightAccept(it, screen) }) return null
+        if (measuredAspects.isNotEmpty() && measuredAspects.none { preferences.artworkShape.mightAccept(it, screen) }) return null
 
         val artist = json.optString("artistDisplayName", "").trim()
         val date = json.optString("objectDate", "").trim()
@@ -220,8 +250,13 @@ class Met(private val cacheDir: File) {
     }
 
     /** Downloads [obj]'s image and checks its real shape and usable resolution. */
-    private fun downloadAndPlace(obj: MetObject, screen: Screen, preferences: WallpaperPreferences): File? {
-        val file = download(obj.primaryImage, obj.objectId)
+    private fun downloadAndPlace(
+        obj: MetObject,
+        screen: Screen,
+        preferences: WallpaperPreferences,
+        onProgress: (FetchProgress) -> Unit,
+    ): File? {
+        val file = download(obj.primaryImage, obj.objectId, onProgress)
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeFile(file.path, bounds)
         val width = bounds.outWidth
@@ -245,7 +280,7 @@ class Met(private val cacheDir: File) {
         return file
     }
 
-    private fun download(url: String, id: Long): File {
+    private fun download(url: String, id: Long, onProgress: (FetchProgress) -> Unit): File {
         val connection = openConnection(url)
         try {
             val length = connection.getHeaderField("Content-Length")?.toLongOrNull()
@@ -258,8 +293,25 @@ class Met(private val cacheDir: File) {
             // Load-bearing: idOf reads the object id back out of this name, which is how
             // tomorrow's painting avoids being today's.
             val file = File(cacheDir, "met-$id.$extension")
+            // Throttled so the StateFlow isn't flooded: a whole-percent change when the
+            // server sent Content-Length, or every ~256 KB when it didn't.
+            var lastPercent = -1
+            var lastReportedBytes = 0L
             file.outputStream().use { out ->
-                connection.inputStream.use { input -> copyLimited(input, out, MAX_IMAGE_BYTES) }
+                connection.inputStream.use { input ->
+                    copyLimited(input, out, MAX_IMAGE_BYTES) { bytes ->
+                        if (length != null) {
+                            val percent = ((bytes * 100) / length).toInt()
+                            if (percent != lastPercent) {
+                                lastPercent = percent
+                                onProgress(FetchProgress.Downloading(bytes, length))
+                            }
+                        } else if (bytes - lastReportedBytes >= DOWNLOAD_REPORT_BYTES) {
+                            lastReportedBytes = bytes
+                            onProgress(FetchProgress.Downloading(bytes, null))
+                        }
+                    }
+                }
             }
             return file
         } finally {
@@ -290,7 +342,12 @@ class Met(private val cacheDir: File) {
         return connection
     }
 
-    private fun copyLimited(input: java.io.InputStream, output: java.io.OutputStream, limit: Long) {
+    private fun copyLimited(
+        input: java.io.InputStream,
+        output: java.io.OutputStream,
+        limit: Long,
+        onBytesCopied: ((Long) -> Unit)? = null,
+    ) {
         val buffer = ByteArray(8192)
         var total = 0L
         while (total < limit) {
@@ -298,6 +355,7 @@ class Met(private val cacheDir: File) {
             if (read < 0) break
             output.write(buffer, 0, read)
             total += read
+            onBytesCopied?.invoke(total)
         }
     }
 
@@ -315,9 +373,11 @@ class Met(private val cacheDir: File) {
         private const val API = "https://collectionapi.metmuseum.org/public/collection/v1"
         private const val SEARCH_API = "https://collectionapi.metmuseum.org/public/collection/v1.1/search"
 
-        // Every chosen geography asks for the same subject as src/art/met.rs: a generic
-        // query comes back mostly portraits. `medium` keeps regions with broad collections
-        // to paintings rather than spending object lookups on ceramics and textiles.
+        // Every chosen geography asks for the same subject query: a generic query comes
+        // back mostly portraits. `medium` keeps regions with broad collections to
+        // paintings rather than spending object lookups on ceramics and textiles. The
+        // subject itself is now a Settings preference — see the class doc — unlike the
+        // desktop's fixed `q=landscape`.
         private const val USER_AGENT = "ArtWindow-Android/0.1.0 (+https://github.com/gr13nka/art-window)"
 
         /** The Met serves originals with no server-side resizing; this is the only size control there is. */
@@ -325,6 +385,9 @@ class Met(private val cacheDir: File) {
 
         /** Checking the web-sized copy's shape needs its header, not a painting's worth of bytes. */
         private const val MAX_PREVIEW_BYTES = 4L * 1024 * 1024
+
+        /** How often a download with no Content-Length reports progress. */
+        private const val DOWNLOAD_REPORT_BYTES = 256L * 1024
 
         /**
          * How many objects to try before giving up. Only about one in sixty fits a
@@ -343,10 +406,43 @@ class Met(private val cacheDir: File) {
         private const val BUDGET_MS = 3 * 60 * 1000L
         private const val PRIMARY_BUDGET_MS = 2 * 60 * 1000L
 
-        internal fun searchUrl(region: ArtworkRegion, offset: Int): String {
-            val encoded = URLEncoder.encode(region.apiName, Charsets.UTF_8.name())
+        internal fun searchUrl(query: String, region: ArtworkRegion, offset: Int): String {
+            val encodedQuery = URLEncoder.encode(query, Charsets.UTF_8.name())
+            val encodedRegion = URLEncoder.encode(region.apiName, Charsets.UTF_8.name())
             return "$SEARCH_API?medium=Paintings&hasImages=true&isPublicDomain=true" +
-                "&q=landscape&geoLocation=$encoded&limit=$SEARCH_PAGE_SIZE&offset=$offset"
+                "&q=$encodedQuery&geoLocation=$encodedRegion&limit=$SEARCH_PAGE_SIZE&offset=$offset"
         }
     }
 }
+
+/**
+ * Whether [title] or one of [tagTerms] names a religious scene or figure, for
+ * [WallpaperPreferences.hideReligious].
+ *
+ * One whole-word, case-insensitive regex rather than per-word substring checks, so
+ * that "Christmas" is never mistaken for "Christ" and short fragments like "holy"
+ * or "magi" don't fire inside an unrelated longer word. Multi-word phrases such as
+ * "last supper" match as a phrase for the same reason. "St." is deliberately left
+ * out — it would also hide views of St. Petersburg and similar cityscapes — and the
+ * Met's own tags ("Saints", "Virgin Mary", "Christ", "Angels") catch most of what
+ * excluding it gives up. Top-level and not a method on [Met] because it has nothing
+ * to do with fetching: it only judges text already in hand.
+ */
+internal fun isReligious(title: String, tagTerms: List<String>): Boolean {
+    val haystacks = listOf(title) + tagTerms
+    return haystacks.any { RELIGIOUS_TERMS.containsMatchIn(it) }
+}
+
+private val RELIGIOUS_TERMS = Regex(
+    "\\b(?:" + listOf(
+        "christ", "jesus", "madonna", "virgin", "saints?", "holy", "annunciation",
+        "crucifixion", "crucified", "nativity", "adoration", "magi", "piet[aà]",
+        "lamentation", "resurrection", "ascension", "assumption", "transfiguration",
+        "apostles?", "evangelists?", "baptism", "angels?", "deposition", "entombment",
+        "magdalene", "pope", "bible", "biblical", "gospel", "prophets?",
+        "martyrs?", "martyrdom", "last supper", "pentecost", "flight into egypt",
+        "moses", "abraham", "noah", "jonah", "tobias", "judith", "susanna", "samson",
+        "buddha", "bodhisattva", "arhat", "deit(?:y|ies)",
+    ).joinToString("|") + ")\\b",
+    RegexOption.IGNORE_CASE,
+)

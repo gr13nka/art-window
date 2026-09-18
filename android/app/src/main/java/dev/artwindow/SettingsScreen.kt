@@ -31,6 +31,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -308,11 +310,47 @@ fun SettingsScreen(
                 selected = region in preferences.artworkRegions,
                 onClick = {
                     onPreferencesChange(
-                        preferences.copy(artworkRegions = toggleRegion(preferences.artworkRegions, region)),
+                        preferences.copy(artworkRegions = toggled(preferences.artworkRegions, region)),
                     )
                 },
             )
         }
+
+        SectionTitle("Subjects")
+        Text(
+            "One chosen subject is picked for each new painting.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f),
+            modifier = Modifier.padding(bottom = 8.dp),
+        )
+        ArtworkSubject.entries.forEach { subject ->
+            SelectionRow(
+                title = when (subject) {
+                    ArtworkSubject.LANDSCAPE -> "Landscape"
+                    ArtworkSubject.SEASCAPE -> "Seascape"
+                    ArtworkSubject.STILL_LIFE -> "Still life"
+                    ArtworkSubject.CITY -> "City"
+                },
+                detail = when (subject) {
+                    ArtworkSubject.LANDSCAPE -> "Countryside, rivers and skies"
+                    ArtworkSubject.SEASCAPE -> "Sea, ships and harbours; a thinner pool of phone-shaped finds"
+                    ArtworkSubject.STILL_LIFE -> "Flowers, fruit and tabletops"
+                    ArtworkSubject.CITY -> "Streets, canals and views of towns; a thinner pool of phone-shaped finds"
+                },
+                selected = subject in preferences.artworkSubjects,
+                onClick = {
+                    onPreferencesChange(
+                        preferences.copy(artworkSubjects = toggled(preferences.artworkSubjects, subject)),
+                    )
+                },
+            )
+        }
+        ToggleRow(
+            title = "Hide religious scenes",
+            detail = "Skips saints, Madonnas and Bible scenes",
+            checked = preferences.hideReligious,
+            onCheckedChange = { onPreferencesChange(preferences.copy(hideReligious = it)) },
+        )
         Spacer(Modifier.height(12.dp))
     }
 }
@@ -460,6 +498,51 @@ private fun SelectionRow(
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f),
                 )
             }
+        }
+    }
+}
+
+/** A single on/off setting, styled like [SelectionRow] but with a switch instead of a bullet. */
+@Composable
+private fun ToggleRow(
+    title: String,
+    detail: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    val shape = RoundedCornerShape(9.dp)
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(bottom = 4.dp)
+            .border(
+                BorderStroke(1.dp, if (checked) Color(0xff8f79ee) else Color(0xff2e2b33)),
+                shape,
+            )
+            .clickable { onCheckedChange(!checked) },
+        color = if (checked) Color(0xff252031) else Color(0xff17161b),
+        shape = shape,
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 11.dp, vertical = 9.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(title, style = MaterialTheme.typography.labelLarge)
+                Text(
+                    detail,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f),
+                )
+            }
+            Switch(
+                checked = checked,
+                onCheckedChange = onCheckedChange,
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = Color(0xfff5f1ff),
+                    checkedTrackColor = Color(0xffa990ff),
+                ),
+            )
         }
     }
 }

@@ -51,6 +51,22 @@ enum class ArtworkRegion(val apiName: String) {
     }
 }
 
+/**
+ * What a painting is of. [queries] are the Met search terms that stand in for it —
+ * several for a subject the collection holds thinly, so [Met] has more than one
+ * query to draw candidates from before it has to fall back to another subject.
+ */
+enum class ArtworkSubject(val queries: List<String>) {
+    LANDSCAPE(listOf("landscape")),
+    SEASCAPE(listOf("seascape", "marine", "boats")),
+    STILL_LIFE(listOf("still life", "flowers")),
+    CITY(listOf("cityscape", "city", "street"));
+
+    companion object {
+        val DEFAULT = setOf(LANDSCAPE)
+    }
+}
+
 enum class BorderColorMode { BLACK, AUTOMATIC, CUSTOM }
 
 data class WallpaperPreferences(
@@ -61,6 +77,8 @@ data class WallpaperPreferences(
     val borderColorMode: BorderColorMode = BorderColorMode.BLACK,
     val customBorderColor: Int = DEFAULT_CUSTOM_COLOR,
     val artworkRegions: Set<ArtworkRegion> = ArtworkRegion.DEFAULT,
+    val artworkSubjects: Set<ArtworkSubject> = ArtworkSubject.DEFAULT,
+    val hideReligious: Boolean = false,
 ) {
     companion object {
         const val DEFAULT_BLUR_STRENGTH = 50
@@ -79,6 +97,8 @@ class WallpaperPreferencesStore(context: Context) {
         borderColorMode = enumValue(prefs.getString(KEY_BORDER_MODE, null), BorderColorMode.BLACK),
         customBorderColor = prefs.getInt(KEY_CUSTOM_COLOR, WallpaperPreferences.DEFAULT_CUSTOM_COLOR) or (0xff shl 24),
         artworkRegions = regionValues(prefs.getString(KEY_REGIONS, null)),
+        artworkSubjects = subjectValues(prefs.getString(KEY_SUBJECTS, null)),
+        hideReligious = prefs.getBoolean(KEY_HIDE_RELIGIOUS, false),
     )
 
     fun save(value: WallpaperPreferences): Boolean = prefs.edit()
@@ -89,6 +109,8 @@ class WallpaperPreferencesStore(context: Context) {
         .putString(KEY_BORDER_MODE, value.borderColorMode.name)
         .putInt(KEY_CUSTOM_COLOR, value.customBorderColor or (0xff shl 24))
         .putString(KEY_REGIONS, value.artworkRegions.sortedBy { it.ordinal }.joinToString(",") { it.name })
+        .putString(KEY_SUBJECTS, value.artworkSubjects.sortedBy { it.ordinal }.joinToString(",") { it.name })
+        .putBoolean(KEY_HIDE_RELIGIOUS, value.hideReligious)
         .commit()
 
     private companion object {
@@ -100,6 +122,8 @@ class WallpaperPreferencesStore(context: Context) {
         const val KEY_BORDER_MODE = "border_color_mode"
         const val KEY_CUSTOM_COLOR = "custom_border_color"
         const val KEY_REGIONS = "artwork_regions"
+        const val KEY_SUBJECTS = "artwork_subjects"
+        const val KEY_HIDE_RELIGIOUS = "hide_religious"
     }
 }
 
@@ -115,9 +139,19 @@ internal fun regionValues(raw: String?): Set<ArtworkRegion> {
     return regions.ifEmpty { ArtworkRegion.DEFAULT }
 }
 
-internal fun toggleRegion(current: Set<ArtworkRegion>, region: ArtworkRegion): Set<ArtworkRegion> =
-    if (region in current) {
-        if (current.size == 1) current else current - region
+internal fun subjectValues(raw: String?): Set<ArtworkSubject> {
+    val subjects = raw
+        ?.split(',')
+        ?.mapNotNull { stored -> ArtworkSubject.entries.firstOrNull { it.name == stored } }
+        ?.toSet()
+        .orEmpty()
+    return subjects.ifEmpty { ArtworkSubject.DEFAULT }
+}
+
+/** Shared by regions and subjects: toggles [item], but never empties the set. */
+internal fun <T> toggled(current: Set<T>, item: T): Set<T> =
+    if (item in current) {
+        if (current.size == 1) current else current - item
     } else {
-        current + region
+        current + item
     }

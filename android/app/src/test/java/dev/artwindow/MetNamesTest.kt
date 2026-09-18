@@ -24,10 +24,18 @@ class MetNamesTest {
 
     @Test
     fun `search URL encodes a geography value and pagination`() {
-        val url = Met.searchUrl(ArtworkRegion.NORTH_AMERICA, 500)
+        val url = Met.searchUrl("landscape", ArtworkRegion.NORTH_AMERICA, 500)
 
         assertEquals(true, url.contains("geoLocation=North+America"))
         assertEquals(true, url.endsWith("limit=500&offset=500"))
+    }
+
+    @Test
+    fun `search URL encodes a multi-word query`() {
+        val url = Met.searchUrl("still life", ArtworkRegion.EUROPE, 0)
+
+        assertEquals(true, url.contains("q=still+life"))
+        assertEquals(true, url.contains("geoLocation=Europe"))
     }
 
     @Test

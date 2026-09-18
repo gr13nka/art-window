@@ -58,6 +58,35 @@ not artist nationalities. A smaller selected pool gets first use of the fetch
 budget; if it produces no fit, the remaining budget falls back to Europe and
 Asia rather than silently widening to every region.
 
+## Subject choice and the religious filter
+
+Settings can choose any combination of Landscape, Seascape, Still life and City —
+`ArtworkSubject` in `WallpaperPreferences.kt`, defaulting to Landscape alone. Each
+subject stands for several Met search queries rather than one: Seascape also asks
+for "marine" and "boats", Still life also asks for "flowers", City also asks for
+"cityscape" and "street" — the thinner a subject's pool, the more queries it needs
+to fill it. `Met.fetch` picks one chosen subject at random per attempt and
+searches its queries across the chosen regions; the "Searching" progress line
+names that one subject, because a single attempt only ever pursues one.
+
+The region fallback generalises the same way it always widened for regions alone.
+It now fires whenever the chosen regions omit the default pool *or* more than one
+subject is chosen, and the fallback pass searches every chosen subject — never a
+subject the user did not select — across the chosen regions widened to include
+Europe and Asia.
+
+The religious-scene filter is a toggle, off by default. When it's on, `fetchObject`
+also skips a candidate whose title or tags match `isReligious`'s word list: Christ,
+Mary and the saints, biblical scenes and figures, and a few non-Christian
+equivalents (Buddha, bodhisattva, deities) — matched as whole words, case-
+insensitively, so "Christmas" is never mistaken for "Christ". "St." is left out of
+the list on purpose: it would also hide views of St. Petersburg and similar
+cityscapes, and the Met's own tags ("Saints", "Virgin Mary", "Christ", "Angels")
+catch most of what excluding it gives up. The word list lives in `isReligious` in
+`Met.kt`; extending it means editing that one place. This subject preference and
+the religious filter are Android-only for now — see the exception CLAUDE.md's
+Android section names.
+
 ## Pre-filter, then verdict
 
 The catalogue and the photograph do not always agree on proportions, and how
@@ -135,6 +164,19 @@ stays above the bottom navigation instead of falling below the tall preview and
 requiring a scroll. A two-segment artwork/settings control sits above the gesture
 area; its final geometry is a compact rounded rectangle about 115 dp wide and 50
 dp high, with 8 dp selected-segment corners rather than a capsule silhouette.
+
+While a fetch is running, a 220 dp progress bar — the same width as the button —
+appears between **Next picture** and the status line. It's indeterminate while
+`Met.fetch` is searching or checking candidates, because the candidate count and
+time budget it narrates are only upper bounds, not a known amount of work; it
+switches to determinate, tracking bytes downloaded against the response's
+`Content-Length`, once a candidate has passed the catalogue and preview checks and
+its original is downloading. The pixel check on that original can still turn it
+away, and then the bar goes back to indeterminate. The status line narrates the same progress in words ("Searching the
+Met for seascapes…", "Looked at 37 paintings…", "Downloading 4.2 of 12.0 MB…")
+while the button itself just says "Fetching…". This also appears when the
+scheduled job runs the fetch, since `Rotation` is a singleton in the same process
+`MainActivity` reads its `StateFlow` from.
 
 Settings uses the same near-black gallery atmosphere as the artwork view. Its
 wallpaper preview is a centred 150 dp-wide phone frame rendered at the physical

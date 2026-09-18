@@ -11,10 +11,17 @@ import kotlinx.coroutines.flow.asStateFlow
 /** The tag every part of this app logs under; `adb logcat -s ArtWindow` follows a rotation end to end. */
 internal const val LOG_TAG = "ArtWindow"
 
+/** Where [Met.fetch] is within one attempt, detailed enough for [MainActivity] to narrate it. */
+sealed interface FetchProgress {
+    data class Searching(val subject: ArtworkSubject) : FetchProgress
+    data class Checking(val looked: Int) : FetchProgress
+    data class Downloading(val bytes: Long, val total: Long?) : FetchProgress
+}
+
 /** What a turn is doing, for [MainActivity] to show. */
 sealed interface Status {
     data object Idle : Status
-    data object Fetching : Status
+    data class Fetching(val progress: FetchProgress? = null) : Status
     data object Applying : Status
     data object SavingFavourite : Status
     data class Failed(val message: String) : Status
@@ -45,14 +52,19 @@ object Rotation {
             val today = LocalDate.now()
             if (!force && !state.isDue(today)) return
 
-            _status.value = Status.Fetching
+            _status.value = Status.Fetching()
             try {
                 val screen = context.screen()
                 val preferences = WallpaperPreferencesStore(context).load()
                 val met = Met(context.cacheDir)
                 // The shown work is the one tomorrow must avoid. Favourite copies keep
                 // their met-{id} name precisely so the source can recognise them here.
-                val artwork = met.fetch(state.shownArtwork, screen, preferences)
+                val artwork = met.fetch(
+                    state.shownArtwork,
+                    screen,
+                    preferences,
+                    onProgress = { _status.value = Status.Fetching(it) },
+                )
                 Wallpaper.pin(context, artwork.path, screen, preferences)
                 state.recordFetched(artwork, today)
                 met.discardAllBut(artwork.path)

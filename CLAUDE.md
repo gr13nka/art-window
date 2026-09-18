@@ -386,7 +386,9 @@ matter across the boundary:
 - **The Met protocol is duplicated on purpose, not by accident.** `Met.kt`
   repeats the rules in `src/art/met.rs` rather than calling into Rust; a change to
   the search query, the `User-Agent`, or the `met-{id}.{ext}` filename convention
-  belongs in both files.
+  belongs in both files. The subject preference and the religious-scene filter are
+  the deliberate exception — Android-only for now, so `src/art/met.rs` still asks
+  for landscapes only and has no religious filter to duplicate.
 
 ## Planned, not built
 

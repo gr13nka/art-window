@@ -24,10 +24,12 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -194,6 +196,22 @@ private fun MainActivity.ArtWindowApp(context: Context) {
                             .size(width = 220.dp, height = 44.dp),
                     ) {
                         Text(if (status is Status.Fetching) "Fetching…" else "Next picture")
+                    }
+                    (status as? Status.Fetching)?.let { fetching ->
+                        val downloading = fetching.progress as? FetchProgress.Downloading
+                        val total = downloading?.total
+                        val progressModifier = Modifier
+                            .align(Alignment.CenterHorizontally)
+                            .width(220.dp)
+                            .padding(top = 8.dp)
+                        if (downloading != null && total != null && total > 0) {
+                            LinearProgressIndicator(
+                                progress = { (downloading.bytes.toFloat() / total.toFloat()).coerceIn(0f, 1f) },
+                                modifier = progressModifier,
+                            )
+                        } else {
+                            LinearProgressIndicator(modifier = progressModifier)
+                        }
                     }
                     Text(
                         text = statusLine(status, owed = State(context).isDue(LocalDate.now())),
@@ -433,12 +451,41 @@ private fun NavigationIcon(destination: Destination, color: Color) {
 }
 
 private fun statusLine(status: Status, owed: Boolean): String = when (status) {
-    is Status.Fetching -> "Fetching…"
+    is Status.Fetching -> fetchingStatusLine(status.progress)
     is Status.Applying -> "Applying wallpaper…"
     is Status.SavingFavourite -> "Updating favourites…"
     is Status.Failed -> status.message
     is Status.Idle -> if (owed) "Today's painting arrives on the next Wi-Fi check" else "A new painting arrives tomorrow"
 }
+
+private fun fetchingStatusLine(progress: FetchProgress?): String = when (progress) {
+    null -> "Fetching…"
+    is FetchProgress.Searching -> "Searching the Met for ${progress.subject.pluralName}…"
+    is FetchProgress.Checking -> {
+        val painting = if (progress.looked == 1) "painting" else "paintings"
+        "Looked at ${progress.looked} $painting…"
+    }
+    is FetchProgress.Downloading -> {
+        val done = progress.bytes / BYTES_PER_MB
+        val total = progress.total
+        if (total != null && total > 0) {
+            "Downloading %.1f of %.1f MB…".format(done, total / BYTES_PER_MB)
+        } else {
+            "Downloading %.1f MB…".format(done)
+        }
+    }
+}
+
+/** Lowercase plural for [fetchingStatusLine]; [ArtworkSubject] itself only names singular queries. */
+private val ArtworkSubject.pluralName: String
+    get() = when (this) {
+        ArtworkSubject.LANDSCAPE -> "landscapes"
+        ArtworkSubject.SEASCAPE -> "seascapes"
+        ArtworkSubject.STILL_LIFE -> "still lifes"
+        ArtworkSubject.CITY -> "city views"
+    }
+
+private const val BYTES_PER_MB = 1024.0 * 1024.0
 
 private const val TARGET_PREVIEW_WIDTH = 720
 
