@@ -12,6 +12,7 @@ file, and how to remove it.
 - [Use](#use)
 - [Settings](#settings)
 - [Uninstall](#uninstall)
+- [Releasing](#releasing)
 - [Credits](#credits)
 
 ## Status
@@ -26,6 +27,13 @@ The build requires Rust 1.88 or newer.
 
 ### macOS
 
+**From a release:** open the DMG and drag Art Window into Applications. The app
+is ad-hoc signed rather than notarized, so the first launch needs right-click →
+Open, or `xattr -dr com.apple.quarantine "/Applications/Art Window.app"`.
+Universal binary, macOS 11 or newer.
+
+**From source:**
+
 ```sh
 ./macos/install.sh
 ```
@@ -37,7 +45,17 @@ Open the app to put its framed-picture icon in the menu bar.
 
 ### Linux/GNOME
 
-Install GTK and D-Bus development files, then run the user-local installer:
+**From a release:** needs GTK 3 at runtime — any GNOME desktop already has it —
+and glibc 2.35 or newer (Ubuntu 22.04, Debian 12, or newer), x86_64 only.
+
+```sh
+tar -xzf art-window-*-linux-x86_64.tar.gz
+cd art-window-*-linux-x86_64
+./install.sh
+```
+
+**From source:** install GTK and D-Bus development files, then run the
+user-local installer:
 
 ```sh
 # Debian or Ubuntu
@@ -68,8 +86,13 @@ for the exact behavior and diagnostic commands.
 
 ### Android
 
-Needs the Android SDK plus JDK 17, and a phone with USB debugging enabled. Then
-run `./android/install.sh` to build and install the debug APK.
+**From a release:** download the APK on the phone, allow the browser to install
+unknown apps, then open it. Android 11 or newer (minSdk 30). Releases are signed
+with one key, so each installs over the last.
+
+**From source:** needs the Android SDK plus JDK 17, and a phone with USB
+debugging enabled. Then run `./android/install.sh` to build and install the
+debug APK.
 
 It replaces both the home and lock screen wallpaper, and — unlike the desktop —
 fills the screen rather than letterboxing, picking only paintings tall enough for
@@ -211,6 +234,40 @@ rm -rf ~/.config/artwindow ~/.local/share/artwindow ~/.cache/artwindow
 
 Adjust those paths if the installer or XDG directories were overridden. The
 wallpaper stays as it is; choose another in system settings to change it back.
+
+## Releasing
+
+Bump `version` in `Cargo.toml`, then run `cargo build` so `Cargo.lock` follows.
+Commit both, then tag and push:
+
+```sh
+git tag vX.Y.Z
+git push origin vX.Y.Z
+```
+
+The [release workflow](../.github/workflows/release.yml) checks that the tag
+matches the `Cargo.toml` version, then builds and publishes the macOS DMG, the
+Linux tarball, the Android APK, and a `SHA256SUMS` file against the tag on
+GitHub. The Android `versionCode` is derived as `major*10000 + minor*100 +
+patch`, so every release must increase the version.
+
+**One-time keystore setup**, for signing the Android release build:
+
+```sh
+keytool -genkeypair -v -keystore art-window.jks -keyalg RSA -keysize 4096 \
+  -validity 10000 -alias art-window
+base64 -i art-window.jks | gh secret set ANDROID_KEYSTORE_BASE64
+gh secret set ANDROID_KEYSTORE_PASSWORD
+gh secret set ANDROID_KEY_ALIAS
+gh secret set ANDROID_KEY_PASSWORD
+```
+
+Keep `art-window.jks` out of the repo (gitignored) and backed up somewhere
+durable. Losing it is not recoverable: every user would have to uninstall the
+app, losing their favourites, before the next release could install over it.
+
+The DMG is ad-hoc signed, not notarized — notarizing would need a paid Apple
+Developer ID.
 
 ## Credits
 

@@ -4,6 +4,18 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
+// The tag version comes from Cargo.toml via CI, passed as -PappVersion=X.Y.Z; versionCode must
+// strictly increase across releases, and the signing config must stay the same so updates install
+// over each other rather than requiring an uninstall.
+val appVersion = providers.gradleProperty("appVersion").getOrElse("0.1.0")
+val versionParts = appVersion.split(".")
+require(versionParts.size == 3) { "appVersion must be major.minor.patch, got \"$appVersion\"" }
+val (versionMajor, versionMinor, versionPatch) = versionParts.map {
+    it.toIntOrNull() ?: error("appVersion must be three numeric parts, got \"$appVersion\"")
+}
+
+val keystorePath = providers.environmentVariable("ANDROID_KEYSTORE_PATH").orNull
+
 android {
     namespace = "dev.artwindow"
     compileSdk = 35
@@ -12,8 +24,29 @@ android {
         applicationId = "dev.artwindow"
         minSdk = 30
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = versionMajor * 10000 + versionMinor * 100 + versionPatch
+        versionName = appVersion
+    }
+
+    signingConfigs {
+        create("release") {
+            // Only populated when CI provides a keystore; a local assembleRelease is left unsigned.
+            if (!keystorePath.isNullOrEmpty()) {
+                storeFile = file(keystorePath)
+                storePassword = providers.environmentVariable("ANDROID_KEYSTORE_PASSWORD").getOrElse("")
+                keyAlias = providers.environmentVariable("ANDROID_KEY_ALIAS").getOrElse("")
+                keyPassword = providers.environmentVariable("ANDROID_KEY_PASSWORD").getOrElse("")
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            isMinifyEnabled = false
+            if (!keystorePath.isNullOrEmpty()) {
+                signingConfig = signingConfigs.getByName("release")
+            }
+        }
     }
 
     compileOptions {

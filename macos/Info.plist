@@ -12,6 +12,7 @@
 	<string>art-window</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
+	<!-- Template values; bundle.sh overwrites both keys below with the Cargo.toml version. -->
 	<key>CFBundleShortVersionString</key>
 	<string>0.1.0</string>
 	<key>CFBundleVersion</key>

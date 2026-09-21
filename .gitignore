@@ -8,3 +8,5 @@ android/.kotlin/
 android/local.properties
 android/**/build/
 android/out/
+*.jks
+*.keystore

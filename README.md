@@ -9,6 +9,7 @@ Art Window puts one public-domain painting on your desktop each day, fit to the
 screen with the margins filled black.
 
 [![CI](https://img.shields.io/github/actions/workflow/status/gr13nka/art-window/ci.yml?style=flat-square)](https://github.com/gr13nka/art-window/actions/workflows/ci.yml)
+[![release](https://img.shields.io/github/v/release/gr13nka/art-window?style=flat-square)](https://github.com/gr13nka/art-window/releases/latest)
 ![platforms](https://img.shields.io/badge/macOS%20%C2%B7%20GNOME%20%C2%B7%20Android-8b8b8b?style=flat-square)
 ![rust](https://img.shields.io/badge/rust-1.88%2B-8b8b8b?style=flat-square)
 
@@ -34,6 +35,10 @@ proportions or crops one to fill. The phone is the deliberate exception below.
 > --once` and show me the painting it printed.
 
 ## Quick start
+
+A DMG, a Linux tarball and an Android APK are on the
+[latest release page](https://github.com/gr13nka/art-window/releases/latest); the
+commands below build from source instead.
 
 Rust 1.88 or newer.
 
@@ -66,6 +71,9 @@ picks only paintings tall enough for that to look right.
 ```sh
 ./android/install.sh    # builds the debug APK and installs it over adb
 ```
+
+A signed APK is also on the
+[latest release page](https://github.com/gr13nka/art-window/releases/latest).
 
 [Art Window for Android →](docs/android.md)
 

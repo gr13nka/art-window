@@ -17,8 +17,10 @@ cargo test --all-targets
 cargo clippy --all-targets -- -D warnings
 cargo fmt --check
 ./macos/bundle.sh          # -> target/Art Window.app
+./macos/dmg.sh             # -> target/dist/Art-Window-<version>-macos.dmg (universal)
 ./linux/check-container.sh # Linux release build, tests, clippy and formatting
 ./linux/install.sh         # user-local GNOME binary, launcher and icon
+./linux/package.sh         # -> target/dist/art-window-<version>-linux-x86_64.tar.gz
 cd android && ./gradlew testDebugUnitTest assembleDebug
 ./android/install.sh       # build debug APK and adb install -r
 ```
@@ -264,6 +266,18 @@ it before touching `src/desktop/macos/wallpaper.rs`.
   version would fail to parse, and it would fail before there is a menu bar to say so
   in. `refresh_hours` is therefore still a field, typed `IgnoredAny`. Retiring a
   setting means moving it to that, not removing the line.
+- **`Cargo.toml`'s `version` is the only version there is.** The release workflow
+  refuses a tag that disagrees with it, `macos/bundle.sh` writes it over both keys
+  in the bundle's `Info.plist` — whose own values are a template and nothing else —
+  and CI hands it to Gradle as `-PappVersion`, where the Android `versionCode` is
+  derived as `major*10000 + minor*100 + patch`. Editing any of the others by hand
+  puts two versions in one tree. Releasing, and the keystore that must outlive it,
+  are in **`docs/GUIDE.md#releasing`**.
+- **`linux/install.sh` has to run from two layouts.** The release tarball holds it
+  beside a prebuilt binary; a checkout has no binary and builds one. So it looks
+  for a sibling `art-window` first, and every path it reads is resolved from its
+  own directory rather than from the repository root. Reaching for `$root/linux/…`
+  again breaks installing from a tarball, and nothing in the repo would notice.
 
 ## Deliberate omissions
 
