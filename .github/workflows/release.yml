@@ -134,6 +134,17 @@ jobs:
           path: dist
           merge-multiple: true
 
+      # The README links to releases/latest/download/<name>, which only
+      # resolves while asset names do not carry the version.
+      - name: Give assets stable names
+        working-directory: dist
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          mv "Art-Window-$VERSION-macos.dmg" art-window-macos.dmg
+          mv "art-window-$VERSION-linux-x86_64.tar.gz" art-window-linux-x86_64.tar.gz
+          mv "art-window-$VERSION-android.apk" art-window-android.apk
+
       - name: Checksums
         working-directory: dist
         run: sha256sum * > SHA256SUMS

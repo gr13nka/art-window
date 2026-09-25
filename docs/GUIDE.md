@@ -251,6 +251,11 @@ Linux tarball, the Android APK, and a `SHA256SUMS` file against the tag on
 GitHub. The Android `versionCode` is derived as `major*10000 + minor*100 +
 patch`, so every release must increase the version.
 
+Release assets are published under version-less names — `art-window-macos.dmg`,
+`art-window-linux-x86_64.tar.gz`, `art-window-android.apk` — because the README
+links straight to `releases/latest/download/<name>`. Renaming them breaks those
+links without any error.
+
 **One-time keystore setup**, for signing the Android release build:
 
 ```sh

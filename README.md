@@ -10,10 +10,10 @@ screen with the margins filled black.
 
 [![CI](https://img.shields.io/github/actions/workflow/status/gr13nka/art-window/ci.yml?style=flat-square)](https://github.com/gr13nka/art-window/actions/workflows/ci.yml)
 [![release](https://img.shields.io/github/v/release/gr13nka/art-window?style=flat-square)](https://github.com/gr13nka/art-window/releases/latest)
-![platforms](https://img.shields.io/badge/macOS%20%C2%B7%20GNOME%20%C2%B7%20Android-8b8b8b?style=flat-square)
+[![macOS](https://img.shields.io/badge/macOS-DMG-8b8b8b?style=flat-square)](https://github.com/gr13nka/art-window/releases/latest/download/art-window-macos.dmg) [![GNOME](https://img.shields.io/badge/GNOME-tarball-8b8b8b?style=flat-square)](https://github.com/gr13nka/art-window/releases/latest/download/art-window-linux-x86_64.tar.gz) [![Android](https://img.shields.io/badge/Android-APK-8b8b8b?style=flat-square)](https://github.com/gr13nka/art-window/releases/latest/download/art-window-android.apk)
 ![rust](https://img.shields.io/badge/rust-1.88%2B-8b8b8b?style=flat-square)
 
-[Guide](docs/GUIDE.md) · [Android](docs/android.md) · [The Met's API](https://metmuseum.github.io/)
+[macOS](https://github.com/gr13nka/art-window/releases/latest/download/art-window-macos.dmg) · [GNOME](https://github.com/gr13nka/art-window/releases/latest/download/art-window-linux-x86_64.tar.gz) · [Android](https://github.com/gr13nka/art-window/releases/latest/download/art-window-android.apk) · [Guide](docs/GUIDE.md) · [The Met's API](https://metmuseum.github.io/)
 
 <img src="docs/images/hero.png" width="100%" alt="A laptop and a phone side by side: the laptop hangs a round gilt-framed panel painting whole, with black margins either side; the phone has a tall van Gogh portrait filling its screen edge to edge">
 
