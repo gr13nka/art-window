@@ -29,4 +29,19 @@ class ReligiousFilterTest {
     fun `whole-word matching means Christmas is not mistaken for Christ`() {
         assertFalse(isReligious("Winter Evening before Christmas", emptyList()))
     }
+
+    @Test
+    fun `Danish religious titles are caught the same way as their English equivalents`() {
+        assertTrue(isReligious("Kristus på korset", emptyList()))
+        assertTrue(isReligious("Jomfru Maria med Barnet", emptyList()))
+        assertTrue(isReligious("En helgen i landskab", emptyList()))
+        assertTrue(isReligious("Apostel Peter", emptyList()))
+        assertTrue(isReligious("En engel synger", emptyList()))
+        assertTrue(isReligious("Korsfæstelse", emptyList()))
+    }
+
+    @Test
+    fun `madonna already matches a Danish title without a separate Danish entry`() {
+        assertTrue(isReligious("Madonna med Barnet", emptyList()))
+    }
 }

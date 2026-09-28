@@ -195,9 +195,22 @@ ln -s "/Applications/Art Window.app/Contents/MacOS/art-window" ~/.local/bin/
 rewritten, so comments survive.
 
 ```toml
-# "met" for public-domain paintings from the Metropolitan Museum,
-# or a path to a folder of your own pictures.
-source = "met"
+# "museums" for public-domain paintings from the Met, the National Gallery of
+# Art, the Cleveland Museum of Art and SMK, "met" to search the Metropolitan
+# Museum's collection live instead, or a path to a folder of your own pictures.
+source = "museums"
+```
+
+`"museums"` is the default for new installs: a prebuilt, pixel-verified list of
+paintings from all four museums, checked in at `catalogue/dist/paintings.tsv`
+and compiled straight into the binary, so a day's painting is one download
+rather than a live search. `"met"` keeps the older behaviour — a live search
+against just the Met's own collection — for a `config.toml` that already
+spells it out. Regenerate the list with:
+
+```sh
+python3 catalogue/build.py            # all four museums; the Met pass alone takes ~3 h, resumable
+python3 catalogue/build.py --only nga,cma,smk  # skip the Met for a quick rebuild of the rest
 ```
 
 One painting a day is the whole schedule and there is nothing to tune. A
@@ -276,5 +289,8 @@ Developer ID.
 
 ## Credits
 
-Artwork metadata and images come from [The Metropolitan Museum of Art Collection
-API](https://metmuseum.github.io/), under its open-access terms.
+Artwork metadata and images come from [The Metropolitan Museum of Art
+Collection API](https://metmuseum.github.io/), the [National Gallery of Art's
+open data](https://github.com/NationalGalleryOfArt/opendata), the [Cleveland
+Museum of Art's Open Access API](https://openaccess-api.clevelandart.org/),
+and [SMK's API](https://api.smk.dk/) — all public domain or CC0.

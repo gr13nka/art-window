@@ -57,6 +57,10 @@ android {
     buildFeatures {
         compose = true
     }
+
+    // catalogue/build.py writes the four-museum list to the repo root, not into this
+    // module, so it is bundled as an asset from where it lives rather than copied in.
+    sourceSets["main"].assets.srcDir("../../catalogue/dist")
 }
 
 kotlin {

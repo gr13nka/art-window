@@ -11,10 +11,12 @@ import kotlinx.coroutines.flow.asStateFlow
 /** The tag every part of this app logs under; `adb logcat -s ArtWindow` follows a rotation end to end. */
 internal const val LOG_TAG = "ArtWindow"
 
-/** Where [Met.fetch] is within one attempt, detailed enough for [MainActivity] to narrate it. */
+/** Where [Museums.fetch] is within one attempt, detailed enough for [MainActivity] to narrate it. */
 sealed interface FetchProgress {
-    data class Searching(val subject: ArtworkSubject) : FetchProgress
-    data class Checking(val looked: Int) : FetchProgress
+    // Carries no subject or artist: nothing about a local filter is worth naming before
+    // a candidate is actually found, and the choice could be either now (see
+    // Museums.Choice).
+    data object Searching : FetchProgress
     data class Downloading(val bytes: Long, val total: Long?) : FetchProgress
 }
 
@@ -28,7 +30,7 @@ sealed interface Status {
 }
 
 /**
- * One turn of the rotation — the only place [Met.fetch] is ever called.
+ * One turn of the rotation — the only place [Museums.fetch] is ever called.
  *
  * Mirrors the desktop's `rotation::show`: the day only advances once the wallpaper is
  * actually up ([State.recordFetched] runs after [Wallpaper.pin] succeeds), so a
@@ -43,7 +45,7 @@ object Rotation {
      * Runs one turn if [force] or a picture is owed; does nothing if a turn is
      * already in flight, rather than queueing — the scheduler and *Next picture*
      * racing for the wallpaper would otherwise leave a loser writing into a cache
-     * the winner's [Met.discardAllBut] sweep already ran for.
+     * the winner's [Museums.discardAllBut] sweep already ran for.
      */
     fun turn(context: Context, force: Boolean) {
         if (!running.compareAndSet(false, true)) return
@@ -56,10 +58,10 @@ object Rotation {
             try {
                 val screen = context.screen()
                 val preferences = WallpaperPreferencesStore(context).load()
-                val met = Met(context.cacheDir)
+                val museums = Museums(context.cacheDir, Catalogue.load(context))
                 // The shown work is the one tomorrow must avoid. Favourite copies keep
-                // their met-{id} name precisely so the source can recognise them here.
-                val artwork = met.fetch(
+                // their {source}-{id} name precisely so keyOf can recognise them here.
+                val artwork = museums.fetch(
                     state.shownArtwork,
                     screen,
                     preferences,
@@ -67,7 +69,7 @@ object Rotation {
                 )
                 Wallpaper.pin(context, artwork.path, screen, preferences)
                 state.recordFetched(artwork, today)
-                met.discardAllBut(artwork.path)
+                museums.discardAllBut(artwork.path)
                 runCatching { Favourites(context).discardAllBut(artwork.path) }
                     .onFailure { Log.w(LOG_TAG, "cleaning favourites failed", it) }
                 _status.value = Status.Idle
@@ -126,7 +128,7 @@ object Rotation {
         val preferences = WallpaperPreferencesStore(context).load()
         Wallpaper.pin(context, artwork.path, context.screen(), preferences)
         state.recordChosen(artwork, LocalDate.now())
-        state.fetchedArtwork?.path?.let { Met(context.cacheDir).discardAllBut(it) }
+        state.fetchedArtwork?.path?.let { Museums(context.cacheDir, Catalogue.load(context)).discardAllBut(it) }
         favourites.discardAllBut(artwork.path)
     }
 

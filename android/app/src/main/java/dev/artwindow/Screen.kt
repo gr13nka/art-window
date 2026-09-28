@@ -7,9 +7,8 @@ import kotlin.math.min
 /**
  * Screen-relative placement and the default phone-shaped artwork tolerance.
  *
- * [mightHold] and [holds] retain the original crop-friendly policy used by the
- * Phone-shaped preference. [cover], [fit] and [canStretch] are the lower-level
- * geometry used by every rendering style.
+ * [holds] is the crop-friendly policy used by the Phone-shaped preference. [cover],
+ * [fit] and [canStretch] are the lower-level geometry used by every rendering style.
  *
  * Always portrait: the constructor sorts whatever a display reports into
  * [width] <= [height], so a landscape-shaped [android.view.Display.Mode] and a
@@ -19,15 +18,6 @@ import kotlin.math.min
 data class Screen private constructor(val width: Int, val height: Int) {
 
     val aspectRatio: Double = width.toDouble() / height
-
-    /**
-     * A cheap pass against a catalogue's stated size. Museum measurements describe
-     * the object (a stretcher, a scroll's mount), not the photograph, so this allows
-     * more slack than [place]'s pixel-exact verdict — enough that a painting only
-     * [place] would end up refusing rarely costs a download, without being so loose
-     * that it lets through shapes [place] would never accept.
-     */
-    fun mightHold(aspect: Double): Boolean = trimFor(aspect, aspectRatio) <= MAX_TRIM + SLACK
 
     /**
      * Whether a photograph of these proportions fills the screen within [MAX_TRIM].
@@ -86,9 +76,6 @@ data class Screen private constructor(val width: Int, val height: Int) {
     companion object {
         /** Neither axis of a placed image may lose more than this fraction of itself to the crop. */
         const val MAX_TRIM = 0.15
-
-        /** How much looser [mightHold] is than [place], since a catalogue's own numbers are unreliable. */
-        private const val SLACK = 0.05
 
         /** A photograph smaller than the screen by more than this is refused rather than upscaled soft. */
         const val MAX_ENLARGEMENT = 1.25

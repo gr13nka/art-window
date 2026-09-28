@@ -30,7 +30,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            source: SourceSpec::Met,
+            source: SourceSpec::Museums,
             refresh_hours: serde::de::IgnoredAny,
         }
     }
@@ -120,10 +120,12 @@ impl Config {
             concat!(
                 "# Art Window settings.\n",
                 "\n",
-                "# \"met\" for public-domain paintings from the Metropolitan Museum,\n",
-                "# or a path to a folder of your own pictures, e.g.\n",
+                "# \"museums\" for public-domain paintings from the Met, the National\n",
+                "# Gallery of Art, the Cleveland Museum of Art and SMK, \"met\" to search\n",
+                "# the Metropolitan Museum's collection live instead, or a path to a\n",
+                "# folder of your own pictures, e.g.\n",
                 "#   source = \"~/Pictures/Wallpapers\"\n",
-                "source = \"met\"\n",
+                "source = \"museums\"\n",
             ),
         )
         .with_context(|| format!("writing {}", path.display()))

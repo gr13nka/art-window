@@ -23,6 +23,7 @@ cargo fmt --check
 ./linux/package.sh         # -> target/dist/art-window-<version>-linux-x86_64.tar.gz
 cd android && ./gradlew testDebugUnitTest assembleDebug
 ./android/install.sh       # build debug APK and adb install -r
+python3 catalogue/build.py  # regenerate the museum list (Met pass takes ~3 h, resumable)
 ```
 
 Run `./gradlew --stop` after a Gradle build, and never run two Gradle builds at
@@ -305,11 +306,29 @@ Paintings) — an unfiltered collection of 490,000 objects is mostly coins and
 textiles.
 
 The search asks that department for `q=landscape` rather than `q=painting`, because
-a generic query there comes back mostly portraits. The word is then looked for a
-second time, in each candidate's title and catalogue tags: a search for landscapes
-still turns up paintings of people standing in one, and a candidate that reads as a
-portrait is skipped for the next of the eight. Subject only — see the omission
-above; nothing looks at the shape of the picture.
+a generic query there comes back mostly portraits. `met.rs` never re-checks a
+candidate's title or tags for "landscape" itself — the live search already
+narrowed to it — only for whether the candidate reads as a portrait despite
+matching, which is skipped for the next of the eight. Subject only — see the
+omission above; nothing looks at the shape of the picture.
+
+`catalogue/build.py` draws from four museums instead of one: the Met, the
+National Gallery of Art (Washington), the Cleveland Museum of Art and SMK
+(Denmark) — all public domain or CC0, all reachable over plain HTTPS with no
+auth. Only the Met sits behind Imperva, which throttles an unfamiliar client to
+roughly 80 requests a minute; `catalogue/http.py`'s `PacedClient` is the one
+place that paces every host (2 s between requests to the Met's
+`collectionapi`, 1 s to the rest) and backs off on a 403 or 429, so no source
+module has to remember any of that itself. NGA and Cleveland need no
+per-object request at all — their open data already carries everything a row
+needs — which is why only the Met pass takes hours. SMK's search deliberately
+omits `lang=en`: passing it makes the API match nothing, so its titles and
+tags come back in Danish — see **Android** below and `docs/android.md`.
+
+A fifth source, `wmc`, adds Wikimedia Commons, whose rows carry a twelfth
+`artist` column the other four leave empty. `art/museums.rs` parses it but
+otherwise ignores it — picking by artist is an Android-only feature, not a
+desktop one; see `docs/android.md`.
 
 ## The resident app
 
@@ -397,12 +416,29 @@ matter across the boundary:
   `tryLock` rather than queuing a second attempt behind the first.
 - **The day is a calendar comparison, never a countdown.** `State.isDue` compares
   `LocalDate` epoch days — the same rule as the desktop's `is_due`.
-- **The Met protocol is duplicated on purpose, not by accident.** `Met.kt`
-  repeats the rules in `src/art/met.rs` rather than calling into Rust; a change to
-  the search query, the `User-Agent`, or the `met-{id}.{ext}` filename convention
-  belongs in both files. The subject preference and the religious-scene filter are
-  the deliberate exception — Android-only for now, so `src/art/met.rs` still asks
-  for landscapes only and has no religious filter to duplicate.
+- **The list is generated, never hand-edited, and applies only objective gates.**
+  `catalogue/build.py` — a separate, offline pipeline, see **External services**
+  above — walks the Met, the National Gallery of Art (Washington), the Cleveland
+  Museum of Art and SMK (Denmark) and writes `catalogue/dist/paintings.tsv`:
+  checked in, compiled straight into the desktop binary and bundled as an Android
+  asset. It keeps only what is public domain or CC0, catalogued as a painting, has
+  a direct JPEG, is at least 2000 px on its long side, and names a known region —
+  nothing about subject, portrait, religious content or shape, and the pixel size
+  it records is verified at build time rather than trusted from catalogue metadata.
+- **Selection rules are duplicated on purpose, like the Met protocol used to be.**
+  Subject matching — including the Danish words SMK's Danish-language records need
+  — and the portrait exclusion live twice: in `Catalogue.kt` on Android and in
+  `src/art/museums.rs` on the desktop. Shape filtering and the religious-scene
+  filter stay Android-only, per the exceptions named in **Deliberate omissions**
+  above. Rather than one side calling into the other, each keeps its own copy,
+  so a change to a word list has to be made in both files on purpose.
+- **A downloaded file's prefix says who owns it.** The desktop writes
+  `museums-{source}-{id}.{ext}`; the distinct `museums-` prefix is load-bearing —
+  it is what keeps this source's `key_of` and the older `met` source's `id_of`
+  from ever recognising each other's downloads as their own to delete. Android
+  instead keys a file by `{source}-{id}`, with a legacy `met-{id}` name (from
+  before the four-museum catalogue existed) still parsing the same way, since
+  `"met"` remains one of its recognised museum codes.
 
 ## Planned, not built
 

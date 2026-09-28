@@ -152,7 +152,7 @@ private fun normalized(file: File?): File? = file?.let { path ->
 private fun sameFile(left: File?, right: File?): Boolean = normalized(left) == normalized(right)
 
 internal fun sameArtwork(left: Artwork, right: Artwork): Boolean {
-    val leftId = idOf(left.path)
-    val rightId = idOf(right.path)
-    return sameFile(left.path, right.path) || (leftId != null && leftId == rightId)
+    val leftKey = keyOf(left.path)
+    val rightKey = keyOf(right.path)
+    return sameFile(left.path, right.path) || (leftKey != null && leftKey == rightKey)
 }

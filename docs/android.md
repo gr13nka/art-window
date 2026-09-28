@@ -13,130 +13,222 @@ clock, a `config.toml` a human edits, and a login item. None of that exists on
 Android, which has its own scheduler, its own wallpaper API and no menu bar to
 hang anything off.
 
-What *could* be shared is smaller than it looks — the Met protocol in
-`src/art/met.rs` is about 150 lines: build a search URL, walk candidates, decide
-what to skip, download, name the file. Sharing that would mean putting it behind
-`cargo-ndk`, building for four ABIs, and writing a JNI bridge to carry strings and
-byte arrays across it — machinery bigger than the code it would share, for a
-platform that already has `HttpURLConnection` and `org.json` built in.
+What *could* be shared is smaller than it looks, and most of it already is
+one thing: `catalogue/build.py`, a single Python pipeline that walks all four
+museums and writes `catalogue/dist/paintings.tsv` — the desktop compiles that
+file in, Android bundles it as an asset, and neither platform repeats any of
+the network logic that built it. What's left is judgment a build script
+can't make once and hand over: which catalogue entry is a landscape, a
+portrait or a religious scene, and what shape a screen wants. Sharing *that*
+would mean putting Kotlin logic behind `cargo-ndk`, building for four ABIs,
+and writing a JNI bridge to carry it across — machinery bigger than the couple
+of hundred lines of rules it would share, for a platform that already has
+`HttpURLConnection` and `org.json` built in.
 
-The cost of not sharing it is that the Met's protocol now lives twice: once in
-`src/art/met.rs`, once in `android/app/src/main/java/dev/artwindow/Met.kt`. A
-change to the search query, the `User-Agent`, or the `met-{id}.{ext}` filename
-convention belongs in both files, and each carries a comment pointing at the
-other so that isn't easy to forget.
+The cost of not sharing it is that those rules live twice: once in
+`src/art/museums.rs`, once in `android/app/src/main/java/dev/artwindow/Catalogue.kt`.
+A change to a subject's word list — including the Danish ones SMK's
+Danish-language records need, see **Subject choice and the religious filter**
+below — or to the portrait exclusion belongs in both files, and each carries a
+comment pointing at the other so that isn't easy to forget. What Android's
+`Museums.kt` (renamed from `Met.kt` along with the rest of the app, now that a
+turn can draw from any of the four museums) duplicates is much smaller: the
+`{source}-{id}.{ext}` filename convention a download has to carry so `keyOf`
+can recognise this module's own work later — the same reasoning as the
+desktop's `museums-` prefix (see `CLAUDE.md`'s Android invariants).
 
 ## Artwork shape is a preference on Android
 
 The desktop's **No filtering by the shape of a picture** rule (see the main
 `CLAUDE.md`) holds because fit-plus-letterbox renders any painting well. A phone
-screen is roughly 0.45 units wide per unit of height, close to nothing in the
-Met's collection, so the Android default remains **Phone-shaped**: paintings that
+screen is roughly 0.45 units wide per unit of height, close to nothing in any of
+the four museums' collections, so the Android default remains **Phone-shaped**: paintings that
 Zoom can fill without grotesque cropping. Settings can broaden that pool to
 include near-square work (up to a 1.25 width/height ratio) or any shape, including
 fully horizontal work. This artwork-shape choice is independent of the rendering
 style.
 
-## The numbers behind the pool
+## The local catalogue
 
-Measured 2026-09-10 by sampling the Met's API:
+A turn no longer touches a museum's live API to choose a painting. The pool is
+`catalogue/dist/paintings.tsv`, a UTF-8 TSV built offline at the repo root by
+`catalogue/build.py` (Python 3, stdlib only) — a pipeline shared with the
+desktop, which compiles the same file straight in. It draws from four
+museums now, not the Met alone: the Met, the National Gallery of Art
+(Washington), the Cleveland Museum of Art and SMK (Denmark). It is checked in
+and never hand-edited; regenerate it with `python3 catalogue/build.py` (see
+`CLAUDE.md`'s Commands and External services sections for pacing, licensing
+and how long a Met pass takes — about three hours, resumable). The Gradle
+build bundles it straight from `catalogue/dist/` as an asset
+(`sourceSets["main"].assets.srcDir("../../catalogue/dist")` in
+`build.gradle.kts`), so there's no copy inside `android/` to fall out of sync.
 
-- Only about 1–4% of sampled European paintings are phone-shaped
-  (width/height between 0.40 and 0.53). Asian hanging scrolls run around 18% —
-  a scroll is already a tall, narrow format.
-- A `q=landscape` search across Asian origins also returns ceramics, prints and
-  textiles. The search therefore
-  asks for `medium=Paintings`, which removes them before a single lookup is
-  spent. The `classification == "Paintings"` check on each record stays as a guard.
-- Across the whole pipeline, about **one candidate in sixty** ends up fitting.
-  The first run on a real phone looked at 120 and found none.
+The build applies only **objective** gates: public domain or CC0, catalogued
+as a painting, has a direct JPEG, is at least 2000 px on its long side, and
+names a region the shared `regions.py` recognises. Crucially, the width and
+height in each row are the photograph's *real, verified* pixel size — parsed
+from the JPEG itself at build time, never trusted from a museum's own
+catalogue record — which is what lets `Catalogue.candidates` decide shape and
+renderability outright. There is no live measurement, no web-sized preview
+and no "does this actually hold up" step left to run, because the numbers are
+already known to be correct. Subject, portrait, religious-content and shape
+decisions all stay out of the build and in the apps, same as before —
+`Catalogue.kt` is still the one place on Android that makes them (see
+**Subject choice and the religious filter** below).
+
+Because every candidate's pixels are already verified, a turn spends exactly
+one HTTP request in the ordinary case: `Museums.fetch` shuffles the entries
+`Catalogue.candidates` returns, downloads the first one's `imageUrl`, and
+checks that the decoded size is within 2% of what the catalogue promised
+(`TOLERANCE`). A mismatch — a museum having re-encoded an image between the
+catalogue's build and this download — deletes the file and moves to the next
+candidate, up to `MAX_ATTEMPTS = 3`; when nothing in `MAX_ATTEMPTS` downloads
+holds up, the error names how many were tried. If the catalogue has nothing
+at all matching the chosen region, subject and shape settings, `fetch` fails
+fast with "No paintings in the catalogue match these settings" instead of
+spending a download.
+
+Each museum's CDN still gets its own pacing (`REQUEST_GAP_MS = 750` between
+requests to the same host) and the same cookie handling as before, and a 403
+or 429 is still a refusal aimed at this client rather than a complaint about
+one picture, so it's rethrown as `Refused` instead of trying the next
+candidate — hammering a client a CDN is already throttling would only extend
+the block. The message names the museum being asked ("The Metropolitan Museum
+of Art is refusing requests from this phone for now — try again later")
+rather than speaking of "a museum" in general, since it's the sentence a
+person actually reads if this reaches the screen.
 
 The default candidate pool is **Europe and Asia**. Settings can instead select
 any combination of Europe, Asia, Africa, North America, South America and
-Oceania. These are artwork origins from the Met's `geoLocation` search filter,
-not artist nationalities. A smaller selected pool gets first use of the fetch
-budget; if it produces no fit, the remaining budget falls back to Europe and
-Asia rather than silently widening to every region.
+Oceania — the same origin categories `regions.py` sorts every source's rows
+into, not artist nationalities — or leave Origins at **Any**, which admits every
+region. See **The filter model** below for how Origins, Shape, Subjects and
+Artists combine. How much a region actually has to offer depends on which
+museum contributed it: SMK's collection is almost entirely European, the
+Cleveland Museum of Art's open-access paintings skew heavily Asian, and the
+National Gallery of Art splits between Europe and North America — so pooling
+four museums instead of one changes what's available for a given
+region/subject/shape combination far more than it changes any single one's
+share (see **Availability** below).
 
-## Subject choice and the religious filter
+## The filter model
 
-Settings can choose any combination of Landscape, Seascape, Still life and City —
-`ArtworkSubject` in `WallpaperPreferences.kt`, defaulting to Landscape alone. Each
-subject stands for several Met search queries rather than one: Seascape also asks
-for "marine" and "boats", Still life also asks for "flowers", City also asks for
-"cityscape" and "street" — the thinner a subject's pool, the more queries it needs
-to fill it. `Met.fetch` picks one chosen subject at random per attempt and
-searches its queries across the chosen regions; the "Searching" progress line
-names that one subject, because a single attempt only ever pursues one.
+Settings has four sections — **Shape**, **Origins**, **Subjects** and
+**Artists** — and a painting is offered only when it passes every one of them:
+sections are **ANDed together**, while the options checked within one section
+are **ORed** (checking both Landscape and Seascape widens Subjects to either).
+**An empty selection in a section means Any: that section filters nothing.**
+Shape already had this in `ArtworkShape.ANY`; Origins, Subjects and Artists each
+get their own explicit **Any** option, always the first and only always-shown
+row in their list. `Catalogue.matching` is the one place that applies all four —
+`candidates` shuffles what it returns, and `Museums.fetch` downloads from that
+shuffled list directly, with no per-choice draw or fallback pass: picking Vrubel
+with Subjects at Any gives only Vrubel; picking Vrubel with Landscape gives only
+Vrubel's landscapes, because both sections must pass at once. The portrait
+exclusion and the religious-scene toggle (see below) apply to every entry
+regardless of which sections it passed.
 
-The region fallback generalises the same way it always widened for regions alone.
-It now fires whenever the chosen regions omit the default pool *or* more than one
-subject is chosen, and the fallback pass searches every chosen subject — never a
-subject the user did not select — across the chosen regions widened to include
-Europe and Asia.
+Each of the four sections in Settings is **foldable**: a header names the
+section and summarises its current selection ("Europe, Asia", "Any subject",
+"Mikhail Vrubel"), and tapping it folds or unfolds the option list beneath.
+Fold state survives rotation (`rememberSaveable`); all four start unfolded
+except Artists, which starts folded when it's at Any, since there's nothing to
+review in a section nobody has narrowed.
 
-The religious-scene filter is a toggle, off by default. When it's on, `fetchObject`
-also skips a candidate whose title or tags match `isReligious`'s word list: Christ,
-Mary and the saints, biblical scenes and figures, and a few non-Christian
-equivalents (Buddha, bodhisattva, deities) — matched as whole words, case-
-insensitively, so "Christmas" is never mistaken for "Christ". "St." is left out of
-the list on purpose: it would also hide views of St. Petersburg and similar
-cityscapes, and the Met's own tags ("Saints", "Virgin Mary", "Christ", "Angels")
-catch most of what excluding it gives up. The word list lives in `isReligious` in
-`Met.kt`; extending it means editing that one place. This subject preference and
-the religious filter are Android-only for now — see the exception CLAUDE.md's
+Settings can choose any combination of Landscape, Seascape and Still life —
+`ArtworkSubject` in `WallpaperPreferences.kt`, defaulting to Landscape alone on a
+fresh install, Any (empty) being equally valid afterwards. Each subject stands
+for several match queries rather than one: Landscape also matches "cityscape",
+"city" and "street" — town and street views were once their own subject and now
+fold into Landscape's own pool — Seascape also matches "marine" and "boats",
+Still life also matches "flowers".
+
+SMK's records come back in Danish (see **External services** in `CLAUDE.md`), so
+every query list also carries the Danish words for the same subject — "landskab"
+and "udsigt" for Landscape, "havn" and "strand" for Seascape, "blomster" for Still
+life, and so on; a plain Danish title never contains the English word at all.
+Danish "by" (town) is deliberately left out of Landscape's list: it collides with
+the English preposition "by", which would flood the Met, NGA and Cleveland's
+English-language titles with false matches. See the doc comment on
+`ArtworkSubject` for the full lists and reasoning.
+
+## Artist choice
+
+Settings can also choose specific artists — one chip per name `Catalogue.artists()`
+finds in the catalogue, currently just Mikhail Vrubel. `WallpaperPreferences.artworkArtists`
+holds the choice as plain strings rather than an enum like `ArtworkSubject`, because
+the artist list is catalogue data, not a fixed set this app defines; an artist name
+that no longer appears in a later catalogue is simply tolerated and matches nothing,
+never dropped from the stored preference the way a retired subject or region name is
+(see `artistValues` in `WallpaperPreferences.kt`). Artists defaults to Any even on a
+fresh install — there is no curated artist default the way there is for regions and
+subjects.
+
+Choosing an artist narrows Artists to that artist's own work, same as any other
+section — combined with Subjects at Landscape, only that artist's landscapes
+qualify, because both sections must pass (see **The filter model** above). This
+is a deliberate change from an earlier build, where a chosen artist and a chosen
+subject were alternatives (either counted): three turns in four came out as
+whatever the largest OR-ed pool was, drowning out a specific artist choice.
+
+The artists themselves come from `catalogue/artists.json`, a small config
+`catalogue/build.py` reads to pull specific Wikimedia Commons categories into the
+build (one row per artist, its region and the Commons categories that hold their
+work) — a fifth source (`wmc`) alongside the four museums, distinguished in
+`paintings.tsv` by a twelfth `artist` column the other four leave empty. See
+`catalogue/build.py` for the pipeline side of this; `Catalogue.kt` only ever reads
+the column.
+
+### Availability
+
+Some subject/region/shape combinations have nothing behind them at all. A
+landscape painting runs wide far more often than tall, so Landscape and
+Phone-shaped rarely coincide — checked against a build made 2026-09-25 (SMK,
+NGA and Cleveland; the Met pass was still running): not one of the roughly 620
+paintings Landscape matches across Europe — English or Danish — is
+phone-shaped. Europe + Landscape + Phone-shaped is expected to stay empty, or
+close to it, even once the Met's own paintings join the list — the format
+problem is about what a landscape *is*, not which museum photographed it.
+
+`Catalogue.availableRegions`, `availableSubjects` and `availableArtists` each
+answer, for one section, which of its options still have at least one candidate
+— checking an option **alone within its own section, with the other three
+sections held at whatever Settings currently has staged**. Choosing Landscape
+alone in Subjects while Vrubel is staged in Artists asks whether Vrubel has any
+landscapes, not whether the catalogue has landscapes at all. Each is checked one
+option at a time with `Sequence.any`, stopping at the first match, rather than
+building `candidates`' full shuffled list — only presence, not the entry,
+matters here. Settings recomputes all three, and `anyMatch` besides, off the
+main thread on every staged change to any section, and hides an option a
+section's availability call doesn't return; **Any is always shown**, whatever
+the other sections are staged to.
+
+When nothing at all passes every currently staged section, `Catalogue.anyMatch`
+says so, Settings shows "Nothing matches these filters — set one section to
+Any", and Apply stays disabled until something changes — the always-visible Any
+option in every section is the guaranteed way out of that state. `Museums.fetch`
+asks the same question by way of `candidates` coming back empty, and throws "No
+paintings match these filters" — there is no separate availability check to run
+first, because an empty `candidates` already means the same thing.
+
+The religious-scene filter is a toggle, off by default, and sits below the four
+sections rather than inside one of them, since it applies to all of them at
+once. When it's on,
+`Catalogue.candidates` skips a candidate whose title or tags match
+`isReligious`'s word list: Christ, Mary and the saints, biblical scenes and
+figures, a few non-Christian equivalents (Buddha, bodhisattva, deities), and a
+short run of Danish terms for the same handful of subjects ("kristus", "jomfru
+maria", "helgen", "apostel", "engel", "korsfæstelse" — "madonna" is already the
+same word in both languages) — matched as whole words, case-insensitively, so
+"Christmas" is never mistaken for "Christ". "St." is left out of the list on
+purpose: it would also hide views of St. Petersburg and similar townscapes, and
+the museums' own tags ("Saints", "Virgin Mary", "Christ", "Angels") catch most
+of what excluding it gives up. The word list, and the matching portrait
+exclusion (`isPortrait`, itself widened with Danish "portræt"), live in
+`Catalogue.kt` — the one place that makes this judgment, now that there is no
+live check left to keep in step with it. This subject preference and the
+religious filter are Android-only for now — see the exception CLAUDE.md's
 Android section names.
-
-## Pre-filter, then verdict
-
-The catalogue and the photograph do not always agree on proportions, and how
-much they disagree depends on the department:
-
-- For European paintings, the catalogue `measurements` "Overall" figure (in cm)
-  matches the photograph's proportions to within about 0.03 — close enough to
-  trust.
-- For many Asian scrolls it does not. The catalogue lists several elements — "Image",
-  "Overall with mounting", "Overall with knobs" — and the photograph is sometimes
-  of the painted image and sometimes of the whole mounting, with nothing in the
-  record saying which. So any one element can be well off from what the photo
-  actually shows, and the pre-filter lets a candidate through if *any* element
-  passes.
-
-So each candidate passes three checks, cheapest first:
-
-1. **Catalogue, with slack.** The selected `ArtworkShape` asks whether any
-   catalogued element is close enough to be worth a look. Missing measurements
-   pass through because the photograph can still give the real verdict.
-2. **The web-sized copy's shape.** The same preference is run against
-   `primaryImageSmall`, a few hundred kilobytes with the photograph's real
-   proportions. In sampling, four of every five candidates that passed the
-   catalogue failed here. They were folding screens and triptychs that list one
-   tall panel among their measurements and are photographed whole. Without this
-   step each one cost a full original download, up to tens of megabytes on a
-   phone's data plan.
-3. **The original's pixels.** The downloaded original must match the selected
-   shape and have enough pixels for the chosen rendering style. This adds the
-   enlargement limit, which a web-sized copy cannot answer.
-
-A candidate that fails any step is discarded, and the search moves to the next
-one.
-
-## Sequential lookups
-
-Candidate object lookups run one at a time, not concurrently. This isn't a
-theoretical caution: bursts of parallel requests against the Met's API got
-blocked outright while sampling the numbers above. `Met.fetch` walks candidates
-in order, up to `CANDIDATES = 400` or a `BUDGET_MS` of 3 minutes, whichever comes
-first — the same shape as the desktop's own candidate loop and `BUDGET` in
-`src/art/met.rs`, for the same reason: a chain of requests needs an end, or a
-slow network turns into an indefinite wait with nothing telling the user why. At
-one fit in sixty, 400 makes running dry rare, and the budget is what usually
-binds.
-
-When nothing fits, the error says so ("none of N paintings fit a W×H screen"),
-and the last network error travels as its cause. The first version reported
-that last error alone. On a phone, that turned 120 wrong-shaped paintings into
-a misleading HTTP 404.
 
 ## Placement is baked into the pixels
 
@@ -167,14 +259,15 @@ dp high, with 8 dp selected-segment corners rather than a capsule silhouette.
 
 While a fetch is running, a 220 dp progress bar — the same width as the button —
 appears between **Next picture** and the status line. It's indeterminate while
-`Met.fetch` is searching or checking candidates, because the candidate count and
-time budget it narrates are only upper bounds, not a known amount of work; it
-switches to determinate, tracking bytes downloaded against the response's
-`Content-Length`, once a candidate has passed the catalogue and preview checks and
-its original is downloading. The pixel check on that original can still turn it
-away, and then the bar goes back to indeterminate. The status line narrates the same progress in words ("Searching the
-Met for seascapes…", "Looked at 37 paintings…", "Downloading 4.2 of 12.0 MB…")
-while the button itself just says "Fetching…". This also appears when the
+`Museums.fetch` is choosing among the local catalogue, because that step is a
+local filter with no length to report; it switches to determinate, tracking
+bytes downloaded against the response's `Content-Length`, once a candidate is
+actually downloading. A pixel mismatch discards that download and starts the
+next candidate's from zero, up to `MAX_ATTEMPTS`, rather than the bar going
+back to indeterminate — there is no separate checking step left to return to.
+The status line narrates the same progress in words ("Choosing a painting…",
+"Downloading 4.2 of 12.0 MB…") while the button itself just says "Fetching…".
+This also appears when the
 scheduled job runs the fetch, since `Rotation` is a singleton in the same process
 `MainActivity` reads its `StateFlow` from.
 
@@ -183,8 +276,10 @@ wallpaper preview is a centred 150 dp-wide phone frame rendered at the physical
 screen's aspect ratio. The four placement modes live in one slim horizontal
 strip, with extra blur or border controls revealed only for the selected mode.
 Blur preview rendering has no release-time debounce: every changed slider value
-updates the preview while the thumb is moving. Settings remain staged until
-**Apply changes** re-renders the current cached painting and saves them.
+updates the preview while the thumb is moving. Below that, Shape, Origins,
+Subjects and Artists are foldable sections — see **The filter model** above.
+Settings remain staged until **Apply changes** re-renders the current cached
+painting and saves them.
 
 The heart in the artwork preview copies the shown painting into durable app
 storage. **View favourites** opens a full-screen lazy gallery whose visible
@@ -194,13 +289,6 @@ without replacing the source painting recorded for the day, so normal rotation
 resumes on the next local day. If a favourite is chosen while a painting is
 already owed, that choice settles the day so an overdue job cannot immediately
 undo it.
-
-The Met search uses the paginated v1.1 endpoint. Android pages through each
-selected geography query, merges them, then shuffles candidates; the desktop
-client uses the same endpoint while retaining its European Paintings department
-query. Although the API describes `geoLocation` values separated by `|`, v1.1
-returned an empty pool for `Europe|Asia` while returning both regions separately.
-Keep the requests separate unless that behavior is verified to have changed.
 
 ## Scheduling
 

@@ -1,5 +1,6 @@
 package dev.artwindow
 
+import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Color as AndroidColor
 import androidx.compose.foundation.BorderStroke
@@ -40,9 +41,11 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
@@ -70,10 +73,12 @@ import kotlinx.coroutines.withContext
 
 @Composable
 fun SettingsScreen(
+    context: Context,
     artwork: Artwork?,
     screen: Screen,
     preferences: WallpaperPreferences,
     onPreferencesChange: (WallpaperPreferences) -> Unit,
+    onChoicesAvailable: (Boolean) -> Unit = {},
 ) {
     var preview by remember { mutableStateOf<Bitmap?>(null) }
     var commonColors by remember { mutableStateOf(emptyList<Int>()) }
@@ -81,6 +86,45 @@ fun SettingsScreen(
     val path = artwork?.path?.takeIf(File::isFile)
     val previewScreen = remember(screen) {
         Screen(PREVIEW_WIDTH, (PREVIEW_WIDTH / screen.aspectRatio).roundToInt())
+    }
+
+    // Which options each section can actually offer, computed off the main thread
+    // whenever a filter changes, since deciding this means walking the whole catalogue.
+    // Per-option availability holds the *other* sections at their currently staged
+    // values (see Catalogue.availableRegions and its siblings) — an option not returned
+    // here is hidden from its chip row, never removed from the staged preference itself.
+    // Optimistic region/subject defaults (everything available) avoid a flash of an
+    // empty chip row before the first computation lands; artists start empty since
+    // [allArtists] itself is empty until the catalogue loads, which already hides the
+    // Artists section.
+    var catalogue by remember { mutableStateOf<Catalogue?>(null) }
+    var allArtists by remember { mutableStateOf<List<String>>(emptyList()) }
+    var availableRegions by remember { mutableStateOf(ArtworkRegion.entries.toSet()) }
+    var availableSubjects by remember { mutableStateOf(ArtworkSubject.entries.toSet()) }
+    var availableArtists by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var nothingMatches by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        val loaded = withContext(Dispatchers.Default) { Catalogue.load(context) }
+        catalogue = loaded
+        allArtists = withContext(Dispatchers.Default) { loaded.artists() }
+    }
+    LaunchedEffect(
+        catalogue,
+        preferences.artworkRegions,
+        preferences.artworkSubjects,
+        preferences.artworkArtists,
+        preferences.artworkShape,
+        preferences.hideReligious,
+        screen,
+    ) {
+        val loaded = catalogue ?: return@LaunchedEffect
+        availableRegions = withContext(Dispatchers.Default) { loaded.availableRegions(preferences, screen) }
+        availableSubjects = withContext(Dispatchers.Default) { loaded.availableSubjects(preferences, screen) }
+        availableArtists = withContext(Dispatchers.Default) { loaded.availableArtists(preferences, screen) }
+        nothingMatches = withContext(Dispatchers.Default) { !loaded.anyMatch(preferences, screen) }
+    }
+    LaunchedEffect(nothingMatches) {
+        onChoicesAvailable(!nothingMatches)
     }
 
     LaunchedEffect(path, preferences) {
@@ -111,6 +155,24 @@ fun SettingsScreen(
     DisposableEffect(Unit) {
         onDispose { preview?.recycle() }
     }
+
+    // Fold state per section, kept across rotation and process death. All four start
+    // unfolded except Artists, which starts folded when it's at Any — there's nothing
+    // to review in a section nobody has narrowed.
+    var shapeExpanded by rememberSaveable { mutableStateOf(true) }
+    var originsExpanded by rememberSaveable { mutableStateOf(true) }
+    var subjectsExpanded by rememberSaveable { mutableStateOf(true) }
+    var artistsExpanded by rememberSaveable { mutableStateOf(preferences.artworkArtists.isNotEmpty()) }
+
+    val originsSummary = preferences.artworkRegions.takeIf { it.isNotEmpty() }
+        ?.sortedBy { it.ordinal }?.joinToString(", ") { regionLabel(it) }
+        ?: "Any region"
+    val subjectsSummary = preferences.artworkSubjects.takeIf { it.isNotEmpty() }
+        ?.sortedBy { it.ordinal }?.joinToString(", ") { subjectLabel(it) }
+        ?: "Any subject"
+    val artistsSummary = preferences.artworkArtists.takeIf { it.isNotEmpty() }
+        ?.sorted()?.joinToString(", ")
+        ?: "Any artist"
 
     Column(
         modifier = Modifier
@@ -265,86 +327,136 @@ fun SettingsScreen(
             }
         }
 
-        SectionTitle("Artwork shapes")
-        Text(
-            "This changes future downloads. It does not fetch a new painting when you apply.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f),
-            modifier = Modifier.padding(bottom = 8.dp),
-        )
-        ArtworkShape.entries.forEach { shape ->
+        // A painting must pass every section below — Shape, Origins, Subjects and
+        // Artists — to be offered; within a section, checking more than one option
+        // widens it. An empty section means Any: it filters nothing. Only Any is always
+        // shown in a section's option list — an option [availableRegions] and its
+        // siblings don't return is hidden, computed against what the other sections are
+        // currently staged to.
+        FoldableSection(
+            title = "Shape",
+            summary = shapeLabel(preferences.artworkShape),
+            expanded = shapeExpanded,
+            onToggle = { shapeExpanded = !shapeExpanded },
+        ) {
+            Text(
+                "This changes future downloads. It does not fetch a new painting when you apply.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f),
+                modifier = Modifier.padding(bottom = 8.dp),
+            )
+            ArtworkShape.entries.forEach { shape ->
+                SelectionRow(
+                    title = shapeLabel(shape),
+                    detail = shapeDetail(shape),
+                    selected = preferences.artworkShape == shape,
+                    onClick = { onPreferencesChange(preferences.copy(artworkShape = shape)) },
+                )
+            }
+        }
+
+        FoldableSection(
+            title = "Origins",
+            summary = originsSummary,
+            expanded = originsExpanded,
+            onToggle = { originsExpanded = !originsExpanded },
+        ) {
+            Text(
+                "Matches any region you check. Any allows every region.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f),
+                modifier = Modifier.padding(bottom = 8.dp),
+            )
             SelectionRow(
-                title = when (shape) {
-                    ArtworkShape.PHONE -> "Phone-shaped"
-                    ArtworkShape.NEAR_SQUARE -> "Include near-square"
-                    ArtworkShape.ANY -> "Any shape"
-                },
-                detail = when (shape) {
-                    ArtworkShape.PHONE -> "Tall paintings that need little cropping"
-                    ArtworkShape.NEAR_SQUARE -> "Tall, square, and slightly wide paintings"
-                    ArtworkShape.ANY -> "Also allow fully horizontal paintings"
-                },
-                selected = preferences.artworkShape == shape,
-                onClick = { onPreferencesChange(preferences.copy(artworkShape = shape)) },
+                title = "Any",
+                selected = preferences.artworkRegions.isEmpty(),
+                onClick = { onPreferencesChange(preferences.copy(artworkRegions = emptySet())) },
+            )
+            ArtworkRegion.entries.filter { it in availableRegions }.forEach { region ->
+                SelectionRow(
+                    title = regionLabel(region),
+                    selected = region in preferences.artworkRegions,
+                    onClick = {
+                        onPreferencesChange(
+                            preferences.copy(artworkRegions = toggled(preferences.artworkRegions, region)),
+                        )
+                    },
+                )
+            }
+        }
+
+        FoldableSection(
+            title = "Subjects",
+            summary = subjectsSummary,
+            expanded = subjectsExpanded,
+            onToggle = { subjectsExpanded = !subjectsExpanded },
+        ) {
+            Text(
+                "Matches any subject you check. Any allows every subject.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f),
+                modifier = Modifier.padding(bottom = 8.dp),
+            )
+            SelectionRow(
+                title = "Any",
+                selected = preferences.artworkSubjects.isEmpty(),
+                onClick = { onPreferencesChange(preferences.copy(artworkSubjects = emptySet())) },
+            )
+            ArtworkSubject.entries.filter { it in availableSubjects }.forEach { subject ->
+                SelectionRow(
+                    title = subjectLabel(subject),
+                    detail = subjectDetail(subject),
+                    selected = subject in preferences.artworkSubjects,
+                    onClick = {
+                        onPreferencesChange(
+                            preferences.copy(artworkSubjects = toggled(preferences.artworkSubjects, subject)),
+                        )
+                    },
+                )
+            }
+        }
+
+        if (allArtists.isNotEmpty()) {
+            FoldableSection(
+                title = "Artists",
+                summary = artistsSummary,
+                expanded = artistsExpanded,
+                onToggle = { artistsExpanded = !artistsExpanded },
+            ) {
+                Text(
+                    "An artist's own work is offered whatever its subject. Any allows every artist.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f),
+                    modifier = Modifier.padding(bottom = 8.dp),
+                )
+                SelectionRow(
+                    title = "Any",
+                    selected = preferences.artworkArtists.isEmpty(),
+                    onClick = { onPreferencesChange(preferences.copy(artworkArtists = emptySet())) },
+                )
+                allArtists.filter { it in availableArtists }.forEach { artist ->
+                    SelectionRow(
+                        title = artist,
+                        selected = artist in preferences.artworkArtists,
+                        onClick = {
+                            onPreferencesChange(
+                                preferences.copy(artworkArtists = toggled(preferences.artworkArtists, artist)),
+                            )
+                        },
+                    )
+                }
+            }
+        }
+
+        if (nothingMatches) {
+            Text(
+                "Nothing matches these filters — set one section to Any",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.padding(top = 14.dp),
             )
         }
 
-        SectionTitle("Artwork origins")
-        Text(
-            "Choose one or more regions for future downloads. Europe and Asia are used if the selected pool has no suitable painting.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f),
-            modifier = Modifier.padding(bottom = 8.dp),
-        )
-        ArtworkRegion.entries.forEach { region ->
-            SelectionRow(
-                title = when (region) {
-                    ArtworkRegion.EUROPE -> "Europe"
-                    ArtworkRegion.ASIA -> "Asia"
-                    ArtworkRegion.AFRICA -> "Africa"
-                    ArtworkRegion.NORTH_AMERICA -> "North America"
-                    ArtworkRegion.SOUTH_AMERICA -> "South America"
-                    ArtworkRegion.OCEANIA -> "Oceania"
-                },
-                detail = if (region in ArtworkRegion.DEFAULT) "Part of the default painting pool" else "May have a smaller phone-shaped selection",
-                selected = region in preferences.artworkRegions,
-                onClick = {
-                    onPreferencesChange(
-                        preferences.copy(artworkRegions = toggled(preferences.artworkRegions, region)),
-                    )
-                },
-            )
-        }
-
-        SectionTitle("Subjects")
-        Text(
-            "One chosen subject is picked for each new painting.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f),
-            modifier = Modifier.padding(bottom = 8.dp),
-        )
-        ArtworkSubject.entries.forEach { subject ->
-            SelectionRow(
-                title = when (subject) {
-                    ArtworkSubject.LANDSCAPE -> "Landscape"
-                    ArtworkSubject.SEASCAPE -> "Seascape"
-                    ArtworkSubject.STILL_LIFE -> "Still life"
-                    ArtworkSubject.CITY -> "City"
-                },
-                detail = when (subject) {
-                    ArtworkSubject.LANDSCAPE -> "Countryside, rivers and skies"
-                    ArtworkSubject.SEASCAPE -> "Sea, ships and harbours; a thinner pool of phone-shaped finds"
-                    ArtworkSubject.STILL_LIFE -> "Flowers, fruit and tabletops"
-                    ArtworkSubject.CITY -> "Streets, canals and views of towns; a thinner pool of phone-shaped finds"
-                },
-                selected = subject in preferences.artworkSubjects,
-                onClick = {
-                    onPreferencesChange(
-                        preferences.copy(artworkSubjects = toggled(preferences.artworkSubjects, subject)),
-                    )
-                },
-            )
-        }
         ToggleRow(
             title = "Hide religious scenes",
             detail = "Skips saints, Madonnas and Bible scenes",
@@ -362,6 +474,93 @@ private fun SectionTitle(text: String) {
         style = MaterialTheme.typography.titleMedium,
         modifier = Modifier.padding(top = 19.dp, bottom = 8.dp),
     )
+}
+
+/**
+ * One of Shape, Origins, Subjects or Artists: a header naming the section and
+ * summarising its current selection, tappable to fold or unfold [content] under it.
+ * The header itself (not just the chevron) is the tap target.
+ */
+@Composable
+private fun FoldableSection(
+    title: String,
+    summary: String,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    Column(modifier = Modifier.padding(top = 19.dp)) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(8.dp))
+                .clickable(onClick = onToggle)
+                .padding(vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(title, style = MaterialTheme.typography.titleMedium)
+                Text(
+                    summary,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f),
+                    modifier = Modifier.padding(top = 1.dp),
+                )
+            }
+            Chevron(expanded)
+        }
+        if (expanded) {
+            Column(modifier = Modifier.padding(top = 6.dp), content = content)
+        }
+    }
+}
+
+/** A small hand-drawn chevron — ∨ folded, ∧ unfolded — rather than pulling in an icon library for one glyph. */
+@Composable
+private fun Chevron(expanded: Boolean) {
+    Canvas(modifier = Modifier.size(18.dp)) {
+        val color = Color(0xff8f79ee)
+        val halfWidth = size.width * 0.3f
+        val apexY = if (expanded) size.height * 0.35f else size.height * 0.65f
+        val baseY = if (expanded) size.height * 0.65f else size.height * 0.35f
+        val apex = Offset(size.width / 2f, apexY)
+        val stroke = 1.6.dp.toPx()
+        drawLine(color, Offset(size.width / 2f - halfWidth, baseY), apex, stroke, cap = StrokeCap.Round)
+        drawLine(color, apex, Offset(size.width / 2f + halfWidth, baseY), stroke, cap = StrokeCap.Round)
+    }
+}
+
+private fun shapeLabel(shape: ArtworkShape): String = when (shape) {
+    ArtworkShape.PHONE -> "Phone-shaped"
+    ArtworkShape.NEAR_SQUARE -> "Include near-square"
+    ArtworkShape.ANY -> "Any shape"
+}
+
+private fun shapeDetail(shape: ArtworkShape): String = when (shape) {
+    ArtworkShape.PHONE -> "Tall paintings that need little cropping"
+    ArtworkShape.NEAR_SQUARE -> "Tall, square, and slightly wide paintings"
+    ArtworkShape.ANY -> "Also allow fully horizontal paintings"
+}
+
+private fun regionLabel(region: ArtworkRegion): String = when (region) {
+    ArtworkRegion.EUROPE -> "Europe"
+    ArtworkRegion.ASIA -> "Asia"
+    ArtworkRegion.AFRICA -> "Africa"
+    ArtworkRegion.NORTH_AMERICA -> "North America"
+    ArtworkRegion.SOUTH_AMERICA -> "South America"
+    ArtworkRegion.OCEANIA -> "Oceania"
+}
+
+private fun subjectLabel(subject: ArtworkSubject): String = when (subject) {
+    ArtworkSubject.LANDSCAPE -> "Landscape"
+    ArtworkSubject.SEASCAPE -> "Seascape"
+    ArtworkSubject.STILL_LIFE -> "Still life"
+}
+
+private fun subjectDetail(subject: ArtworkSubject): String = when (subject) {
+    ArtworkSubject.LANDSCAPE -> "Countryside, rivers, skies and views of towns"
+    ArtworkSubject.SEASCAPE -> "Sea, ships and harbours; a thinner pool of phone-shaped finds"
+    ArtworkSubject.STILL_LIFE -> "Flowers, fruit and tabletops"
 }
 
 @Composable
@@ -465,7 +664,7 @@ private fun SmallChoice(
 @Composable
 private fun SelectionRow(
     title: String,
-    detail: String,
+    detail: String? = null,
     selected: Boolean,
     onClick: () -> Unit,
 ) {
@@ -492,11 +691,13 @@ private fun SelectionRow(
             }
             Column(modifier = Modifier.padding(start = 12.dp)) {
                 Text(title, style = MaterialTheme.typography.labelLarge)
-                Text(
-                    detail,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f),
-                )
+                if (!detail.isNullOrEmpty()) {
+                    Text(
+                        detail,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f),
+                    )
+                }
             }
         }
     }

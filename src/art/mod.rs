@@ -7,12 +7,15 @@
 
 use self::folder::Folder;
 use self::met::Met;
+use self::museums::Museums;
 use anyhow::Result;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::path::{Path, PathBuf};
 
 pub mod folder;
+pub(crate) mod http;
 pub mod met;
+pub mod museums;
 
 /// One picture, ready to hang, with what a person would want to know about it.
 ///
@@ -34,14 +37,18 @@ pub struct Artwork {
 
 /// Which collection a day's picture is drawn from.
 ///
-/// How that choice is *spelled* in `config.toml` — the bare word `met`, or else a
-/// directory path, which a person may well have written starting with `~/` — is this
-/// module's business and nobody else's. `Config` hands the string over while reading
-/// the file and gets a decided value back, so adding a second museum never reaches
-/// past here.
+/// How that choice is *spelled* in `config.toml` — the bare words `met` or
+/// `museums`, or else a directory path, which a person may well have written
+/// starting with `~/` — is this module's business and nobody else's. `Config`
+/// hands the string over while reading the file and gets a decided value back, so
+/// adding a source never reaches past here.
 #[derive(Debug, Clone)]
 pub enum SourceSpec {
+    /// The Met's own API, searched live. Kept for configs already spelling it out;
+    /// see [`SourceSpec::Museums`] for what new installs get instead.
     Met,
+    /// The prebuilt, four-museum list compiled into the binary — no live search.
+    Museums,
     Folder(PathBuf),
 }
 
@@ -49,6 +56,7 @@ impl SourceSpec {
     pub fn parse(s: &str) -> Self {
         match s {
             "met" => Self::Met,
+            "museums" => Self::Museums,
             path => Self::Folder(expand_tilde(path)),
         }
     }
@@ -76,6 +84,7 @@ fn expand_tilde(s: &str) -> PathBuf {
 pub fn source_for(spec: &SourceSpec, cache: &Path) -> Box<dyn Source> {
     match spec {
         SourceSpec::Met => Box::new(Met::new(cache.to_path_buf())),
+        SourceSpec::Museums => Box::new(Museums::new(cache.to_path_buf())),
         SourceSpec::Folder(dir) => Box::new(Folder::new(dir.clone())),
     }
 }

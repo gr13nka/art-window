@@ -48,13 +48,6 @@ class ScreenTest {
     }
 
     @Test
-    fun `mightHold accepts a catalogue aspect slightly beyond the photo tolerance`() {
-        val screen = Screen(1080, 2340)
-        // trim ~= 0.18 here: past place()'s MAX_TRIM of 0.15, but within mightHold's slack.
-        assertTrue(screen.mightHold(0.378))
-    }
-
-    @Test
     fun `holds judges proportions alone, so a small web copy can answer for its original`() {
         val screen = Screen(1080, 2392)
         // 0.47 is the shape of a real Met scroll that fits; 0.67 is a triptych photographed whole.

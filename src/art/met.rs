@@ -12,10 +12,10 @@
 //! module — see `docs/android.md`. A change to the search query, the `User-Agent`,
 //! or the `met-{id}.{ext}` filename convention belongs in both files.
 
+use super::http;
 use super::{pick_index, Artwork, Source};
 use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
-use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -30,18 +30,9 @@ const SEARCH: &str = "departmentId=11&hasImages=true&isPublicDomain=true&q=lands
 const SEARCH_PAGE: usize = 500;
 const MAX_SEARCH_RESULTS: usize = 10_000;
 
-/// Refuse anything implausible for a photograph of a painting. The Met serves
-/// originals with no server-side resizing, so this is the only size control there is.
-const MAX_IMAGE_BYTES: u64 = 96 * 1024 * 1024;
-
 /// How many objects to try before giving up. Records occasionally lack a usable
 /// `primaryImage` despite the `hasImages` filter.
 const CANDIDATES: usize = 8;
-
-/// How long any one request may take. Generous enough for an original-resolution
-/// painting on a link that has just woken up with the rest of the machine, and no
-/// more, because a fetch is a chain of these rather than one of them.
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(45);
 
 /// How long the whole of a fetch may take before it gives up and leaves the day for
 /// the next attempt.
@@ -51,7 +42,7 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(45);
 /// reading "Fetching…" for half an hour, with no tick scheduled behind it. Checked
 /// between attempts rather than during one, so a request already in flight when the
 /// budget runs out still gets to finish — the real ceiling is this plus one
-/// [`REQUEST_TIMEOUT`].
+/// [`http::REQUEST_TIMEOUT`].
 const BUDGET: Duration = Duration::from_secs(90);
 
 pub struct Met {
@@ -120,19 +111,8 @@ impl Object {
 
 impl Met {
     pub fn new(cache: PathBuf) -> Self {
-        let config = ureq::Agent::config_builder()
-            // The Met asks callers to identify themselves, and the Art Institute's
-            // image host demonstrated what anonymous traffic earns: a Cloudflare
-            // challenge no unattended client can answer.
-            .user_agent(concat!(
-                "ArtWindow/",
-                env!("CARGO_PKG_VERSION"),
-                " (+https://github.com/gr13nka/art-window)"
-            ))
-            .timeout_global(Some(REQUEST_TIMEOUT))
-            .build();
         Self {
-            agent: ureq::Agent::new_with_config(config),
+            agent: http::agent(),
             cache,
         }
     }
@@ -181,42 +161,11 @@ impl Met {
     }
 
     fn download(&self, url: &str, id: u64) -> Result<PathBuf> {
-        let mut response = self
-            .agent
-            .get(url)
-            .call()
-            .with_context(|| format!("downloading {url}"))?;
-
-        if let Some(len) = response
-            .headers()
-            .get("content-length")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.parse::<u64>().ok())
-        {
-            if len > MAX_IMAGE_BYTES {
-                return Err(anyhow!(
-                    "image is {len} bytes, over the {MAX_IMAGE_BYTES}-byte limit"
-                ));
-            }
-        }
-
-        let extension = url
-            .rsplit('.')
-            .next()
-            .filter(|e| e.len() <= 4)
-            .unwrap_or("jpg");
+        let extension = http::extension_from_url(url);
         // Load-bearing: `id_of` reads the object id back out of this name, which is
         // how tomorrow's painting avoids being today's.
         let path = self.cache.join(format!("met-{id}.{extension}"));
-
-        std::fs::create_dir_all(&self.cache)
-            .with_context(|| format!("creating {}", self.cache.display()))?;
-        let mut file =
-            std::fs::File::create(&path).with_context(|| format!("creating {}", path.display()))?;
-        let mut reader = response.body_mut().as_reader().take(MAX_IMAGE_BYTES);
-        std::io::copy(&mut reader, &mut file)
-            .with_context(|| format!("writing {}", path.display()))?;
-
+        http::download(&self.agent, url, &path)?;
         Ok(path)
     }
 }

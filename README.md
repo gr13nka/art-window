@@ -86,8 +86,8 @@ A signed APK is also on the
 calendar dates rather than counting hours. A machine that sleeps through several
 days wakes owing a single painting.
 
-**How much traffic is this?** One search and one image download a day, from the
-Metropolitan Museum's open-access API.
+**How much traffic is this?** One image download a day, picked locally from a
+prebuilt list of public-domain paintings — no live search.
 
 **Can I use my own pictures?** Point `source` at a folder in `config.toml`. Art
 Window deletes only files it downloaded itself, so a folder of your own pictures
@@ -112,7 +112,10 @@ Two notes on the platform wallpaper APIs sit beside it:
 ## Credits
 
 Artwork metadata and images come from [The Metropolitan Museum of Art Collection
-API](https://metmuseum.github.io/), under its open-access terms. Inspired by
+API](https://metmuseum.github.io/), the National Gallery of Art, the Cleveland
+Museum of Art, SMK — Denmark's national gallery — and Wikimedia Commons, all
+public domain or CC0.
+Inspired by
 [Muzei](https://github.com/romannurik/muzei) by Roman Nurik and its
 [macOS port](https://github.com/naman14/Muzei-macOS) by Naman Dwivedi. This is an
 independent rewrite and shares no code with either. The device frames in the

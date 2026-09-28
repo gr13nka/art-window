@@ -100,6 +100,7 @@ private fun MainActivity.ArtWindowApp(context: Context) {
     var savedPreferences by remember { mutableStateOf(store.load()) }
     var draftPreferences by remember { mutableStateOf(savedPreferences) }
     var applyMessage by remember { mutableStateOf<String?>(null) }
+    var choicesAvailable by remember { mutableStateOf(true) }
     val scope = rememberCoroutineScope()
     val physicalScreen = remember { context.screen() }
 
@@ -176,6 +177,7 @@ private fun MainActivity.ArtWindowApp(context: Context) {
                             },
                         )
                         Destination.SETTINGS -> SettingsScreen(
+                            context = context,
                             artwork = artwork,
                             screen = physicalScreen,
                             preferences = draftPreferences,
@@ -183,6 +185,7 @@ private fun MainActivity.ArtWindowApp(context: Context) {
                                 draftPreferences = it
                                 applyMessage = null
                             },
+                            onChoicesAvailable = { choicesAvailable = it },
                         )
                     }
                 }
@@ -240,7 +243,7 @@ private fun MainActivity.ArtWindowApp(context: Context) {
                                 }
                             }
                         },
-                        enabled = !status.isBusy && draftPreferences != savedPreferences,
+                        enabled = !status.isBusy && draftPreferences != savedPreferences && choicesAvailable,
                         modifier = Modifier
                             .align(Alignment.CenterHorizontally)
                             .size(width = 220.dp, height = 44.dp),
@@ -347,14 +350,21 @@ private fun ArtworkScreen(
             artwork?.attribution?.takeIf { it.isNotEmpty() }?.let {
                 Text(it, style = MaterialTheme.typography.bodySmall)
             }
-            artwork?.detailsUrl?.let { url ->
-                Text(
-                    "See it at the Met",
-                    color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier
-                        .padding(top = 4.dp)
-                        .clickable { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) },
-                )
+            artwork?.let { shown ->
+                shown.detailsUrl?.let { url ->
+                    // The persisted attribution is museum-supplied prose ("The
+                    // Metropolitan Museum of Art"), not a source to key off; the short
+                    // name comes from the file's own key instead, with the Met as the
+                    // fallback for state written before this file-key scheme existed.
+                    val source = museumSourceOfKey(keyOf(shown.path)) ?: MuseumSource.MET
+                    Text(
+                        "See it at ${source.shortName}",
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier
+                            .padding(top = 4.dp)
+                            .clickable { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) },
+                    )
+                }
             }
             artwork?.origin?.let {
                 Text(
@@ -460,11 +470,7 @@ private fun statusLine(status: Status, owed: Boolean): String = when (status) {
 
 private fun fetchingStatusLine(progress: FetchProgress?): String = when (progress) {
     null -> "Fetching…"
-    is FetchProgress.Searching -> "Searching the Met for ${progress.subject.pluralName}…"
-    is FetchProgress.Checking -> {
-        val painting = if (progress.looked == 1) "painting" else "paintings"
-        "Looked at ${progress.looked} $painting…"
-    }
+    is FetchProgress.Searching -> "Choosing a painting…"
     is FetchProgress.Downloading -> {
         val done = progress.bytes / BYTES_PER_MB
         val total = progress.total
@@ -475,15 +481,6 @@ private fun fetchingStatusLine(progress: FetchProgress?): String = when (progres
         }
     }
 }
-
-/** Lowercase plural for [fetchingStatusLine]; [ArtworkSubject] itself only names singular queries. */
-private val ArtworkSubject.pluralName: String
-    get() = when (this) {
-        ArtworkSubject.LANDSCAPE -> "landscapes"
-        ArtworkSubject.SEASCAPE -> "seascapes"
-        ArtworkSubject.STILL_LIFE -> "still lifes"
-        ArtworkSubject.CITY -> "city views"
-    }
 
 private const val BYTES_PER_MB = 1024.0 * 1024.0
 
