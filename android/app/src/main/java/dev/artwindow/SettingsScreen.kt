@@ -329,10 +329,10 @@ fun SettingsScreen(
 
         // A painting must pass every section below — Shape, Origins, Subjects and
         // Artists — to be offered; within a section, checking more than one option
-        // widens it. An empty section means Any: it filters nothing. Only Any is always
-        // shown in a section's option list — an option [availableRegions] and its
-        // siblings don't return is hidden, computed against what the other sections are
-        // currently staged to.
+        // widens it. An empty section means Any: it filters nothing. Any and every checked
+        // option are always shown — a checked option hidden for matching nothing could
+        // never be unchecked. Other options [availableRegions] and its siblings don't
+        // return are hidden, computed against what the other sections are staged to.
         FoldableSection(
             title = "Shape",
             summary = shapeLabel(preferences.artworkShape),
@@ -372,7 +372,7 @@ fun SettingsScreen(
                 selected = preferences.artworkRegions.isEmpty(),
                 onClick = { onPreferencesChange(preferences.copy(artworkRegions = emptySet())) },
             )
-            ArtworkRegion.entries.filter { it in availableRegions }.forEach { region ->
+            ArtworkRegion.entries.filter { it in availableRegions || it in preferences.artworkRegions }.forEach { region ->
                 SelectionRow(
                     title = regionLabel(region),
                     selected = region in preferences.artworkRegions,
@@ -402,7 +402,7 @@ fun SettingsScreen(
                 selected = preferences.artworkSubjects.isEmpty(),
                 onClick = { onPreferencesChange(preferences.copy(artworkSubjects = emptySet())) },
             )
-            ArtworkSubject.entries.filter { it in availableSubjects }.forEach { subject ->
+            ArtworkSubject.entries.filter { it in availableSubjects || it in preferences.artworkSubjects }.forEach { subject ->
                 SelectionRow(
                     title = subjectLabel(subject),
                     detail = subjectDetail(subject),
@@ -424,7 +424,7 @@ fun SettingsScreen(
                 onToggle = { artistsExpanded = !artistsExpanded },
             ) {
                 Text(
-                    "An artist's own work is offered whatever its subject. Any allows every artist.",
+                    "Matches any artist you check. Any allows every artist.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f),
                     modifier = Modifier.padding(bottom = 8.dp),
@@ -434,7 +434,7 @@ fun SettingsScreen(
                     selected = preferences.artworkArtists.isEmpty(),
                     onClick = { onPreferencesChange(preferences.copy(artworkArtists = emptySet())) },
                 )
-                allArtists.filter { it in availableArtists }.forEach { artist ->
+                allArtists.filter { it in availableArtists || it in preferences.artworkArtists }.forEach { artist ->
                     SelectionRow(
                         title = artist,
                         selected = artist in preferences.artworkArtists,
