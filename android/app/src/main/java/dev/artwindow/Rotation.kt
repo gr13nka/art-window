@@ -67,7 +67,7 @@ object Rotation {
                     preferences,
                     onProgress = { _status.value = Status.Fetching(it) },
                 )
-                Wallpaper.pin(context, artwork.path, screen, preferences)
+                Wallpaper.pin(context, artwork, screen, preferences)
                 state.recordFetched(artwork, today)
                 museums.discardAllBut(artwork.path)
                 runCatching { Favourites(context).discardAllBut(artwork.path) }
@@ -89,7 +89,7 @@ object Rotation {
             _status.value = Status.Applying
             val artwork = State(context).shownArtwork
             if (artwork != null && artwork.path.isFile) {
-                Wallpaper.pin(context, artwork.path, context.screen(), preferences)
+                Wallpaper.pin(context, artwork, context.screen(), preferences)
             }
             if (!WallpaperPreferencesStore(context).save(preferences)) {
                 throw IllegalStateException("Could not save wallpaper settings")
@@ -126,7 +126,7 @@ object Rotation {
         val artwork = favourites.get(key) ?: throw IllegalStateException("That favourite no longer exists")
         val state = State(context)
         val preferences = WallpaperPreferencesStore(context).load()
-        Wallpaper.pin(context, artwork.path, context.screen(), preferences)
+        Wallpaper.pin(context, artwork, context.screen(), preferences)
         state.recordChosen(artwork, LocalDate.now())
         state.fetchedArtwork?.path?.let { Museums(context.cacheDir, Catalogue.load(context)).discardAllBut(it) }
         favourites.discardAllBut(artwork.path)

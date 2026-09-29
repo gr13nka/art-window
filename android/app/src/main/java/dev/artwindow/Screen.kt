@@ -5,19 +5,21 @@ import kotlin.math.max
 import kotlin.math.min
 
 /**
- * Screen-relative placement and the default phone-shaped artwork tolerance.
+ * Screen-relative placement and the default screen-shaped artwork tolerance.
  *
- * [holds] is the crop-friendly policy used by the Phone-shaped preference. [cover],
+ * [holds] is the crop-friendly policy used by the Screen-shaped preference. [cover],
  * [fit] and [canStretch] are the lower-level geometry used by every rendering style.
  *
- * Always portrait: the constructor sorts whatever a display reports into
- * [width] <= [height], so a landscape-shaped [android.view.Display.Mode] and a
- * portrait one describe the same [Screen].
+ * Keeps the orientation it is given: a phone's display mode reports portrait and a
+ * TV's landscape, and the two want different paintings, so the shape rules ask
+ * [isLandscape] rather than assuming one. Every method here compares ratios
+ * symmetrically, so none of them needs to know which way round it is.
  */
-@ConsistentCopyVisibility
-data class Screen private constructor(val width: Int, val height: Int) {
+data class Screen(val width: Int, val height: Int) {
 
     val aspectRatio: Double = width.toDouble() / height
+
+    val isLandscape: Boolean get() = width > height
 
     /**
      * Whether a photograph of these proportions fills the screen within [MAX_TRIM].
@@ -81,8 +83,6 @@ data class Screen private constructor(val width: Int, val height: Int) {
         const val MAX_ENLARGEMENT = 1.25
 
         private fun trimFor(a: Double, b: Double): Double = 1 - min(a, b) / max(a, b)
-
-        operator fun invoke(width: Int, height: Int): Screen = Screen(min(width, height), max(width, height))
     }
 }
 

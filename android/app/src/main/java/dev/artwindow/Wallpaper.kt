@@ -200,8 +200,17 @@ object WallpaperRenderer {
 }
 
 object Wallpaper {
-    fun pin(context: Context, file: File, screen: Screen, preferences: WallpaperPreferences) {
-        val bitmap = WallpaperRenderer.render(file, screen, preferences)
+    /**
+     * Puts [artwork] on the device's wallpaper surface: the system wallpaper on a
+     * phone, the in-app [Frame] on a TV, which has no wallpaper to set. [artwork] is
+     * here for the TV's caption; the phone needs only its file.
+     */
+    fun pin(context: Context, artwork: Artwork, screen: Screen, preferences: WallpaperPreferences) {
+        val bitmap = WallpaperRenderer.render(artwork.path, screen, preferences)
+        if (context.isTelevision()) {
+            Frame.publish(Rendered(bitmap, artwork))
+            return
+        }
         try {
             WallpaperManager.getInstance(context).setBitmap(
                 bitmap,

@@ -67,6 +67,13 @@ import kotlinx.coroutines.withContext
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // A sideloaded launch through the phone's launcher intent still lands on the
+        // television's own surface, which has no touch-shaped screens to get stuck in.
+        if (isTelevision()) {
+            startActivity(Intent(this, TvActivity::class.java))
+            finish()
+            return
+        }
         enableEdgeToEdge()
 
         RotationJob.scheduleDaily(applicationContext)
@@ -80,7 +87,7 @@ class MainActivity : ComponentActivity() {
 
 private enum class Destination { ARTWORK, FAVOURITES, SETTINGS }
 
-private val settingsColors = darkColorScheme(
+internal val settingsColors = darkColorScheme(
     primary = Color(0xffa990ff),
     onPrimary = Color(0xff17121f),
     background = Color(0xff111015),
@@ -460,30 +467,6 @@ private fun NavigationIcon(destination: Destination, color: Color) {
     }
 }
 
-private fun statusLine(status: Status, owed: Boolean): String = when (status) {
-    is Status.Fetching -> fetchingStatusLine(status.progress)
-    is Status.Applying -> "Applying wallpaper…"
-    is Status.SavingFavourite -> "Updating favourites…"
-    is Status.Failed -> status.message
-    is Status.Idle -> if (owed) "Today's painting arrives on the next Wi-Fi check" else "A new painting arrives tomorrow"
-}
-
-private fun fetchingStatusLine(progress: FetchProgress?): String = when (progress) {
-    null -> "Fetching…"
-    is FetchProgress.Searching -> "Choosing a painting…"
-    is FetchProgress.Downloading -> {
-        val done = progress.bytes / BYTES_PER_MB
-        val total = progress.total
-        if (total != null && total > 0) {
-            "Downloading %.1f of %.1f MB…".format(done, total / BYTES_PER_MB)
-        } else {
-            "Downloading %.1f MB…".format(done)
-        }
-    }
-}
-
-private const val BYTES_PER_MB = 1024.0 * 1024.0
-
 private const val TARGET_PREVIEW_WIDTH = 720
 
 internal fun decodeSampled(file: File, targetWidth: Int): Bitmap? {
@@ -495,6 +478,3 @@ internal fun decodeSampled(file: File, targetWidth: Int): Bitmap? {
     while (bounds.outWidth / (sampleSize * 2) >= targetWidth) sampleSize *= 2
     return BitmapFactory.decodeFile(file.path, BitmapFactory.Options().apply { inSampleSize = sampleSize })
 }
-
-private val Status.isBusy: Boolean
-    get() = this is Status.Fetching || this is Status.Applying || this is Status.SavingFavourite

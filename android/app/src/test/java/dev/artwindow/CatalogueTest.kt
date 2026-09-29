@@ -220,7 +220,7 @@ class CatalogueTest {
         ).joinToString("\n")
         val catalogue = Catalogue.parse(tsv)
 
-        val phoneOnly = catalogue.candidates(prefs(shape = ArtworkShape.PHONE, subjects = setOf(ArtworkSubject.LANDSCAPE)), screen)
+        val phoneOnly = catalogue.candidates(prefs(shape = ArtworkShape.SCREEN, subjects = setOf(ArtworkSubject.LANDSCAPE)), screen)
         assertEquals(setOf("phone"), phoneOnly.map { it.id }.toSet())
 
         val anyShape = catalogue.candidates(prefs(subjects = setOf(ArtworkSubject.LANDSCAPE)), screen)
@@ -237,7 +237,7 @@ class CatalogueTest {
         ).joinToString("\n")
         val catalogue = Catalogue.parse(tsv)
 
-        val ids = catalogue.candidates(prefs(shape = ArtworkShape.PHONE, subjects = setOf(ArtworkSubject.LANDSCAPE)), screen)
+        val ids = catalogue.candidates(prefs(shape = ArtworkShape.SCREEN, subjects = setOf(ArtworkSubject.LANDSCAPE)), screen)
         assertEquals(setOf("full-size"), ids.map { it.id }.toSet())
     }
 
@@ -350,7 +350,7 @@ class CatalogueTest {
         val wide = Catalogue.parse(tsv)
 
         assertTrue(ArtworkSubject.LANDSCAPE in wide.availableSubjects(prefs(), screen))
-        assertFalse(ArtworkSubject.LANDSCAPE in wide.availableSubjects(prefs(shape = ArtworkShape.PHONE), screen))
+        assertFalse(ArtworkSubject.LANDSCAPE in wide.availableSubjects(prefs(shape = ArtworkShape.SCREEN), screen))
     }
 
     @Test
@@ -371,7 +371,7 @@ class CatalogueTest {
         assertEquals(
             // id 1 still fits PHONE even though id 3 (the wide one) does not.
             setOf("Mikhail Vrubel"),
-            catalogue.availableArtists(prefs(regions = setOf(ArtworkRegion.EUROPE), shape = ArtworkShape.PHONE), screen),
+            catalogue.availableArtists(prefs(regions = setOf(ArtworkRegion.EUROPE), shape = ArtworkShape.SCREEN), screen),
         )
     }
 }

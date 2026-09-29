@@ -42,7 +42,7 @@ desktop's `museums-` prefix (see `CLAUDE.md`'s Android invariants).
 The desktop's **No filtering by the shape of a picture** rule (see the main
 `CLAUDE.md`) holds because fit-plus-letterbox renders any painting well. A phone
 screen is roughly 0.45 units wide per unit of height, close to nothing in any of
-the four museums' collections, so the Android default remains **Phone-shaped**: paintings that
+the four museums' collections, so the Android default remains **Phone-shaped** (`ArtworkShape.SCREEN`, labelled TV-shaped on a television): paintings that
 Zoom can fill without grotesque cropping. Settings can broaden that pool to
 include near-square work (up to a 1.25 width/height ratio) or any shape, including
 fully horizontal work. This artwork-shape choice is independent of the rendering
@@ -339,6 +339,39 @@ With a phone attached over USB debugging:
 ./android/install.sh
 adb shell dumpsys wallpaper   # confirms the stored wallpaper's size
 adb logcat -s ArtWindow       # the fetch and placement trail
+```
+
+## Television
+
+The same APK installs on Android TV and Google TV (`leanback` and `touchscreen` are
+declared optional). A TV is not a separate module, because nothing that chooses,
+downloads or schedules a painting knows what device it is on; only two things
+differ. First, the screen is landscape: `Screen` keeps the orientation the display
+reports rather than sorting it portrait, so Screen-shaped means *wide* there, and
+Include near-square spans 0.8 up to the screen's own ratio plus `MAX_TRIM`. The
+phone's empty Europe + Landscape + Phone-shaped pool is the TV's richest one.
+
+Second, there is no wallpaper to set. `Wallpaper.pin` branches once on
+`isTelevision()` and publishes the rendered bitmap to `Frame` instead of
+`WallpaperManager`; `Frame.current` re-renders from `State.shownArtwork` after the
+process has been killed. Two surfaces observe it:
+
+- **`ArtDream`**, a `DreamService` screensaver: the Frame-like "art when the TV
+  is idle". It crossfades to a new painting and shows the caption for eight
+  seconds. If a painting is owed it asks `RotationJob` for one and never
+  fetches itself.
+- **`TvActivity`**, the art mode on the home screen's app row: the painting full
+  screen with the screen kept on. OK opens an overlay with Next picture,
+  Favourite, Favourites, Settings and *Use as screensaver*. Settings and
+  Favourites are the phone composables with D-pad focus rings (`focusRing`). The
+  colour wheel is hidden, so borders are chosen from the swatches.
+
+Google TV hides third-party screensavers from its settings, so *Use as screensaver*
+falls back to showing the command that selects it:
+
+```sh
+adb shell settings put secure screensaver_components dev.artwindow/.ArtDream
+adb shell am start -n com.android.systemui/.Somnambulator   # start it now
 ```
 
 ## Out of scope for now

@@ -8,9 +8,9 @@ class WallpaperPreferencesTest {
     private val screen = Screen(1080, 2340)
 
     @Test
-    fun `phone-shaped keeps the existing narrow tolerance`() {
-        assertTrue(ArtworkShape.PHONE.accepts(0.47, screen))
-        assertTrue(!ArtworkShape.PHONE.accepts(0.8, screen))
+    fun `screen-shaped keeps the existing narrow tolerance`() {
+        assertTrue(ArtworkShape.SCREEN.accepts(0.47, screen))
+        assertTrue(!ArtworkShape.SCREEN.accepts(0.8, screen))
     }
 
     @Test
@@ -20,6 +20,27 @@ class WallpaperPreferencesTest {
         assertTrue(ArtworkShape.NEAR_SQUARE.accepts(1.25, screen))
         assertTrue(!ArtworkShape.NEAR_SQUARE.accepts(1.251, screen))
         assertTrue(!ArtworkShape.NEAR_SQUARE.accepts(0.35, screen))
+    }
+
+    @Test
+    fun `on a landscape screen SCREEN wants wide paintings and NEAR_SQUARE adds the square ones`() {
+        val tv = Screen(3840, 2160) // aspect ~1.778
+        assertTrue(ArtworkShape.SCREEN.accepts(1.6, tv))
+        assertTrue(!ArtworkShape.SCREEN.accepts(0.8, tv))
+        assertTrue(ArtworkShape.NEAR_SQUARE.accepts(1.6, tv))
+        assertTrue(ArtworkShape.NEAR_SQUARE.accepts(1.0, tv))
+        assertTrue(ArtworkShape.NEAR_SQUARE.accepts(0.8, tv))
+        assertTrue(!ArtworkShape.NEAR_SQUARE.accepts(0.79, tv))
+        assertTrue(ArtworkShape.NEAR_SQUARE.accepts(tv.aspectRatio * 1.15, tv))
+        assertTrue(!ArtworkShape.NEAR_SQUARE.accepts(tv.aspectRatio * 1.16, tv))
+    }
+
+    @Test
+    fun `the shape saved as PHONE loads as SCREEN`() {
+        assertEquals(ArtworkShape.SCREEN, shapeValue("PHONE"))
+        assertEquals(ArtworkShape.NEAR_SQUARE, shapeValue("NEAR_SQUARE"))
+        assertEquals(ArtworkShape.SCREEN, shapeValue(null))
+        assertEquals(ArtworkShape.SCREEN, shapeValue("future-value"))
     }
 
     @Test

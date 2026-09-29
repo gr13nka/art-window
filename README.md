@@ -27,6 +27,9 @@ On a desktop a tall painting reads as a framed picture on a black wall. That is
 what the letterboxing is for, so nothing on that side measures a picture's
 proportions or crops one to fill. The phone is the deliberate exception below.
 
+The Android APK also installs on Android TV and Google TV, where it works as a
+screensaver and a full-screen art mode, like the Frame. See [the guide](docs/android.md#television).
+
 ## Quick start with an agent
 
 > Read `CLAUDE.md` first. Then run `cargo build --release` and `cargo test

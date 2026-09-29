@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A framed picture on a dark wall: the same idea as the launcher icon, at the 320x180 a TV home row wants. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="320dp"
+    android:height="180dp"
+    android:viewportWidth="320"
+    android:viewportHeight="180">
+    <path android:fillColor="#111015" android:pathData="M0,0h320v180h-320z" />
+    <path android:fillColor="#c9a24a" android:pathData="M84,30h152v120h-152z" />
+    <path android:fillColor="#17121f" android:pathData="M92,38h136v104h-136z" />
+    <path android:fillColor="#3b3552" android:pathData="M92,38h136v52h-136z" />
+    <path android:fillColor="#7258e8" android:pathData="M92,142L92,112L134,78L166,106L190,88L228,120L228,142z" />
+    <path android:fillColor="#eeeaf3" android:pathData="M198,52a10,10 0,1 1,0.01 0z" />
+</vector>

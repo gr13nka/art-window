@@ -411,7 +411,12 @@ matter across the boundary:
 - **`Wallpaper.pin` owns placement**, the same way `desktop::pin` does on the
   desktop: it composes the bitmap at exactly the screen's size before handing it
   to `WallpaperManager`, so callers never crop, scale or position anything
-  themselves.
+  themselves. On a TV there is no wallpaper, so the same call publishes the
+  rendered bitmap to `Frame` instead; the screensaver (`ArtDream`) and art mode
+  (`TvActivity`) only observe `Frame.shown` and never render or place anything.
+- **`Screen` keeps the orientation the display reports** — portrait on a phone,
+  landscape on a TV — and `ArtworkShape.SCREEN` (stored as `PHONE` by older
+  builds, which `shapeValue` still reads) means "shaped like this screen".
 - **Only `Rotation.turn` fetches, and only one turn at a time.** It takes a
   `tryLock` rather than queuing a second attempt behind the first.
 - **The day is a calendar comparison, never a countdown.** `State.isDue` compares

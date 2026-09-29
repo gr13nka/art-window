@@ -58,10 +58,34 @@ class ScreenTest {
     }
 
     @Test
-    fun `a landscape-oriented display normalises to portrait`() {
-        val screen = Screen(2340, 1080)
-        assertEquals(1080, screen.width)
-        assertEquals(2340, screen.height)
+    fun `a screen keeps the orientation it is given`() {
+        val landscape = Screen(3840, 2160)
+        assertEquals(3840, landscape.width)
+        assertEquals(2160, landscape.height)
+        assertTrue(landscape.isLandscape)
+        assertTrue(!Screen(1080, 2340).isLandscape)
+        assertTrue(!Screen(1080, 1080).isLandscape)
+    }
+
+    @Test
+    fun `a landscape screen holds wide paintings and refuses tall ones`() {
+        val tv = Screen(3840, 2160)
+        assertTrue(tv.holds(1.7))
+        assertTrue(!tv.holds(0.6))
+        assertTrue(tv.place(4000, 2250) != null)
+        assertNull(tv.place(2000, 4000))
+    }
+
+    @Test
+    fun `fit letterboxes a tall painting between the sides of a landscape screen`() {
+        val placement = Screen(3840, 2160).fit(2000, 4000)
+
+        assertTrue(placement != null)
+        placement!!
+        assertEquals(1080, placement.scaledWidth)
+        assertEquals(2160, placement.scaledHeight)
+        assertEquals(1380, placement.destination.left)
+        assertEquals(2460, placement.destination.right)
     }
 
     @Test

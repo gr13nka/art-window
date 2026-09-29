@@ -7,21 +7,33 @@ enum class WallpaperStyle { ZOOM, STRETCH, BLUR, BORDERS }
 enum class BlurVariant { BACKDROP, WHOLE_IMAGE }
 
 enum class ArtworkShape {
-    PHONE,
+    /** Paintings shaped like the screen itself: tall on a phone, wide on a TV. */
+    SCREEN,
+
+    /** [SCREEN] plus paintings near square, on the side away from the screen's own shape. */
     NEAR_SQUARE,
     ANY;
 
     fun accepts(aspect: Double, screen: Screen): Boolean {
         if (!aspect.isFinite() || aspect <= 0.0) return false
         return when (this) {
-            PHONE -> screen.holds(aspect)
-            NEAR_SQUARE -> aspect >= screen.aspectRatio * (1.0 - Screen.MAX_TRIM) && aspect <= NEAR_SQUARE_MAX
+            SCREEN -> screen.holds(aspect)
+            NEAR_SQUARE ->
+                if (screen.isLandscape) {
+                    aspect >= NEAR_SQUARE_MIN && aspect <= screen.aspectRatio * (1.0 + Screen.MAX_TRIM)
+                } else {
+                    aspect >= screen.aspectRatio * (1.0 - Screen.MAX_TRIM) && aspect <= NEAR_SQUARE_MAX
+                }
             ANY -> true
         }
     }
 
     private companion object {
+        /** Five by four: the widest a painting may be and still count as near square on a portrait screen. */
         const val NEAR_SQUARE_MAX = 1.25
+
+        /** Four by five: the same limit turned on its side, for a landscape screen. */
+        const val NEAR_SQUARE_MIN = 0.8
     }
 }
 
@@ -81,7 +93,7 @@ enum class BorderColorMode { BLACK, AUTOMATIC, CUSTOM }
 
 data class WallpaperPreferences(
     val style: WallpaperStyle = WallpaperStyle.ZOOM,
-    val artworkShape: ArtworkShape = ArtworkShape.PHONE,
+    val artworkShape: ArtworkShape = ArtworkShape.SCREEN,
     val blurVariant: BlurVariant = BlurVariant.BACKDROP,
     val blurStrength: Int = DEFAULT_BLUR_STRENGTH,
     val borderColorMode: BorderColorMode = BorderColorMode.BLACK,
@@ -102,7 +114,7 @@ class WallpaperPreferencesStore(context: Context) {
 
     fun load(): WallpaperPreferences = WallpaperPreferences(
         style = enumValue(prefs.getString(KEY_STYLE, null), WallpaperStyle.ZOOM),
-        artworkShape = enumValue(prefs.getString(KEY_SHAPE, null), ArtworkShape.PHONE),
+        artworkShape = shapeValue(prefs.getString(KEY_SHAPE, null)),
         blurVariant = enumValue(prefs.getString(KEY_BLUR_VARIANT, null), BlurVariant.BACKDROP),
         blurStrength = prefs.getInt(KEY_BLUR_STRENGTH, WallpaperPreferences.DEFAULT_BLUR_STRENGTH).coerceIn(0, 100),
         borderColorMode = enumValue(prefs.getString(KEY_BORDER_MODE, null), BorderColorMode.BLACK),
@@ -143,6 +155,10 @@ class WallpaperPreferencesStore(context: Context) {
 
 internal inline fun <reified T : Enum<T>> enumValue(raw: String?, fallback: T): T =
     enumValues<T>().firstOrNull { it.name == raw } ?: fallback
+
+/** [ArtworkShape.SCREEN] was saved as `PHONE` before the app knew about TVs; that name still has to load. */
+internal fun shapeValue(raw: String?): ArtworkShape =
+    enumValue(if (raw == "PHONE") ArtworkShape.SCREEN.name else raw, ArtworkShape.SCREEN)
 
 /**
  * [raw] `null` means these preferences have never been saved — a fresh install starts

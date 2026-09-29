@@ -102,6 +102,7 @@ private fun FavouriteCard(favourite: Favourite, onClick: () -> Unit) {
     Surface(
         modifier = Modifier
             .fillMaxWidth()
+            .focusRing(RoundedCornerShape(10.dp))
             .clickable(onClick = onClick),
         color = MaterialTheme.colorScheme.surface,
         shape = RoundedCornerShape(10.dp),

@@ -45,7 +45,11 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.composed
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
@@ -335,7 +339,7 @@ fun SettingsScreen(
         // return are hidden, computed against what the other sections are staged to.
         FoldableSection(
             title = "Shape",
-            summary = shapeLabel(preferences.artworkShape),
+            summary = shapeLabel(preferences.artworkShape, screen),
             expanded = shapeExpanded,
             onToggle = { shapeExpanded = !shapeExpanded },
         ) {
@@ -347,8 +351,8 @@ fun SettingsScreen(
             )
             ArtworkShape.entries.forEach { shape ->
                 SelectionRow(
-                    title = shapeLabel(shape),
-                    detail = shapeDetail(shape),
+                    title = shapeLabel(shape, screen),
+                    detail = shapeDetail(shape, screen),
                     selected = preferences.artworkShape == shape,
                     onClick = { onPreferencesChange(preferences.copy(artworkShape = shape)) },
                 )
@@ -494,6 +498,7 @@ private fun FoldableSection(
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(8.dp))
+                .focusRing(RoundedCornerShape(8.dp))
                 .clickable(onClick = onToggle)
                 .padding(vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -530,16 +535,19 @@ private fun Chevron(expanded: Boolean) {
     }
 }
 
-private fun shapeLabel(shape: ArtworkShape): String = when (shape) {
-    ArtworkShape.PHONE -> "Phone-shaped"
+private fun shapeLabel(shape: ArtworkShape, screen: Screen): String = when (shape) {
+    ArtworkShape.SCREEN -> if (screen.isLandscape) "TV-shaped" else "Phone-shaped"
     ArtworkShape.NEAR_SQUARE -> "Include near-square"
     ArtworkShape.ANY -> "Any shape"
 }
 
-private fun shapeDetail(shape: ArtworkShape): String = when (shape) {
-    ArtworkShape.PHONE -> "Tall paintings that need little cropping"
-    ArtworkShape.NEAR_SQUARE -> "Tall, square, and slightly wide paintings"
-    ArtworkShape.ANY -> "Also allow fully horizontal paintings"
+private fun shapeDetail(shape: ArtworkShape, screen: Screen): String = when (shape) {
+    ArtworkShape.SCREEN ->
+        if (screen.isLandscape) "Wide paintings that need little cropping" else "Tall paintings that need little cropping"
+    ArtworkShape.NEAR_SQUARE ->
+        if (screen.isLandscape) "Wide, square, and slightly tall paintings" else "Tall, square, and slightly wide paintings"
+    ArtworkShape.ANY ->
+        if (screen.isLandscape) "Also allow fully vertical paintings" else "Also allow fully horizontal paintings"
 }
 
 private fun regionLabel(region: ArtworkRegion): String = when (region) {
@@ -578,6 +586,7 @@ private fun StyleCard(
                 BorderStroke(1.dp, if (selected) Color(0xffa990ff) else Color(0xff34303a)),
                 shape,
             )
+            .focusRing(shape)
             .clickable(onClick = onClick),
         color = if (selected) Color(0xff282238) else Color(0xff19171d),
         shape = shape,
@@ -647,7 +656,7 @@ private fun SmallChoice(
     modifier: Modifier = Modifier,
 ) {
     Surface(
-        modifier = modifier.clickable(onClick = onClick),
+        modifier = modifier.focusRing(RoundedCornerShape(8.dp)).clickable(onClick = onClick),
         color = if (selected) Color(0xff7258e8) else Color(0xff2a2730),
         contentColor = if (selected) Color(0xfff7f3ff) else Color(0xffc8c1d0),
         shape = RoundedCornerShape(8.dp),
@@ -677,6 +686,7 @@ private fun SelectionRow(
                 BorderStroke(1.dp, if (selected) Color(0xff8f79ee) else Color(0xff2e2b33)),
                 shape,
             )
+            .focusRing(shape)
             .clickable(onClick = onClick),
         color = if (selected) Color(0xff252031) else Color(0xff17161b),
         shape = shape,
@@ -720,6 +730,7 @@ private fun ToggleRow(
                 BorderStroke(1.dp, if (checked) Color(0xff8f79ee) else Color(0xff2e2b33)),
                 shape,
             )
+            .focusRing(shape)
             .clickable { onCheckedChange(!checked) },
         color = if (checked) Color(0xff252031) else Color(0xff17161b),
         shape = shape,
@@ -738,7 +749,8 @@ private fun ToggleRow(
             }
             Switch(
                 checked = checked,
-                onCheckedChange = onCheckedChange,
+                // The row is the one D-pad stop; a focusable switch inside it would be a second.
+                onCheckedChange = null,
                 colors = SwitchDefaults.colors(
                     checkedThumbColor = Color(0xfff5f1ff),
                     checkedTrackColor = Color(0xffa990ff),
@@ -774,8 +786,11 @@ private fun CustomColorControls(
         Swatches(currentPictureColors, color, onColor)
     }
 
-    Text("Any color", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(top = 18.dp, bottom = 10.dp))
-    HsvColorWheel(color, onColor)
+    // The wheel answers touch only; on a television the swatches are the whole palette.
+    if (!LocalContext.current.isTelevision()) {
+        Text("Any color", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(top = 18.dp, bottom = 10.dp))
+        HsvColorWheel(color, onColor)
+    }
 }
 
 @Composable
@@ -792,6 +807,7 @@ private fun Swatches(colors: List<Int>, selectedColor: Int, onColor: (Int) -> Un
             Box(
                 modifier = Modifier
                     .size(34.dp)
+                    .focusRing(CircleShape)
                     .border(
                         if (selected) 3.dp else 1.dp,
                         if (selected) Color(0xffa990ff) else Color(0xff57515e),
@@ -894,3 +910,14 @@ private val CURATED_PALETTES = listOf(
 )
 
 private const val PREVIEW_WIDTH = 300
+
+/**
+ * A light 2 dp outline while the element holds D-pad focus, so a remote has a visible
+ * cursor. Must sit *before* the `clickable` it decorates: focus is reported to the
+ * modifiers outside the focusable node, not to those inside it.
+ */
+internal fun Modifier.focusRing(shape: Shape): Modifier = composed {
+    var focused by remember { mutableStateOf(false) }
+    onFocusChanged { focused = it.isFocused }
+        .then(if (focused) Modifier.border(2.dp, Color(0xfff1ecff), shape) else Modifier)
+}
