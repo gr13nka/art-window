@@ -66,3 +66,22 @@ jobs:
       - name: Test and build
         working-directory: android
         run: ./gradlew --no-daemon testDebugUnitTest assembleDebug
+
+  ios:
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate project
+        run: xcodegen --spec ios/project.yml
+
+      # The runner's simulator names change with its Xcode, so take the first iPhone it has.
+      - name: Test
+        run: |
+          SIM=$(xcrun simctl list devices available | grep -m1 -oE 'iPhone[^(]*\(([0-9A-F-]{36})\)' | grep -oE '[0-9A-F-]{36}')
+          xcodebuild test -project ios/ArtWindow.xcodeproj -scheme ArtWindow \
+            -destination "id=$SIM" CODE_SIGNING_ALLOWED=NO

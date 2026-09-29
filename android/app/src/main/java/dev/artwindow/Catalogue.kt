@@ -15,7 +15,8 @@ import android.content.Context
  * outright — there is no live preview step left to double-check them. Every rule that
  * decides what a phone will actually show — subject and artist matching, the portrait
  * and religious exclusions, shape and render fit — lives here, so there is exactly one
- * place that decides.
+ * place that decides on Android. The desktop keeps its own copy in `src/art/museums.rs`
+ * and iOS in `ios/ArtWindowKit/Catalogue.swift`; a word-list change belongs in all three.
  */
 class Catalogue(private val entries: List<Entry>) {
 

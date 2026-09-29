@@ -11,3 +11,9 @@ android/out/
 *.jks
 *.keystore
 __pycache__/
+ios/*.xcodeproj/
+ios/DerivedData/
+ios/ArtWindow/Info.plist
+ios/ArtWindow/ArtWindow.entitlements
+ios/ArtWindowWidget/Info.plist
+ios/ArtWindowWidget/ArtWindowWidget.entitlements

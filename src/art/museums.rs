@@ -20,7 +20,8 @@
 //!
 //! The Android app reads the same TSV from its own assets and keeps its own copy
 //! of the subject rules, including the Danish words, in `Catalogue.kt` — see
-//! `docs/android.md`.
+//! `docs/android.md` — and the iOS app a third, in `ios/ArtWindowKit/Catalogue.swift`
+//! (`docs/ios.md`). A word-list change belongs in all three.
 
 use super::http;
 use super::{pick_index, Artwork, Source};

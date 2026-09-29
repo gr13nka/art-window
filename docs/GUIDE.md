@@ -17,8 +17,8 @@ file, and how to remove it.
 
 ## Status
 
-Art Window supports macOS and Linux with GNOME as desktop wallpaper apps, and
-Android as a native Kotlin phone app. The GNOME port uses GTK 3, GSettings,
+Art Window supports macOS and Linux with GNOME as desktop wallpaper apps,
+Android as a native Kotlin phone app, and iPhone and iPad as a native Swift app. The GNOME port uses GTK 3, GSettings,
 logind, and the XDG directory conventions. Windows is not implemented.
 
 ## Install
@@ -98,6 +98,17 @@ It replaces both the home and lock screen wallpaper, and — unlike the desktop 
 fills the screen rather than letterboxing, picking only paintings tall enough for
 that to look right. See [Art Window for Android](android.md) for why. The
 painting changes on the first hourly check after midnight, over Wi-Fi.
+
+### iPhone and iPad
+
+**From source only** for now: needs the build Mac (`ios_macmini`, Xcode 26), a
+paid Apple Developer team set as `DEVELOPMENT_TEAM` there, and an iPhone or iPad
+on iOS 17 or newer paired with it. Then run `./ios/remote.sh install`.
+
+iOS won't let an app set the wallpaper, so Art Window hands the painting to
+Shortcuts instead. On first launch, the app walks you through a daily automation:
+Get Today's Painting, then Set Wallpaper. There are also home-screen and StandBy
+widgets that need no setup. See [Art Window for iPhone and iPad](ios.md) for why.
 
 ## Interface
 

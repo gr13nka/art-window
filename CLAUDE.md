@@ -4,7 +4,8 @@ A daily public-domain painting as the desktop wallpaper, fit to screen and
 letterboxed in black. It runs as a macOS menu-bar app or a GNOME GTK application;
 platform wallpaper, browser and login behavior meet behind `desktop/`. A native
 Kotlin Android app under `android/` sets the same daily painting as the phone
-wallpaper instead — see `docs/android.md`.
+wallpaper instead — see `docs/android.md` — and a native Swift app under `ios/`
+hands it to Shortcuts for iPhone and iPad — see `docs/ios.md`.
 
 README.md is the landing page; depth lives in `docs/GUIDE.md`. Documentation edits
 belong in the guide, not in the README.
@@ -23,6 +24,8 @@ cargo fmt --check
 ./linux/package.sh         # -> target/dist/art-window-<version>-linux-x86_64.tar.gz
 cd android && ./gradlew testDebugUnitTest assembleDebug
 ./android/install.sh       # build debug APK and adb install -r
+./ios/remote.sh            # iOS: xcodegen + unit tests on ios_macmini's simulator
+./ios/remote.sh install    # iOS: signed device build, installed via devicectl
 python3 catalogue/build.py  # regenerate the museum list (Met pass takes ~3 h, resumable)
 ```
 
@@ -444,6 +447,31 @@ matter across the boundary:
   instead keys a file by `{source}-{id}`, with a legacy `met-{id}` name (from
   before the four-museum catalogue existed) still parsing the same way, since
   `"met"` remains one of its recognised museum codes.
+
+## iOS
+
+A native Swift app under `ios/` (iOS 17, iPhone and iPad), a port of the Android
+app sharing only `catalogue/dist/paintings.tsv`. Full detail in `docs/ios.md`.
+
+- **iOS cannot set the wallpaper.** The app exposes `GetTodaysPaintingIntent`,
+  which returns the painting rendered at the wallpaper's pixel size, and a Shortcuts
+  personal automation feeds it to *Set Wallpaper*. Nothing may call private
+  wallpaper API.
+- **The intent never fails on the network.** A download that fails or runs past
+  its budget returns the painting already shown. It still cools off, and the day
+  stays owed.
+- **Widgets observe, never fetch.** `Rotation` writes a downsampled `widget.jpg`
+  and reloads the timelines. The widget reads nothing larger.
+- **App, intents and widget share the App Group `group.dev.artwindow`**
+  (`SharedContainer`), so signing needs a paid team.
+- **On iPad the canvas is square**, the long side on both axes, because one
+  wallpaper serves both orientations. `DeviceScreen` owns that, and remembers the
+  value for callers off the main thread.
+- **The word lists live three times now**: `Catalogue.kt`, `src/art/museums.rs`
+  and `ios/ArtWindowKit/Catalogue.swift`.
+- **Builds run on `ios_macmini`**: the laptop's Xcode 14.2 can't target iOS 17.
+  `ios/project.yml` is the source and the `.xcodeproj` is generated, not
+  checked in.
 
 ## Planned, not built
 
