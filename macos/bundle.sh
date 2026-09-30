@@ -28,8 +28,9 @@ version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
 
 APP="target/Art Window.app"
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp macos/Info.plist "$APP/Contents/Info.plist"
+cp macos/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 
 if [ -n "$universal" ]; then
     rustup target add aarch64-apple-darwin x86_64-apple-darwin

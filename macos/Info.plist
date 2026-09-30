@@ -10,6 +10,8 @@
 	<string>dev.artwindow</string>
 	<key>CFBundleExecutable</key>
 	<string>art-window</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<!-- Template values; bundle.sh overwrites both keys below with the Cargo.toml version. -->
