@@ -1,0 +1,79 @@
+{
+  "iphone": {
+    "file": "iphone.png",
+    "source": "Apple iPhone 17 Pro Max Silver",
+    "frameDimensions": { "width": 1470, "height": 3000 },
+    "screenOffset": { "x": 75, "y": 66 },
+    "screenWidth": 1320,
+    "screenHeight": 2868
+  },
+  "ipad": {
+    "file": "ipad.png",
+    "source": "Apple iPad Pro (11-inch) Space Gray",
+    "frameDimensions": { "width": 1863, "height": 2583 },
+    "screenOffset": { "x": 95, "y": 100 },
+    "screenWidth": 1668,
+    "screenHeight": 2388
+  },
+  "macbook": {
+    "file": "macbook.png",
+    "source": "Apple MacBook Air Space Gray",
+    "frameDimensions": { "width": 3306, "height": 1897 },
+    "screenOffset": { "x": 373, "y": 123 },
+    "screenWidth": 2560,
+    "screenHeight": 1600
+  },
+  "imac": {
+    "file": "imac.png",
+    "source": "iMac 24 Silver (mockup-device-frames)",
+    "frameDimensions": { "width": 4880, "height": 5720 },
+    "screenOffset": { "x": 200, "y": 1600 },
+    "screenWidth": 4479,
+    "screenHeight": 2520
+  },
+  "tv-modern": {
+    "file": "tv-modern.jpg",
+    "source": "Pexels 6020432 - Wall-mounted TV with wooden bench",
+    "frameDimensions": { "width": 1920, "height": 1280 },
+    "screenOffset": { "x": 445, "y": 115 },
+    "screenWidth": 980,
+    "screenHeight": 575,
+    "license": "Pexels License (free for commercial use)"
+  },
+  "tv-dark": {
+    "file": "tv-dark.jpg",
+    "source": "Pexels 3423817 - Marble/wood panel TV unit",
+    "frameDimensions": { "width": 1920, "height": 1130 },
+    "screenOffset": { "x": 850, "y": 525 },
+    "screenWidth": 325,
+    "screenHeight": 225,
+    "license": "Pexels License (free for commercial use)"
+  },
+  "tv-light": {
+    "file": "tv-light.jpg",
+    "source": "Pexels 5998120 - Luxury white/gold living room",
+    "frameDimensions": { "width": 1920, "height": 1280 },
+    "screenOffset": { "x": 88, "y": 295 },
+    "screenWidth": 330,
+    "screenHeight": 210,
+    "license": "Pexels License (free for commercial use)"
+  },
+  "tv-walnut": {
+    "file": "tv-walnut.jpg",
+    "source": "Pexels 1827054 - Built-in cabinet with TV",
+    "frameDimensions": { "width": 1920, "height": 1280 },
+    "screenOffset": { "x": 700, "y": 380 },
+    "screenWidth": 500,
+    "screenHeight": 265,
+    "license": "Pexels License (free for commercial use)"
+  },
+  "tv-colorful": {
+    "file": "tv-colorful.jpg",
+    "source": "Pexels 6489117 - Modern room with copper/rust accents",
+    "frameDimensions": { "width": 1920, "height": 1281 },
+    "screenOffset": { "x": 440, "y": 420 },
+    "screenWidth": 180,
+    "screenHeight": 160,
+    "license": "Pexels License (free for commercial use)"
+  }
+}

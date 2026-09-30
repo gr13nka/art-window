@@ -1,0 +1,321 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Art Window Storyboard</title>
+<meta name="description" content="Storyboard for the 15 s Art Window reel: six still frames in an expressive white product-shot style, for approval before any animation.">
+<!-- A STORYBOARD, NOT THE FILM. Six stills of a 15 s vertical reel in the
+     "expressive white" of a product shot: a warm white ground, dark device
+     mockups under soft shadows, paintings as the only colour. The original
+     Macintosh is only a seasoning, never the look: the 1984 arrow pointer,
+     the app's own pixel glyph, a new painting passing through one beat of
+     Atkinson dither (assets/1bit/, tools/dither.py) as it arrives, and the
+     poster's six-colour stripe on the end card alone. Blue dashed marks
+     are direction notes, not picture. -->
+<style>
+  :root {
+    --outer: #E6E7EB; --ink: #1D1D1F; --soft: #6E6E73;
+    --sans: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--outer); color: var(--ink); font: 15px/1.45 var(--sans); }
+  header { max-width: 1180px; margin: 0 auto; padding: 32px 16px 8px; }
+  h1 { font: 600 26px/1.2 var(--sans); margin: 0 0 6px; letter-spacing: -.01em; }
+  header p { margin: 0 0 14px; color: var(--soft); }
+  .tog { display: flex; gap: 10px; flex-wrap: wrap; }
+  .tog button { font: 13px var(--sans); color: var(--ink); background: #ffffff80;
+                border: 1px solid #00000020; border-radius: 99px; padding: 6px 14px; cursor: pointer; }
+  .tog button[aria-pressed="true"] { background: var(--ink); color: #fff; }
+  main { max-width: 1180px; margin: 0 auto; padding: 16px 16px 64px;
+         display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 36px 28px; }
+  .card svg.frame { display: block; width: 100%; height: auto; border-radius: 10px;
+                    box-shadow: 0 18px 40px -24px #0005; }
+  .meta { margin-top: 12px; }
+  .meta .hd { display: flex; align-items: baseline; gap: 12px; }
+  .meta .l { font: 700 30px var(--sans); }
+  .meta .t { font: 13px var(--sans); color: var(--soft); letter-spacing: .04em; }
+  .meta .c { font: 600 17px var(--sans); margin: 4px 0 6px; }
+  .meta dl { margin: 0; display: grid; grid-template-columns: 58px 1fr; gap: 3px 8px; color: var(--soft); font-size: 13.5px; }
+  .meta dt { font: 11px/1.9 var(--sans); letter-spacing: .12em; text-transform: uppercase; color: #9A9AA0; }
+  .meta dd { margin: 0; }
+  body.hide-notes .note { display: none; }
+  body:not(.show-safe) .safe { display: none; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Art Window reel · storyboard v4</h1>
+  <p>15 s, vertical, expressive white, with a pinch of 1984 Macintosh. Six frames, one per beat. Reply by letter.</p>
+  <div class="tog">
+    <button id="bNotes" aria-pressed="true">direction notes</button>
+    <button id="bSafe" aria-pressed="false">tiktok / reels safe zone</button>
+  </div>
+</header>
+<main id="board"></main>
+
+<svg width="0" height="0" style="position:absolute">
+  <defs>
+    <!-- a product shot's two shadows: a wide soft one and a tight contact one -->
+    <filter id="drop" x="-30%" y="-30%" width="160%" height="170%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="34"/><feOffset dy="34"/>
+      <feComponentTransfer><feFuncA type="linear" slope=".22"/></feComponentTransfer>
+      <feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="dropS" x="-30%" y="-30%" width="160%" height="170%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="12"/><feOffset dy="12"/>
+      <feComponentTransfer><feFuncA type="linear" slope=".2"/></feComponentTransfer>
+      <feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <radialGradient id="ground" cx="50%" cy="38%" r="80%">
+      <stop offset="0" stop-color="#FBFAF7"/><stop offset="1" stop-color="#ECE9E2"/>
+    </radialGradient>
+    <linearGradient id="rim" x1="0" y1="0" x2=".3" y2="1">
+      <stop offset="0" stop-color="#3C3C3F"/><stop offset=".5" stop-color="#1C1C1E"/><stop offset="1" stop-color="#2C2C2E"/>
+    </linearGradient>
+    <linearGradient id="alu" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#E3E4E7"/><stop offset="1" stop-color="#BFC1C6"/>
+    </linearGradient>
+    <marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#3F6FB5"/>
+    </marker>
+  </defs>
+</svg>
+
+<script>
+var P = { ink: '#1D1D1F', soft: '#86868B', rim: '#1C1C1E', note: '#3F6FB5', blue: '#0A84FF' };
+var MAC = "Geneva, 'Chicago', 'Helvetica Neue', sans-serif";
+var MONO = "ui-monospace, 'SF Mono', Menlo, monospace";
+var STRIPE = ['#61BB46', '#FDB827', '#F5821F', '#E03A3E', '#963D97', '#009DDC'];
+var SANS = "-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Helvetica Neue', Helvetica, Arial, sans-serif";
+
+/* pixel sizes of the files in assets/ — only the ratio matters */
+var ART = {
+  lilies: [1400, 651], vermeer: [1244, 1400], hokusai: [407, 1400], wheat: [1400, 1114],
+  botticelli: [1400, 1398], segantini: [715, 1400], whalers: [1400, 1049], irises: [1400, 1110]
+};
+
+function rr(x, y, w, h, r, fill, extra) {
+  return '<rect x="' + x + '" y="' + y + '" width="' + w + '" height="' + h + '" rx="' + r + '" fill="' + fill + '"' + (extra || '') + '/>';
+}
+function circ(cx, cy, r, fill, extra) {
+  return '<circle cx="' + cx + '" cy="' + cy + '" r="' + r + '" fill="' + fill + '"' + (extra || '') + '/>';
+}
+function txt(x, y, s, size, fill, extra, font) {
+  return '<text x="' + x + '" y="' + y + '" font-size="' + size + '" fill="' + fill + '" font-family="' + (font || SANS).replace(/"/g, "'") + '"' + (extra || '') + '>' + s + '</text>';
+}
+var CTX = document.createElement('canvas').getContext('2d');
+function measure(s, size, weight) { CTX.font = (weight || 400) + ' ' + size + 'px ' + SANS; return CTX.measureText(s).width; }
+
+/* A painting in a box, as the desktop hangs it: whole, the rest black.
+   'slice' only where the catalogue already chose a screen-shaped picture. */
+function art(name, x, y, w, h, mode) {
+  return '<image href="assets/' + name + '.jpg" x="' + x + '" y="' + y + '" width="' + w + '" height="' + h +
+         '" preserveAspectRatio="xMidYMid ' + (mode || 'meet') + '"/>';
+}
+function widthAt(name, h) { return h * ART[name][0] / ART[name][1]; }
+
+/* an unframed canvas on the white wall: the picture and its shadow, nothing else */
+function canvas(name, x, y, h) {
+  return '<g filter="url(#dropS)">' + art(name, x, y, widthAt(name, h), h) + '</g>';
+}
+
+
+/* The same painting in 1 bit, blown up with hard pixel edges. */
+function bit(name, x, y, w, h) {
+  return '<image href="assets/1bit/' + name + '.png" x="' + x + '" y="' + y + '" width="' + w + '" height="' + h +
+         '" preserveAspectRatio="xMidYMid meet" style="image-rendering:pixelated"/>';
+}
+/* the six-colour stripe: the one accent in the whole film */
+function stripe(x, y, w, h) {
+  return STRIPE.map(function (c, i) { return rr(x + i * w / 6, y, w / 6 + .5, h, 0, c); }).join('');
+}
+/* the 1984 arrow pointer, X ink and . paper */
+var ARROW = ['X          ', 'XX         ', 'X.X        ', 'X..X       ', 'X...X      ', 'X....X     ', 'X.....X    ',
+             'X......X   ', 'X.......X  ', 'X........X ', 'X.....XXXXX', 'X..X..X    ', 'X.X X..X   ', 'XX  X..X   ',
+             'X    X..X  ', '     X..X  ', '      XX   '];
+function pointer(x, y, px) {
+  var o = [];
+  ARROW.forEach(function (row, j) {
+    for (var i = 0; i < row.length; i++) if (row[i] !== ' ')
+      o.push(rr(x + i * px, y + j * px, px + .3, px + .3, 0, row[i] === 'X' ? '#000' : '#fff'));
+  });
+  return o.join('');
+}
+
+/* --- devices: near-black rims, black glass, soft product-shot shadows --- */
+function laptop(x, y, W, o) {
+  o = o || {};
+  var pad = W * .024, sw = W - 2 * pad, sh = sw / 1.6, H = sh + pad * 2 + W * .01, g = ['<g filter="url(#drop)">'];
+  g.push(rr(x, y, W, H, W * .03, 'url(#rim)'), rr(x + 2, y + 2, W - 4, H - 4, W * .028, '#000'));
+  var sx = x + pad, sy = y + pad;
+  if (o.art) g.push(art(o.art, sx, sy, sw, sh));
+  var mb = sh * .038;
+  if (o.os === 'gnome') {
+    g.push(rr(sx, sy, sw, mb, 0, '#000'), txt(sx + sw / 2, sy + mb * .72, 'Tue 09:00', mb * .6, '#fff', ' text-anchor="middle" font-weight="600"'));
+  } else {
+    g.push(rr(sx, sy, sw, mb, 0, '#FFFFFF', ' opacity=".18"'), glyph(sx + sw - mb * 4.2, sy + mb * .12, mb * .76 / 18, '#fff'),
+           txt(sx + sw - mb * .6, sy + mb * .72, 'Tue 9:41', mb * .6, '#fff', ' text-anchor="end" font-weight="500"'));
+  }
+  /* the aluminium base */
+  var by = y + H;
+  g.push('<path d="M' + (x - W * .07) + ' ' + by + ' H' + (x + W * 1.07) + ' Q' + (x + W * 1.07) + ' ' + (by + W * .028) + ' ' + (x + W * 1.03) + ' ' + (by + W * .028) +
+         ' H' + (x - W * .03) + ' Q' + (x - W * .07) + ' ' + (by + W * .028) + ' ' + (x - W * .07) + ' ' + by + ' Z" fill="url(#alu)"/>',
+         rr(x + W / 2 - W * .08, by, W * .16, W * .009, 4, '#A9ABB0'), '</g>');
+  return { svg: g.join(''), sx: sx, sy: sy, sw: sw, sh: sh, mb: mb };
+}
+function phone(x, y, W, name) {
+  var H = W * 19.5 / 9, pad = W * .045, id = 'ph' + Math.round(x) + Math.round(y), g = ['<g filter="url(#drop)">'];
+  g.push(rr(x, y, W, H, W * .16, 'url(#rim)'), rr(x + 3, y + 3, W - 6, H - 6, W * .15, '#000'));
+  g.push('<clipPath id="' + id + '"><rect x="' + (x + pad) + '" y="' + (y + pad) + '" width="' + (W - 2 * pad) + '" height="' + (H - 2 * pad) + '" rx="' + (W * .12) + '"/></clipPath>');
+  g.push('<g clip-path="url(#' + id + ')">' + art(name, x + pad, y + pad, W - 2 * pad, H - 2 * pad, 'slice') + '</g>');
+  g.push(rr(x + W / 2 - W * .15, y + pad + W * .035, W * .3, W * .085, W * .045, '#000'),
+         txt(x + pad + W * .12, y + pad + W * .1, '9:41', W * .05, '#fff', ' font-weight="600"'), '</g>');
+  return g.join('');
+}
+function tv(x, y, W, name) {
+  var H = W * 9 / 16;
+  return '<g filter="url(#drop)">' + rr(x - 8, y - 8, W + 16, H + 16, 8, 'url(#rim)') + rr(x, y, W, H, 2, '#000') + art(name, x, y, W, H) + '</g>';
+}
+
+/* --- the menu: the app's real rows, trimmed to what the beat needs, in
+   the light system style --------------------------------------------- */
+function menu(x, y, rows, scale) {
+  var k = scale || 1, rh = 26 * k, w = 290 * k, h = rows.length * rh + 12 * k, g = ['<g filter="url(#dropS)">'];
+  g.push(rr(x, y, w, h, 10 * k, '#F6F6F6', ' opacity=".96" stroke="#00000018"'));
+  rows.forEach(function (r, i) {
+    var yy = y + 6 * k + i * rh;
+    if (r[0] === '—') { g.push('<line x1="' + (x + 12 * k) + '" x2="' + (x + w - 12 * k) + '" y1="' + (yy + rh / 2) + '" y2="' + (yy + rh / 2) + '" stroke="#00000018"/>'); return; }
+    if (r[1] === 'hi') g.push(rr(x + 6 * k, yy, w - 12 * k, rh, 6 * k, P.blue));
+    g.push(txt(x + 18 * k, yy + rh * .68, r[0], 16 * k, r[1] === 'hi' ? '#fff' : r[1] === 'dim' ? '#9A9AA0' : P.ink));
+  });
+  g.push('</g>');
+  return g.join('');
+}
+
+/* --- the mark: the menu-bar glyph from src/tray.rs, pixel for pixel ---- */
+var GLYPH = [
+  '                  ', '                  ', ' ################ ', ' #              # ', ' #  ##          # ',
+  ' # ####         # ', ' #  ##          # ', ' #              # ', ' #              # ', ' #      ##      # ',
+  ' #     ####     # ', ' #    ######    # ', ' #   ########   # ', ' #  ##########  # ', ' # ############ # ',
+  ' ################ ', '                  ', '                  '];
+function glyph(x, y, px, ink) {
+  var o = [];
+  GLYPH.forEach(function (row, j) {
+    for (var i = 0; i < row.length; i++) if (row[i] === '#') o.push(rr(x + i * px, y + j * px, px + .3, px + .3, 0, ink));
+  });
+  return o.join('');
+}
+
+/* --- caption: one line, big, left-aligned, above the app UI ------------- */
+function caption(line) {
+  return txt(96, 1440, line, 68, P.ink, ' font-weight="700" letter-spacing="-1.5"');
+}
+
+function note(x, y, s, anchor) {
+  return '<g class="note">' + s.split('\n').map(function (line, i) {
+    return txt(x, y + i * 34, line, 28, P.note, ' font-style="italic" text-anchor="' + (anchor || 'start') + '"');
+  }).join('') + '</g>';
+}
+function arrow(d) {
+  return '<path class="note" d="' + d + '" fill="none" stroke="' + P.note + '" stroke-width="4" stroke-dasharray="14 10" marker-end="url(#arr)"/>';
+}
+function dashed(x, y, w, h) {
+  return rr(x, y, w, h, 0, 'none', ' class="note" stroke="' + P.note + '" stroke-width="3" stroke-dasharray="12 9"');
+}
+
+function frame(inner) {
+  return '<svg class="frame" viewBox="0 0 1080 1920" xmlns="http://www.w3.org/2000/svg">' +
+    rr(0, 0, 1080, 1920, 0, 'url(#ground)') + inner +
+    '<g class="safe"><rect x="0" y="1498" width="1080" height="422" fill="#E4552B" opacity=".14"/>' +
+    '<rect x="950" y="0" width="130" height="1498" fill="#E4552B" opacity=".14"/>' +
+    txt(540, 1580, 'covered by app UI', 30, '#B5462A', ' text-anchor="middle"') + '</g></svg>';
+}
+
+var FRAMES = [
+  { l: 'A', t: '0.0 – 3.0 s', cap: 'One painting a day.',
+    pic: 'A white wall with three unframed canvases in three shapes (a wide Monet, a Vermeer, a narrow Hokusai), each carrying only its own soft shadow.',
+    mot: 'A slow dolly right, like walking past. The paintings drift by at slightly different speeds, which gives a touch of parallax.',
+    snd: 'Soft footsteps and a light room tone. A quiet low note as each painting passes the centre.',
+    svg: function () {
+      return frame(canvas('lilies', -200, 560, 300) + canvas('vermeer', 400, 470, 480) + canvas('hokusai', 900, 420, 600) +
+        arrow('M 360 300 L 720 300') + note(540, 270, 'camera walks →', 'middle') +
+        caption('One painting a day.'));
+    } },
+  { l: 'B', t: '3.0 – 5.5 s', cap: 'On your desktop.',
+    pic: 'The walk stops on van Gogh’s Wheat Field. A MacBook forms around it, so the painting is now its wallpaper: whole, with black either side.',
+    mot: 'The dark rim grows out from the canvas edges, the black fills in around the painting, and the base slides up from below. The camera eases back.',
+    snd: 'The steps stop. A soft felt thud as the laptop closes around the picture.',
+    svg: function () {
+      var L = laptop(90, 520, 900, { art: 'wheat' }), w = widthAt('wheat', L.sh);
+      return frame(L.svg + dashed(L.sx + (L.sw - w) / 2, L.sy, w, L.sh) +
+        note(540, 460, 'canvas (dashed) becomes the wallpaper', 'middle') +
+        caption('On your desktop.'));
+    } },
+  { l: 'C', t: '5.5 – 8.0 s', cap: 'Never cropped.',
+    pic: 'The same laptop. The pixel glyph opens the light system menu and Next picture is highlighted. The pointer is the small 1984 arrow, the one Mac hint in this frame. A square Botticelli arrives and the black margins widen to fit it.',
+    mot: 'The pointer glides to the row, the menu closes, and the new painting arrives. For a split second it shows in 1-bit dither before settling into colour, like a picture loading on an old Mac. The margins slide wider in one easing.',
+    snd: 'A soft click on the press, a faint crackle during the dither beat, then a felt thud as the picture settles. The motif’s second note.',
+    svg: function () {
+      var L = laptop(90, 520, 900, { art: 'botticelli' }), mx = L.sx + L.sw - 300, my = L.sy + L.mb + 4;
+      return frame(L.svg + menu(mx, my, [['Wheat Field with Cypresses', 'dim'], ['—'], ['Next picture', 'hi'], ['Favourites…']]) +
+        pointer(mx + 170, my + 62, 2.2) +
+        note(540, 460, 'margins slide wider — fit, never fill', 'middle') +
+        note(90, L.sy + L.sh + 150, 'arrives with one blink of 1-bit dither', 'start') +
+        caption('Never cropped.'));
+    } },
+  { l: 'D', t: '8.0 – 10.0 s', cap: 'On your phone.',
+    pic: 'A phone holding Segantini’s tall Pine Tree across its whole screen. The catalogue chose it because it is shaped like the screen. The laptop has slid back and sits out of focus behind.',
+    mot: 'The phone rises on a damped spring with a slight tilt that settles, and the painting fades up from black.',
+    snd: 'A low air swipe as it rises, a felt thud on landing, and the motif’s third note.',
+    svg: function () {
+      var L = laptop(-160, 360, 760, { art: 'botticelli' });
+      return frame('<g opacity=".5">' + L.svg + '</g>' + phone(430, 360, 400, 'segantini') +
+        arrow('M 900 1100 L 900 900') + note(900, 1150, 'springs\nup', 'middle') +
+        caption('On your phone.'));
+    } },
+  { l: 'E', t: '10.0 – 12.0 s', cap: 'And on your TV.',
+    pic: 'The family shot: a TV in art mode showing Turner’s Whalers, a GNOME laptop with Irises, the Mac and the phone, overlapping on white with soft shadows and no labels.',
+    mot: 'A continuous pull back from D, with each device settling in on its own small spring, left to right.',
+    snd: 'The motif loops as a quiet bass pulse, with one soft tick per device.',
+    svg: function () {
+      var G = laptop(40, 900, 460, { art: 'irises', os: 'gnome' }), M = laptop(520, 950, 460, { art: 'botticelli' });
+      return frame(tv(120, 300, 840, 'whalers') + G.svg + M.svg + phone(430, 780, 190, 'segantini') +
+        caption('And on your TV.'));
+    } },
+  { l: 'F', t: '12.0 – 15.0 s', cap: '(end card)',
+    pic: 'White. The app’s pixel glyph in black, with a thin six-colour stripe beneath it, a nod to the 1984 poster. Then “Art Window.”, “A painting a day. Never cropped.”, a black “Free download” pill, and one grey line naming the platforms.',
+    mot: 'The devices lift away. The glyph draws on pixel by pixel, with its sun last, landing on the final note. The stripe wipes in left to right, the words fade up and the pill presses like a key. Long hold.',
+    snd: 'The motif resolves on one low chord as the sun lands, then a room-tone tail.',
+    svg: function () {
+      var cta = 'Free download', pw = measure(cta, 34, 600) + 96;
+      return frame(glyph(540 - 9 * 12, 440, 12, P.ink) + stripe(540 - 60, 640, 120, 6) +
+        txt(540, 770, 'Art Window.', 84, P.ink, ' text-anchor="middle" font-weight="700" letter-spacing="-2"') +
+        txt(540, 840, 'A painting a day. Never cropped.', 36, P.soft, ' text-anchor="middle"') +
+        rr(540 - pw / 2, 920, pw, 88, 44, P.ink) +
+        txt(540, 964, cta, 34, '#fff', ' text-anchor="middle" dominant-baseline="central" font-weight="600"') +
+        txt(540, 1070, 'macOS · Windows · GNOME · Android · TV', 26, P.soft, ' text-anchor="middle"') +
+        note(760, 480, 'draws on pixel\nby pixel; sun last', 'start'));
+    } }
+];
+
+document.getElementById('board').innerHTML = FRAMES.map(function (f) {
+  return '<section class="card">' + f.svg() +
+    '<div class="meta"><div class="hd"><span class="l">' + f.l + '</span><span class="t">' + f.t + '</span></div>' +
+    '<div class="c">' + f.cap + '</div><dl>' +
+    '<dt>picture</dt><dd>' + f.pic + '</dd><dt>motion</dt><dd>' + f.mot + '</dd><dt>sound</dt><dd>' + f.snd + '</dd>' +
+    '</dl></div></section>';
+}).join('');
+
+function toggle(btn, cls, invert) {
+  btn.addEventListener('click', function () {
+    var on = btn.getAttribute('aria-pressed') !== 'true';
+    btn.setAttribute('aria-pressed', on);
+    document.body.classList.toggle(cls, invert ? !on : on);
+  });
+}
+toggle(document.getElementById('bNotes'), 'hide-notes', true);
+toggle(document.getElementById('bSafe'), 'show-safe', false);
+</script>
+</body>
+</html>

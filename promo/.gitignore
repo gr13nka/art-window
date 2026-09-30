@@ -1,0 +1,6 @@
+# Rendered outputs: the master is ~250 MB; regenerate with tools/export.js
+*.mp4
+*.wav
+tools/node_modules/
+tools/package.json
+tools/package-lock.json
