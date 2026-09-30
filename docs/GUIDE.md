@@ -17,9 +17,11 @@ file, and how to remove it.
 
 ## Status
 
-Art Window supports macOS and Linux with GNOME as desktop wallpaper apps,
+Art Window supports macOS, Linux with GNOME and Windows 10/11 as desktop wallpaper apps,
 Android as a native Kotlin phone app, and iPhone and iPad as a native Swift app. The GNOME port uses GTK 3, GSettings,
-logind, and the XDG directory conventions. Windows is not implemented.
+logind, and the XDG directory conventions. The Windows port is built and tested
+in CI but has not yet been tried on a real desktop — see
+[Windows wallpaper integration](windows-wallpaper.md).
 
 ## Install
 
@@ -83,6 +85,23 @@ library and a StatusNotifier extension are available, Art Window also adds a pan
 menu and can stay out of the way there. Those are optional; their absence never
 makes the app unusable. See [GNOME wallpaper integration](gnome-wallpaper.md)
 for the exact behavior and diagnostic commands.
+
+### Windows
+
+**From a release:** run `art-window-windows-x64-setup.exe`. It installs for the
+current user only, so it needs no administrator rights. It adds a Start-menu
+entry and, unless you untick it, starts Art Window whenever you sign in. When
+setup finishes, Art Window starts in the notification area and puts up the day's
+painting. Windows 10 1809 or newer, x64.
+
+**From source:** needs the MSVC toolchain and Inno Setup 6.
+
+```powershell
+./windows/package.ps1   # -> target/dist/Art-Window-<version>-windows-x64-setup.exe
+```
+
+The tray icon may land in the overflow flyout (the `^` by the clock). Drag it onto
+the taskbar to keep it in sight.
 
 ### Android
 
@@ -167,13 +186,14 @@ Choosing an existing painting by hand does not disturb the schedule. The excepti
 is a painting that was already overdue: that choice settles the day, since
 otherwise an overdue fetch would immediately replace it.
 
-**Start at login** writes a launchd agent on macOS or an XDG autostart entry on
-Linux. It takes effect at the next login; changing it neither starts nor stops the
+**Start at login** writes a launchd agent on macOS, an XDG autostart entry on
+Linux, or an `ArtWindow` value under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`
+on Windows — the same value the installer's sign-in option writes. It takes effect at the next login; changing it neither starts nor stops the
 current process.
 
 Art Window watches the local date rather than a stopwatch. A machine that sleeps
-through several days wakes owing one painting, not one per missed day. macOS and
-Linux both subscribe to their native wake notifications and also retain a timer as
+through several days wakes owing one painting, not one per missed day. macOS,
+Linux and Windows all subscribe to their native wake notifications and also retain a timer as
 a backstop.
 
 ## Use
@@ -186,8 +206,12 @@ art-window --once     # fetch a painting now, print it, then exit
 art-window --if-due   # the same, but only if the local day is unsettled
 art-window --where    # print config, state, cache and favourites locations
 art-window --check    # diagnose GNOME integration (Linux only)
-art-window --quit     # stop the running GNOME instance (Linux only)
+art-window --quit     # stop the running instance (Linux and Windows)
 ```
+
+On Windows the one-shot commands print to the terminal they are run from.
+The installed binary is `%LOCALAPPDATA%\Programs\Art Window\art-window.exe`.
+The resident app writes its errors to `art-window.log`, beside `state.json`.
 
 Launching the GNOME app a second time brings the existing window forward instead
 of starting another rotation process.
@@ -256,6 +280,13 @@ rm -f ~/.config/autostart/dev.artwindow.desktop
 rm -rf ~/.config/artwindow ~/.local/share/artwindow ~/.cache/artwindow
 ```
 
+On Windows, uninstall *Art Window* from *Settings → Apps*. That stops it and removes
+the sign-in entry. Your settings, state and favourites are kept; delete them with:
+
+```powershell
+Remove-Item -Recurse "$env:APPDATA\ArtWindow", "$env:LOCALAPPDATA\ArtWindow"
+```
+
 Adjust those paths if the installer or XDG directories were overridden. The
 wallpaper stays as it is; choose another in system settings to change it back.
 
@@ -271,12 +302,13 @@ git push origin vX.Y.Z
 
 The [release workflow](../.github/workflows/release.yml) checks that the tag
 matches the `Cargo.toml` version, then builds and publishes the macOS DMG, the
-Linux tarball, the Android APK, and a `SHA256SUMS` file against the tag on
+Linux tarball, the Windows installer, the Android APK, and a `SHA256SUMS` file against the tag on
 GitHub. The Android `versionCode` is derived as `major*10000 + minor*100 +
 patch`, so every release must increase the version.
 
 Release assets are published under version-less names — `art-window-macos.dmg`,
-`art-window-linux-x86_64.tar.gz`, `art-window-android.apk` — because the README
+`art-window-linux-x86_64.tar.gz`, `art-window-windows-x64-setup.exe`,
+`art-window-android.apk` — because the README
 links straight to `releases/latest/download/<name>`. Renaming them breaks those
 links without any error.
 

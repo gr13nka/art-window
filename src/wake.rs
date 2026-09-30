@@ -7,33 +7,38 @@
 //! asleep through midnight is the ordinary case, so without this the first painting
 //! of a new day waits for whatever happens to poke the loop next.
 //!
-//! Small enough to keep both platform bodies in this file: NSWorkspace on macOS
-//! and logind on Linux.
+//! Small enough to keep every platform body in this file: NSWorkspace on macOS,
+//! logind on Linux and the power manager's suspend-resume callback on Windows.
 //!
 //! The displays changing is the same kind of news and lives here too. On macOS
 //! unplugging a monitor moves its Spaces onto the screens that remain, and the Dock
 //! greets them with its own default picture — so something has to say it happened
 //! for the loop to put the painting back. See [`displays`].
 
-/// Calls `on_wake` on the main thread each time the machine wakes from sleep.
+/// Calls `on_wake` each time the machine wakes from sleep.
+///
+/// Which thread it is called on is the platform's choice — the main one on macOS
+/// and Linux, one of the system's on Windows — so `on_wake` must be `Send` and
+/// should do no more than say that it happened.
 ///
 /// The returned [`Watch`] owns the subscription. Hold it for as long as the calls
 /// are wanted; dropping it stops them.
-pub fn watch(on_wake: impl Fn() + 'static) -> anyhow::Result<Watch> {
+pub fn watch(on_wake: impl Fn() + Send + Sync + 'static) -> anyhow::Result<Watch> {
     Watch::new(on_wake)
 }
 
 /// Calls `on_change` each time a display is attached, detached or rearranged.
 ///
-/// Only macOS is watched. GNOME keeps one wallpaper URI whatever is plugged in, so
-/// elsewhere this answers `None` and nothing is ever called.
+/// Only macOS is watched. GNOME keeps one wallpaper URI whatever is plugged in,
+/// and Windows has not been seen to lose its wallpaper this way, so elsewhere this
+/// answers `None` and nothing is ever called.
 #[cfg(target_os = "macos")]
-pub fn displays(on_change: impl Fn() + 'static) -> anyhow::Result<Option<Watch>> {
+pub fn displays(on_change: impl Fn() + Send + Sync + 'static) -> anyhow::Result<Option<Watch>> {
     Watch::displays(on_change).map(Some)
 }
 
 #[cfg(not(target_os = "macos"))]
-pub fn displays(_on_change: impl Fn() + 'static) -> anyhow::Result<Option<Watch>> {
+pub fn displays(_on_change: impl Fn() + Send + Sync + 'static) -> anyhow::Result<Option<Watch>> {
     Ok(None)
 }
 
@@ -167,6 +172,94 @@ mod platform {
         fn drop(&mut self) {
             if let Some(subscription) = self.subscription.take() {
                 self.connection.signal_unsubscribe(subscription);
+            }
+        }
+    }
+}
+
+#[cfg(windows)]
+pub use platform::Watch;
+
+#[cfg(windows)]
+mod platform {
+    use anyhow::{bail, Result};
+    use core::ffi::c_void;
+    use windows::Win32::Foundation::{ERROR_SUCCESS, HANDLE};
+    use windows::Win32::System::Power::{
+        PowerRegisterSuspendResumeNotification, PowerUnregisterSuspendResumeNotification,
+        DEVICE_NOTIFY_SUBSCRIBE_PARAMETERS, HPOWERNOTIFY,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::{DEVICE_NOTIFY_CALLBACK, PBT_APMRESUMEAUTOMATIC};
+
+    type OnWake = Box<dyn Fn() + Send + Sync>;
+
+    /// A live subscription to the power manager's suspend-resume callback.
+    pub struct Watch {
+        registration: HPOWERNOTIFY,
+        /// Double-boxed so the pointer handed to the system is thin. Freed only after
+        /// the registration is gone, so no callback can find it dangling.
+        on_wake: *mut OnWake,
+        /// What the registration was handed. The documentation does not promise the
+        /// system copies it, so it lives exactly as long as the registration does.
+        _recipient: Box<DEVICE_NOTIFY_SUBSCRIBE_PARAMETERS>,
+    }
+
+    // SAFETY: the registration is an opaque token, and `on_wake` is owned here alone
+    // and only ever called through a `Send + Sync` closure.
+    unsafe impl Send for Watch {}
+
+    impl Watch {
+        pub(super) fn new(on_wake: impl Fn() + Send + Sync + 'static) -> Result<Self> {
+            let on_wake = Box::into_raw(Box::new(Box::new(on_wake) as OnWake));
+            let recipient = Box::new(DEVICE_NOTIFY_SUBSCRIBE_PARAMETERS {
+                Callback: Some(resumed),
+                Context: on_wake.cast(),
+            });
+            let mut registration = std::ptr::null_mut();
+            // SAFETY: `recipient` and `on_wake` both stay allocated until `Drop` has
+            // unregistered.
+            let status = unsafe {
+                PowerRegisterSuspendResumeNotification(
+                    DEVICE_NOTIFY_CALLBACK,
+                    HANDLE(std::ptr::from_ref(&*recipient).cast_mut().cast()),
+                    &mut registration,
+                )
+            };
+            if status != ERROR_SUCCESS {
+                // SAFETY: nothing registered, so nothing else holds the pointer.
+                drop(unsafe { Box::from_raw(on_wake) });
+                bail!("subscribing to power notifications failed: {status:?}");
+            }
+            Ok(Self {
+                registration: HPOWERNOTIFY(registration as isize),
+                on_wake,
+                _recipient: recipient,
+            })
+        }
+    }
+
+    /// Only `PBT_APMRESUMEAUTOMATIC` is listened for: it is sent on every wake,
+    /// whereas the suspend-resume variant arrives only when a person caused it.
+    unsafe extern "system" fn resumed(
+        context: *const c_void,
+        kind: u32,
+        _setting: *const c_void,
+    ) -> u32 {
+        if kind == PBT_APMRESUMEAUTOMATIC {
+            // SAFETY: `context` is the pointer `new` registered, alive until unregistered.
+            let on_wake = unsafe { &*context.cast::<OnWake>() };
+            on_wake();
+        }
+        0
+    }
+
+    impl Drop for Watch {
+        fn drop(&mut self) {
+            // SAFETY: the registration came from `new` and is removed exactly once;
+            // the closure is freed only after, so no callback can still be using it.
+            unsafe {
+                let _ = PowerUnregisterSuspendResumeNotification(self.registration);
+                drop(Box::from_raw(self.on_wake));
             }
         }
     }

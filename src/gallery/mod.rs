@@ -29,6 +29,10 @@ use macos as platform;
 mod linux;
 #[cfg(target_os = "linux")]
 use linux as platform;
+#[cfg(windows)]
+mod windows;
+#[cfg(windows)]
+use windows as platform;
 
 /// What somebody asked of a picture in the window.
 ///
@@ -45,7 +49,7 @@ pub enum Pick {
 /// An action from the Linux control strip. Kept separate from [`Pick`] because
 /// looking at a favourite and controlling the resident application are different
 /// vocabularies even when GNOME puts them in one window.
-#[cfg_attr(target_os = "macos", allow(dead_code))]
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub enum Control {
     Browse,
     Next,
@@ -89,7 +93,7 @@ struct Open {
     content: platform::Content,
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 const TITLE: &str = "Favourites";
 #[cfg(target_os = "linux")]
 const TITLE: &str = "Art Window";

@@ -16,10 +16,14 @@ pub const QUIT_ACTION: &str = "quit";
 mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(windows)]
+mod windows;
 #[cfg(target_os = "linux")]
 use linux as platform;
 #[cfg(target_os = "macos")]
 use macos as platform;
+#[cfg(windows)]
+use windows as platform;
 
 /// How much of the desktop a picture actually reached.
 ///
@@ -110,7 +114,41 @@ pub fn watch_tray_host(on_changed: impl Fn(bool) + 'static) -> Result<TrayHostWa
     platform::watch_tray_host(on_changed)
 }
 
-#[cfg(target_os = "linux")]
+/// Asks the Art Window already running in this session to exit.
+#[cfg(any(target_os = "linux", windows))]
 pub fn quit_running() -> Result<()> {
     platform::quit_running()
+}
+
+#[cfg(windows)]
+pub(crate) use platform::Instance;
+
+/// Claims this session for one Art Window, or answers `None` when another already
+/// holds it. GNOME does this through `GApplication`; Windows has nothing of the
+/// kind, so the claim is made here. `on_quit` is called — on a system thread, hence
+/// `Send` — when a later `--quit` asks the holder to go.
+#[cfg(windows)]
+pub fn claim_instance(on_quit: impl Fn() + Send + Sync + 'static) -> Result<Option<Instance>> {
+    platform::claim_instance(on_quit)
+}
+
+/// Whether the taskbar is drawn light, which decides the ink of the tray glyph.
+#[cfg(windows)]
+pub fn light_taskbar() -> bool {
+    platform::light_taskbar()
+}
+
+/// Lets a command-line mode print to the terminal it was started from. A release
+/// build is a GUI-subsystem program, which Windows starts with no console at all.
+#[cfg(windows)]
+pub fn attach_console() {
+    platform::attach_console()
+}
+
+/// Sends everything written to stderr to `path` from now on. Under the GUI
+/// subsystem stderr goes nowhere, and this is where the whole error chain that the
+/// menu shortens is kept — the counterpart of the launchd agent's log on macOS.
+#[cfg(windows)]
+pub fn log_to(path: &Path) {
+    platform::log_to(path)
 }

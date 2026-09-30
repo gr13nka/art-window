@@ -51,6 +51,58 @@ fn offset_in(zone: &glib::TimeZone, at: u64) -> i64 {
     }
 }
 
+/// Windows converts the instant itself: the same UTC time is turned into local time
+/// under the zone's rules for *that* moment, and the gap between the two readings
+/// is the offset.
+#[cfg(windows)]
+fn offset(at: u64) -> i64 {
+    use windows::Win32::System::Time::{
+        GetDynamicTimeZoneInformation, DYNAMIC_TIME_ZONE_INFORMATION,
+    };
+
+    let mut zone = DYNAMIC_TIME_ZONE_INFORMATION::default();
+    // SAFETY: `zone` is a valid, writable structure. Its return value only says
+    // which of standard or daylight time is in force now, which is not asked here.
+    unsafe { GetDynamicTimeZoneInformation(&mut zone) };
+    offset_in(&zone, at)
+}
+
+#[cfg(windows)]
+fn offset_in(zone: &windows::Win32::System::Time::DYNAMIC_TIME_ZONE_INFORMATION, at: u64) -> i64 {
+    use windows::Win32::Foundation::{FILETIME, SYSTEMTIME};
+    use windows::Win32::System::Time::{
+        FileTimeToSystemTime, SystemTimeToFileTime, SystemTimeToTzSpecificLocalTimeEx,
+    };
+
+    // FILETIME counts 100 ns ticks from 1601; Unix time counts seconds from 1970.
+    const TICKS_PER_SECOND: u64 = 10_000_000;
+    const EPOCH_GAP_SECONDS: u64 = 11_644_473_600;
+    let ticks = |t: FILETIME| (u64::from(t.dwHighDateTime) << 32) | u64::from(t.dwLowDateTime);
+
+    let ticks_at = (at + EPOCH_GAP_SECONDS) * TICKS_PER_SECOND;
+    let utc = FILETIME {
+        dwLowDateTime: ticks_at as u32,
+        dwHighDateTime: (ticks_at >> 32) as u32,
+    };
+    let mut utc_parts = SYSTEMTIME::default();
+    let mut local_parts = SYSTEMTIME::default();
+    let mut local = FILETIME::default();
+    // SAFETY: every pointer is to a live local of the type the call names.
+    let converted = unsafe {
+        FileTimeToSystemTime(&utc, &mut utc_parts)
+            .and_then(|()| {
+                SystemTimeToTzSpecificLocalTimeEx(Some(zone), &utc_parts, &mut local_parts)
+            })
+            .and_then(|()| SystemTimeToFileTime(&local_parts, &mut local))
+    };
+    // An instant the calendar cannot express has no offset worth applying, and zero
+    // is the answer that leaves the day unmoved rather than the one that stops it.
+    if converted.is_err() {
+        return 0;
+    }
+    (ticks(local) as i64 - ticks_at as i64) / TICKS_PER_SECOND as i64
+}
+
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::offset_in;
@@ -61,5 +113,35 @@ mod tests {
         let new_york = glib::TimeZone::new(Some("America/New_York"));
         assert_eq!(offset_in(&new_york, 1_704_067_200), -5 * 60 * 60);
         assert_eq!(offset_in(&new_york, 1_719_792_000), -4 * 60 * 60);
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::offset_in;
+    use windows::Win32::System::Time::{
+        EnumDynamicTimeZoneInformation, DYNAMIC_TIME_ZONE_INFORMATION,
+    };
+
+    fn new_york() -> DYNAMIC_TIME_ZONE_INFORMATION {
+        for index in 0.. {
+            let mut zone = DYNAMIC_TIME_ZONE_INFORMATION::default();
+            // SAFETY: `zone` is valid and writable; running out of zones is an error.
+            if unsafe { EnumDynamicTimeZoneInformation(index, &mut zone) } != 0 {
+                break;
+            }
+            let key = String::from_utf16_lossy(&zone.TimeZoneKeyName);
+            if key.trim_end_matches('\0') == "Eastern Standard Time" {
+                return zone;
+            }
+        }
+        panic!("Eastern Standard Time is not in the timezone database");
+    }
+
+    #[test]
+    fn asks_for_the_offset_at_each_instant() {
+        let zone = new_york();
+        assert_eq!(offset_in(&zone, 1_704_067_200), -5 * 60 * 60);
+        assert_eq!(offset_in(&zone, 1_719_792_000), -4 * 60 * 60);
     }
 }

@@ -280,7 +280,7 @@ pub fn run(paths: Paths, config: Config, mut state: State) -> Result<()> {
     let mut builder = EventLoopBuilder::<Wake>::with_user_event();
     #[cfg(target_os = "linux")]
     builder.with_app_id(desktop::APP_ID);
-    #[cfg_attr(target_os = "linux", allow(unused_mut))]
+    #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
     let mut event_loop = builder.build();
 
     #[cfg(target_os = "linux")]
@@ -299,6 +299,21 @@ pub fn run(paths: Paths, config: Config, mut state: State) -> Result<()> {
     event_loop.set_activation_policy(ActivationPolicy::Accessory);
 
     let proxy = event_loop.create_proxy();
+
+    // One tray icon per session: autostart and a Start-menu click would otherwise
+    // make two. The claim is held until the process ends, which `run` never
+    // survives, and it is also how a later `--quit` reaches this one.
+    #[cfg(windows)]
+    let _instance = {
+        let quit_proxy = proxy.clone();
+        match desktop::claim_instance(move || {
+            let _ = quit_proxy.send_event(Wake::Chose(Wanted::Quit));
+        })? {
+            Some(instance) => instance,
+            None => return Ok(()),
+        }
+    };
+
     let menu_proxy = proxy.clone();
     MenuEvent::set_event_handler(Some(move |event| {
         let _ = menu_proxy.send_event(Wake::Menu(event));
@@ -424,7 +439,7 @@ pub fn run(paths: Paths, config: Config, mut state: State) -> Result<()> {
                     timer_started = true;
                 }
 
-                #[cfg(target_os = "macos")]
+                #[cfg(any(target_os = "macos", windows))]
                 {
                     // tray-icon wants a run loop that is already turning — building
                     // here keeps it visible in front of full-screen applications.
@@ -1032,9 +1047,17 @@ const SCALE: usize = 2;
 
 fn glyph() -> Result<Icon> {
     #[cfg(target_os = "macos")]
-    const INK: [u8; 3] = [0, 0, 0];
+    let ink: [u8; 3] = [0, 0, 0];
     #[cfg(target_os = "linux")]
-    const INK: [u8; 3] = [255, 255, 255];
+    let ink: [u8; 3] = [255, 255, 255];
+    // Windows draws the icon as given, on a taskbar the user may have made light or
+    // dark. Asked once: a theme changed mid-session keeps the old ink until the next.
+    #[cfg(windows)]
+    let ink: [u8; 3] = if desktop::light_taskbar() {
+        [0, 0, 0]
+    } else {
+        [255, 255, 255]
+    };
 
     let side = GLYPH.len();
     let mut rgba = Vec::with_capacity(side * side * SCALE * SCALE * 4);
@@ -1043,7 +1066,7 @@ fn glyph() -> Result<Icon> {
             for pixel in row.chars() {
                 let alpha = if pixel == ' ' { 0 } else { 255 };
                 for _ in 0..SCALE {
-                    rgba.extend_from_slice(&[INK[0], INK[1], INK[2], alpha]);
+                    rgba.extend_from_slice(&[ink[0], ink[1], ink[2], alpha]);
                 }
             }
         }
@@ -1060,12 +1083,14 @@ fn wake_run_loop() {
     }
 }
 
-/// GTK's main context is already turning; it needs no AppKit-style nudge.
-#[cfg(target_os = "linux")]
+/// GTK's main context and the Win32 message loop are already turning; neither
+/// needs an AppKit-style nudge.
+#[cfg(not(target_os = "macos"))]
 fn wake_run_loop() {}
 
 /// The menu carries the short version; this is where the whole chain goes. Under
-/// the launchd agent it lands in `~/Library/Logs/ArtWindow.log`.
+/// the launchd agent it lands in `~/Library/Logs/ArtWindow.log`; on Windows,
+/// `art-window.log` beside the state file — see `desktop::log_to`.
 fn report(e: &anyhow::Error) {
     eprintln!("art-window: {e:#}");
 }

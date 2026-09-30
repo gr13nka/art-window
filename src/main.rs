@@ -6,6 +6,10 @@
 //! `--once` does exactly one rotation and says what happened, on a terminal where
 //! the answer is visible.
 
+// A release build is a GUI program on Windows, so no console window opens behind
+// the tray icon; the command-line modes ask for one back — see `attach_console`.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 mod art;
 mod config;
 mod day;
@@ -36,11 +40,16 @@ fn main() -> Result<()> {
         }
     }
 
+    #[cfg(windows)]
+    if !matches!(mode, Mode::Tray) {
+        desktop::attach_console();
+    }
+
     if let Mode::Quit = mode {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", windows))]
         return desktop::quit_running();
-        #[cfg(not(target_os = "linux"))]
-        anyhow::bail!("--quit is available on Linux/GNOME only");
+        #[cfg(target_os = "macos")]
+        anyhow::bail!("--quit is available on Linux and Windows only");
     }
 
     let paths = Paths::locate()?;
@@ -79,7 +88,11 @@ fn main() -> Result<()> {
         Mode::Where => unreachable!("handled above, before the config is read"),
         Mode::Check => unreachable!("handled above, before the config is read"),
         Mode::Quit => unreachable!("handled above, before paths are located"),
-        Mode::Tray => tray::run(paths, config, state),
+        Mode::Tray => {
+            #[cfg(windows)]
+            desktop::log_to(&paths.state.with_file_name("art-window.log"));
+            tray::run(paths, config, state)
+        }
         Mode::Once { only_if_due } => {
             if only_if_due && !state.is_due() {
                 return Ok(());
@@ -115,7 +128,8 @@ enum Mode {
     Where,
     /// Diagnose the GNOME wallpaper and tray integrations.
     Check,
-    /// Ask the existing GNOME instance to exit over D-Bus.
+    /// Ask the running instance to exit: over D-Bus on GNOME, by a named event on
+    /// Windows.
     Quit,
 }
 
@@ -126,5 +140,5 @@ fn usage() {
     println!("  art-window --if-due   the same, but only if one is due");
     println!("  art-window --where    print where settings and pictures live");
     println!("  art-window --check    diagnose GNOME desktop integration");
-    println!("  art-window --quit     stop the running GNOME instance");
+    println!("  art-window --quit     stop the running instance (Linux, Windows)");
 }

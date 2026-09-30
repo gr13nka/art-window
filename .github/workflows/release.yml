@@ -74,6 +74,29 @@ jobs:
           name: linux
           path: target/dist/*
 
+  windows:
+    runs-on: windows-2022
+    needs: version
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Inno Setup 6
+        run: choco install innosetup --no-progress -y
+
+      - name: Install Rust 1.88
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.88'
+
+      - name: Build installer
+        run: ./windows/package.ps1
+        shell: pwsh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: target/dist/*
+
   android:
     runs-on: ubuntu-24.04
     needs: version
@@ -125,7 +148,7 @@ jobs:
 
   publish:
     runs-on: ubuntu-24.04
-    needs: [version, macos, linux, android]
+    needs: [version, macos, linux, windows, android]
     permissions:
       contents: write
     steps:
@@ -143,6 +166,7 @@ jobs:
         run: |
           mv "Art-Window-$VERSION-macos.dmg" art-window-macos.dmg
           mv "art-window-$VERSION-linux-x86_64.tar.gz" art-window-linux-x86_64.tar.gz
+          mv "Art-Window-$VERSION-windows-x64-setup.exe" art-window-windows-x64-setup.exe
           mv "art-window-$VERSION-android.apk" art-window-android.apk
 
       - name: Checksums
