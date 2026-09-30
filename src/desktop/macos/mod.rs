@@ -2,11 +2,15 @@ mod login;
 mod wallpaper;
 
 use super::Pinned;
+use crate::placement::Hang;
 use anyhow::Result;
-use std::path::Path;
 
-pub(super) fn pin(path: &Path) -> Result<Pinned> {
-    wallpaper::pin(path)
+pub(super) fn pin(hang: &Hang) -> Result<Pinned> {
+    wallpaper::pin(hang)
+}
+
+pub(super) fn primary_screen() -> Option<(u32, u32)> {
+    wallpaper::primary_screen()
 }
 
 pub(super) fn catch_up() {

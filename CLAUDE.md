@@ -158,9 +158,13 @@ it before touching `src/desktop/macos/wallpaper.rs`.
   with the file actually on screen, and `id_of` is private so the convention cannot
   escape `art/met.rs`.
 - **`config.toml` is read, never written. `state.json` is written, never read by a
-  human.** Two files because they have two authors — serialising config back would
-  destroy the user's comments. The `source` string is decoded into `SourceSpec`
-  while the file is read, so nothing downstream ever handles it as text.
+  human. `settings.json` is written by the window.** Three files because they have
+  three authors — serialising config back would destroy the user's comments. The
+  `source` string is decoded into `SourceSpec` while the file is read, so nothing
+  downstream ever handles it as text. `settings.json` holds the filters and the
+  placement style; it is written only by *Apply changes*, and a missing or
+  unparseable one means the defaults, which are the program as it was before the
+  window existed (landscapes, any shape, fitted over black).
 - **Config, state and cache are different data kinds.** `Paths::locate` uses the
   platform directories for each instead of putting them under one convenient
   root. This preserves the existing Application Support/Cache split on macOS and
@@ -245,9 +249,13 @@ it before touching `src/desktop/macos/wallpaper.rs`.
 - **A click in the window is answered by the loop, not where it lands.**
   `mouseDown:` and a button's action arrive mid-click on AppKit's thread, which owns
   nothing the loop does. They send a `Pick` through the same `EventLoopProxy` the
-  menu and the wake notification use. `Pick` has two variants and not three because
-  selecting a picture changes nothing outside the window and so has no business
-  leaving it.
+  menu and the wake notification use. `Pick` has three variants — show, forget,
+  apply — because selecting a picture, and trying out settings before applying
+  them, change nothing outside the window and so have no business leaving it.
+- **The settings tab decides nothing itself.** `gallery::Pending` owns what is
+  staged, which chips show, what the preview looks like and whether *Apply* can
+  be pressed; the three platform windows only draw it and forward clicks into it.
+  A rule written into one platform file is a rule the other two will not have.
 - **The shelf accepts the first mouse.** `acceptsFirstMouse:` returns true, and it
   has to: this program is an `Accessory` and its window is hardly ever the active
   one, so the ordinary rule — the first click into an inactive window only wakes it —
@@ -263,12 +271,19 @@ it before touching `src/desktop/macos/wallpaper.rs`.
   from a menu row or from the window, and answering them in two places is how the
   two would drift apart. This is also why `Wanted` is reached through
   `From<Pick>` rather than the window knowing what a `Wanted` is.
-- **Rotation never decodes image pixels.** `Artwork` carries a `PathBuf`; wallpaper
-  files go straight to the OS. Galleries decode only what they show, through
-  AppKit or GdkPixbuf, and keep one full preview plus keyed thumbnails. This is why
-  there is no Rust `image` dependency. The panel glyph is drawn from ASCII art in
-  `tray.rs`; `tray_icon::Icon::from_path` is Windows-only, so the alternative was a
-  general decoder for an eighteen-point icon.
+- **Rotation never decodes image pixels; only `placement` does.** `Artwork`
+  carries a `PathBuf` and a download goes to disk undecoded. `placement::resolve`,
+  called from `desktop::pin`, translates the style into the OS's own placement —
+  fit plus a margin colour, fill, stretch — which is also what keeps mismatched
+  monitors right, since each display places the picture itself. It reads pixels
+  for exactly two things: the edge colour of *Automatic* borders, and *Blur*, the
+  one style no desktop offers, composed at the main display's size into
+  `rendered-{a,b}.jpg` in the cache (alternating, because macOS caches by path;
+  the other is never deleted, because a Space waiting on a redraw may still name
+  it). `placement::Preview` draws the settings tab's preview with the same code.
+  Galleries decode thumbnails through AppKit, GdkPixbuf or the shell and keep one
+  full preview plus keyed thumbnails. The panel glyph is still ASCII art in
+  `tray.rs`.
 - **A day is a local day, and the OS is asked what that means.** `day::local` is the
   whole calendar this program has: one number per instant, comparison the only
   operation. The UTC offset comes from `NSTimeZone` on macOS and `GTimeZone` on
@@ -298,16 +313,14 @@ it before touching `src/desktop/macos/wallpaper.rs`.
 
 Reversing these needs a reason, not a tidy-up impulse.
 
-- **No blur/dim effects.** The app this replaces had them; its user never enabled
-  them once. They cost a module, the `image` crate and two menu items.
-- **No filtering by the shape of a picture, on the desktop.** Fit-plus-black-letterbox
-  renders a tall painting as a framed picture on a black wall, which is the intended
-  look, so nothing here ever measures an image's proportions — and nothing decodes one
-  to be able to. Not to be confused with the *subject* filter under **External
-  services** below: "landscape" there is what the painting is of, not which way round
-  it is. The Android app is the deliberate exception: a phone screen is too narrow for
-  letterboxing to read as anything but a stripe, so it does measure and filter by
-  shape — see **Android** below and `docs/android.md`.
+- **No dim effect.** The app this replaces had blur and dim; its user never enabled
+  either. Blur came back in 2026-09 as one of the placement styles the phone apps
+  already had, drawn by `placement` — dim did not, and there is no call for it.
+- **Fit over black stays the default.** Filters, shape and placement styles
+  arrived on the desktop from the phone apps, but every default in
+  `settings.rs` reproduces the old behaviour, so nobody who never opens the
+  settings tab sees anything change. The shape filter reads the pixel size the
+  catalogue already verified and never decodes anything to measure it.
 - **Not the Art Institute of Chicago.** Its metadata API is fine, but the image host
   `www.artic.edu/iiif/...` sits behind a Cloudflare managed challenge that an
   unattended client cannot answer. The Met has no such gate. Do not switch back.
@@ -323,8 +336,8 @@ The search asks that department for `q=landscape` rather than `q=painting`, beca
 a generic query there comes back mostly portraits. `met.rs` never re-checks a
 candidate's title or tags for "landscape" itself — the live search already
 narrowed to it — only for whether the candidate reads as a portrait despite
-matching, which is skipped for the next of the eight. Subject only — see the
-omission above; nothing looks at the shape of the picture.
+matching, which is skipped for the next of the eight. The `met` source ignores
+the settings tab's filters; only the `museums` catalogue can answer them.
 
 `catalogue/build.py` draws from four museums instead of one: the Met, the
 National Gallery of Art (Washington), the Cleveland Museum of Art and SMK
@@ -340,9 +353,8 @@ omits `lang=en`: passing it makes the API match nothing, so its titles and
 tags come back in Danish — see **Android** below and `docs/android.md`.
 
 A fifth source, `wmc`, adds Wikimedia Commons, whose rows carry a twelfth
-`artist` column the other four leave empty. `art/museums.rs` parses it but
-otherwise ignores it — picking by artist is an Android-only feature, not a
-desktop one; see `docs/android.md`.
+`artist` column the other four leave empty. `art/museums.rs` keeps it for the
+settings tab's *Artist* chips, as Android and iOS do.
 
 ## The resident app
 
@@ -453,11 +465,11 @@ matter across the boundary:
   it records is verified at build time rather than trusted from catalogue metadata.
 - **Selection rules are duplicated on purpose, like the Met protocol used to be.**
   Subject matching — including the Danish words SMK's Danish-language records need
-  — and the portrait exclusion live twice: in `Catalogue.kt` on Android and in
-  `src/art/museums.rs` on the desktop. Shape filtering and the religious-scene
-  filter stay Android-only, per the exceptions named in **Deliberate omissions**
-  above. Rather than one side calling into the other, each keeps its own copy,
-  so a change to a word list has to be made in both files on purpose.
+  — the portrait exclusion, the religious-scene list and the shape limits live in
+  `Catalogue.kt` on Android, in `src/art/museums.rs` and `src/settings.rs` on the
+  desktop, and in `Catalogue.swift` on iOS. Rather than one side calling into the
+  other, each keeps its own copy, so a change to a word list has to be made in
+  every file on purpose.
 - **A downloaded file's prefix says who owns it.** The desktop writes
   `museums-{source}-{id}.{ext}`; the distinct `museums-` prefix is load-bearing —
   it is what keeps this source's `key_of` and the older `met` source's `id_of`

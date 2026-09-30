@@ -226,9 +226,8 @@ the museums' own tags ("Saints", "Virgin Mary", "Christ", "Angels") catch most
 of what excluding it gives up. The word list, and the matching portrait
 exclusion (`isPortrait`, itself widened with Danish "portræt"), live in
 `Catalogue.kt` — the one place that makes this judgment, now that there is no
-live check left to keep in step with it. This subject preference and the
-religious filter are Android-only for now — see the exception CLAUDE.md's
-Android section names.
+live check left to keep in step with it. The desktop keeps its own copy of the
+same lists in `src/art/museums.rs`, and iOS in `Catalogue.swift`.
 
 ## Placement is baked into the pixels
 

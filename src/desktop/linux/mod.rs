@@ -3,16 +3,30 @@ mod host;
 mod login;
 
 use super::Pinned;
+use crate::placement::{Hang, Mode};
 use anyhow::{bail, Context, Result};
+use gdk::prelude::MonitorExt;
 use glib::variant::ToVariant;
 use std::collections::HashMap;
 use std::path::Path;
 
 /// GNOME keeps one wallpaper and this backend reads it back before returning, so
 /// there is no half-measure to report: it either took or it errored.
-pub(super) fn pin(path: &Path) -> Result<Pinned> {
-    background::pin(path)?;
+pub(super) fn pin(hang: &Hang) -> Result<Pinned> {
+    background::pin(hang)?;
     Ok(Pinned::Everywhere)
+}
+
+/// The primary monitor's size in device pixels, or `None` with no display.
+pub(super) fn primary_screen() -> Option<(u32, u32)> {
+    let display = gdk::Display::default()?;
+    let monitor = display.primary_monitor().or_else(|| display.monitor(0))?;
+    let area = monitor.geometry();
+    let scale = monitor.scale_factor().max(1);
+    Some((
+        (area.width() * scale) as u32,
+        (area.height() * scale) as u32,
+    ))
 }
 
 /// Nothing to publish: GNOME Shell watches the settings this backend writes, so a
@@ -74,7 +88,11 @@ pub(super) fn check(shown: Option<&Path>) -> Result<()> {
 
     match shown {
         None => println!("wallpaper write    skipped (no shown artwork is recorded)"),
-        Some(path) => match super::pin(path) {
+        Some(path) => match pin(&Hang {
+            path: path.to_path_buf(),
+            mode: Mode::Fit,
+            colour: [0, 0, 0],
+        }) {
             Ok(_) => println!("wallpaper write    accepted and read back"),
             Err(error) => {
                 println!("wallpaper write    failed ({error:#})");

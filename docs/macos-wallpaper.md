@@ -35,7 +35,7 @@ Relevant `preferences.key` values:
 | key | meaning |
 |-----|---------|
 | 1 | image path |
-| 2 | placement — `5` is fit-with-letterbox |
+| 2 | placement — `5` is fit-with-letterbox (verified); `1` fill and `3` stretch are **unverified**, taken from commonly reported values and never observed in a real store |
 | 3, 4, 5 | fill colour, one row per RGB channel |
 
 Four things about this that will cost time if forgotten:
@@ -47,6 +47,9 @@ Four things about this that will cost time if forgotten:
 - **A trigger prunes orphans.** `preferences_deleted` removes `data` rows that lose
   their last referrer. Anything inserted *before* the delete can be swept away
   before it is pointed at, so **delete first, then insert**.
+- **A slot is current only if path, placement and colour all match.** The same
+  path can be hung as fit one day and zoom the next, so `spread_to_every_space`
+  compares all five rows before deciding there is nothing to write.
 - **The Dock caches all of it in memory.** A write is invisible until `killall Dock`.
   The Dock relaunches on its own and closes nothing, but the desktop is blank until
   it has finished coming back — around **half a minute** on the development machine,

@@ -8,6 +8,7 @@
 use self::folder::Folder;
 use self::met::Met;
 use self::museums::Museums;
+use crate::settings::Filters;
 use anyhow::Result;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::path::{Path, PathBuf};
@@ -76,15 +77,40 @@ fn expand_tilde(s: &str) -> PathBuf {
     }
 }
 
-/// The source `spec` asks for, set up to work in `cache`.
+/// What the settings window has narrowed the choice to, and the shape of the
+/// screen it is being narrowed for.
+///
+/// Handed to every source and honoured only by the ones that can: the museum
+/// catalogue knows each painting's region, subject, artist and pixel size, while
+/// the Met's live search and a folder of the user's own pictures know none of
+/// that. Which source listens is the source's business, so nothing outside this
+/// module has to ask.
+#[derive(Debug, Clone)]
+pub struct Selection {
+    pub filters: Filters,
+    /// The main display's width ÷ height.
+    pub screen_aspect: f64,
+}
+
+impl Default for Selection {
+    fn default() -> Self {
+        Self {
+            filters: Filters::default(),
+            screen_aspect: 16.0 / 10.0,
+        }
+    }
+}
+
+/// The source `spec` asks for, set up to work in `cache` and choose within
+/// `selection`.
 ///
 /// Whether a source has any use for `cache` is its own affair — one downloads into
 /// it, the other leaves the user's library where it lies — which is why the caller
-/// hands it over once, here, and never again.
-pub fn source_for(spec: &SourceSpec, cache: &Path) -> Box<dyn Source> {
+/// hands it over once, here, and never again. The same goes for `selection`.
+pub fn source_for(spec: &SourceSpec, cache: &Path, selection: &Selection) -> Box<dyn Source> {
     match spec {
         SourceSpec::Met => Box::new(Met::new(cache.to_path_buf())),
-        SourceSpec::Museums => Box::new(Museums::new(cache.to_path_buf())),
+        SourceSpec::Museums => Box::new(Museums::new(cache.to_path_buf(), selection.clone())),
         SourceSpec::Folder(dir) => Box::new(Folder::new(dir.clone())),
     }
 }

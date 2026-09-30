@@ -145,6 +145,7 @@ Add to favourites
 Favourites…
 Back to today's picture
 ─────────────────────
+Settings…
 Re-apply wallpaper
 ✓ Start at login
 ─────────────────────
@@ -181,6 +182,26 @@ preview on the right.
 **Back to today's picture** restores the rotation's painting. **Forget** removes a
 painting from the list; if it is currently on the desktop, its file waits until the
 desktop has moved on.
+
+**Settings…** opens the same window on its *Settings* tab (on GNOME, the tab at
+the top of the main window). On the left is the painting on your desktop, drawn
+the way the choices on the right would hang it:
+
+- **Style** — *Borders* fits the whole painting and fills the margins with black,
+  a colour taken from the painting's edge, or a colour of your own. *Zoom*
+  fills the screen and crops. *Stretch* fills it and distorts. *Blur* sets the
+  painting over a blurred copy of itself, or shows only the blur.
+- **Shape** — *Screen-shaped* keeps paintings close to your main display's
+  proportions; *Near square* also allows squarer ones.
+- **Origin**, **Subject** (landscape, seascape, still life) and **Artist** — pick
+  any number in each; nothing picked means any. Options with nothing left to
+  offer are hidden.
+- **Hide religious scenes.**
+
+**Apply changes** saves them. A new style re-hangs the painting on the desktop at
+once; filters take effect from the next painting. Filters need `source =
+"museums"` — the Met's live search and a folder of your own pictures cannot be
+filtered this way.
 
 Choosing an existing painting by hand does not disturb the schedule. The exception
 is a painting that was already overdue: that choice settles the day, since
@@ -258,6 +279,9 @@ ask for access. A launchd process cannot show that prompt, so run
 
 Settings are read when Art Window starts. After editing `config.toml`, quit and
 reopen it.
+
+The settings tab writes its choices to `settings.json`, beside `state.json`. It
+is not meant to be edited by hand; deleting it restores the defaults.
 
 ## Uninstall
 

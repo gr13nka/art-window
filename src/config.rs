@@ -60,6 +60,8 @@ pub struct State {
 pub struct Paths {
     pub config: PathBuf,
     pub state: PathBuf,
+    /// What the settings window chose — see [`crate::settings`].
+    pub settings: PathBuf,
     /// Where the day's download lands. Genuinely disposable: the source empties it
     /// on every rotation, so it belongs wherever the platform puts things it would
     /// not mind losing.
@@ -85,6 +87,7 @@ impl Paths {
         Ok(Self {
             config: dirs.config_dir().join("config.toml"),
             state: dirs.data_dir().join("state.json"),
+            settings: dirs.data_dir().join("settings.json"),
             cache: dirs.cache_dir().to_path_buf(),
             favourites: dirs.data_dir().join("favourites"),
         })

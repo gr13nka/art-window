@@ -11,29 +11,39 @@
 //! `WM_SIZE`; the window's messages are read by a subclass, which is how a click
 //! arrives without tao having to know there is anything in there to click.
 
-use super::{Control, Pick, Snapshot};
+use super::{Control, Pending, Pick, Snapshot, StyleKind, Tab};
 use crate::art::Artwork;
 use crate::favourites::Favourites;
+use crate::settings::{BlurVariant, Border, Region, Shape, Subject};
 use anyhow::{anyhow, Result};
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::mem::size_of;
 use std::path::Path;
+use std::ptr::null_mut;
 use std::rc::Rc;
+use std::slice;
 use tao::platform::windows::WindowExtWindows;
 use tao::window::Window;
 use windows::core::{w, PCWSTR};
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, SIZE, WPARAM};
+use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, RECT, SIZE, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    CreateCompatibleBitmap, CreateCompatibleDC, CreateFontIndirectW, DeleteDC, DeleteObject,
-    FillRect, GetDC, GetObjectW, GetStockObject, GetSysColorBrush, InvalidateRect, ReleaseDC,
-    SelectObject, SetBrushOrgEx, SetStretchBltMode, StretchBlt, BITMAP, BLACK_BRUSH, COLOR_BTNFACE,
-    COLOR_WINDOW, FW_BOLD, HALFTONE, HBITMAP, HBRUSH, HDC, HFONT, HGDIOBJ, LOGFONTW, SRCCOPY,
+    BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateDIBSection,
+    CreateFontIndirectW, CreateFontW, CreatePen, CreateRectRgn, CreateRoundRectRgn,
+    CreateSolidBrush, DeleteDC, DeleteObject, DrawTextW, EndPaint, FillRect, GetDC, GetObjectW,
+    GetStockObject, GetSysColorBrush, GetTextExtentPoint32W, InvalidateRect, ReleaseDC, RoundRect,
+    SelectClipRgn, SelectObject, SetBkMode, SetBrushOrgEx, SetStretchBltMode, SetTextColor,
+    StretchBlt, BITMAP, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, BLACK_BRUSH, CLEARTYPE_QUALITY,
+    CLIP_DEFAULT_PRECIS, COLOR_BTNFACE, COLOR_WINDOW, DEFAULT_CHARSET, DIB_RGB_COLORS,
+    DRAW_TEXT_FORMAT, DT_CENTER, DT_END_ELLIPSIS, DT_LEFT, DT_NOPREFIX, DT_RIGHT, DT_SINGLELINE,
+    DT_VCENTER, FW_BOLD, HALFTONE, HBITMAP, HBRUSH, HDC, HFONT, HGDIOBJ, LOGFONTW,
+    OUT_DEFAULT_PRECIS, PAINTSTRUCT, PS_NULL, PS_SOLID, SRCCOPY, TRANSPARENT,
 };
 use windows::Win32::System::Com::{CoInitializeEx, IBindCtx, COINIT_APARTMENTTHREADED};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::SystemServices::{SS_ENDELLIPSIS, SS_LEFT, SS_OWNERDRAW};
+use windows::Win32::UI::Controls::Dialogs::{ChooseColorW, CC_FULLOPEN, CC_RGBINIT, CHOOSECOLORW};
 use windows::Win32::UI::Controls::{
     ImageList_Add, ImageList_Create, ImageList_Destroy, InitCommonControlsEx, SetWindowTheme,
     DRAWITEMSTRUCT, HIMAGELIST, ICC_LISTVIEW_CLASSES, ILC_COLOR24, INITCOMMONCONTROLSEX,
@@ -44,16 +54,19 @@ use windows::Win32::UI::Controls::{
     LVS_SINGLESEL, NMHDR, NMITEMACTIVATE, NMLISTVIEW, NM_DBLCLK, WC_LISTVIEWW,
 };
 use windows::Win32::UI::HiDpi::{GetDpiForWindow, SystemParametersInfoForDpi};
-use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
+use windows::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, ReleaseCapture, SetCapture};
 use windows::Win32::UI::Shell::{
     DefSubclassProc, IShellItemImageFactory, RemoveWindowSubclass, SHCreateItemFromParsingName,
     SetWindowSubclass, SIIGBF_BIGGERSIZEOK, SIIGBF_RESIZETOFIT, SIIGBF_THUMBNAILONLY,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, GetClientRect, MoveWindow, SendMessageW as post, SetWindowTextW, BN_CLICKED,
-    BS_PUSHBUTTON, HMENU, NONCLIENTMETRICSW, SPI_GETNONCLIENTMETRICS, WINDOW_EX_STYLE,
-    WINDOW_STYLE, WM_COMMAND, WM_DRAWITEM, WM_ERASEBKGND, WM_NCDESTROY, WM_NOTIFY, WM_SETFONT,
-    WM_SIZE, WS_CHILD, WS_TABSTOP, WS_VISIBLE,
+    CreateWindowExW, DefWindowProcW, GetClientRect, GetWindowLongPtrW, LoadCursorW, MoveWindow,
+    RegisterClassExW, SendMessageW as post, SetWindowLongPtrW, SetWindowTextW, ShowWindow,
+    BN_CLICKED, BS_PUSHBUTTON, CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA, HMENU, IDC_ARROW,
+    NONCLIENTMETRICSW, SPI_GETNONCLIENTMETRICS, SW_HIDE, SW_SHOW, WINDOW_EX_STYLE, WINDOW_STYLE,
+    WM_COMMAND, WM_DRAWITEM, WM_ERASEBKGND, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
+    WM_MOUSEWHEEL, WM_NCDESTROY, WM_NOTIFY, WM_PAINT, WM_SETFONT, WM_SIZE, WNDCLASSEXW, WS_CHILD,
+    WS_TABSTOP, WS_VISIBLE,
 };
 
 pub(super) fn present(window: &Window) {
@@ -88,6 +101,25 @@ const TITLE_H: i32 = 22;
 /// moment would then be stretched; this much is enough for any window that fits on
 /// a screen without decoding the painting again on every drag.
 const PREVIEW_AT_LEAST: i32 = 1280;
+
+/// The height of the strip of tabs above both pages.
+const STRIP: i32 = 52;
+const TAB_W: i32 = 104;
+const TAB_H: i32 = 28;
+const PREVIEW_W: i32 = 300;
+const CARD_W: i32 = 78;
+const CARD_H: i32 = 56;
+const CHIP_H: i32 = 30;
+const CHIP_PAD: i32 = 14;
+const GAP: i32 = 8;
+const SETTINGS_PAD: i32 = 24;
+
+const INK: [u8; 3] = [0x1d, 0x1d, 0x1f];
+const MUTED: [u8; 3] = [0x6e, 0x6e, 0x73];
+const CHIP: [u8; 3] = [0xee, 0xf0, 0xf3];
+const BLUE: [u8; 3] = [0x1a, 0x73, 0xe8];
+const WHITE: [u8; 3] = [0xff, 0xff, 0xff];
+const SURFACE_CLASS: PCWSTR = w!("ArtWindowSettings");
 
 const SHOW_ID: i32 = 1001;
 const FORGET_ID: i32 = 1002;
@@ -344,6 +376,21 @@ struct Inner {
     byline: HWND,
     show: HWND,
     forget: HWND,
+    /// The strip of tabs, and the settings page under it. Both are windows of
+    /// one class of ours, painted by hand, and both find this through their
+    /// `GWLP_USERDATA`.
+    strip: HWND,
+    page: HWND,
+    tab: Cell<Tab>,
+    pending: RefCell<Pending>,
+    /// The settings preview as a bitmap, at the pixels it is drawn at.
+    picture: RefCell<Option<Bitmap>>,
+    /// Set when the staged style changed while the settings page was hidden, so
+    /// that nobody renders a preview nobody sees.
+    stale: Cell<bool>,
+    /// How far the settings column is scrolled, in pixels.
+    scroll: Cell<i32>,
+    dragging: Cell<bool>,
     fonts: Fonts,
     shown: RefCell<Shown>,
     selected: Cell<Option<usize>>,
@@ -379,6 +426,7 @@ impl Inner {
             return;
         }
         let (width, height) = (client.right, client.bottom);
+        let top = self.px(STRIP);
         let pad = self.px(PAD);
         let shelf = self.px(SHELF);
         let left = shelf + pad;
@@ -393,7 +441,9 @@ impl Inner {
             // SAFETY: `hwnd` is one of this window's own children.
             let _ = unsafe { MoveWindow(hwnd, x, y, w.max(1), h.max(1), true) };
         };
-        place(self.list, 0, 0, shelf, height);
+        place(self.strip, 0, 0, width, top);
+        place(self.page, 0, top, width, height - top);
+        place(self.list, 0, top, shelf, height - top);
         place(self.show, left, floor, self.px(SHOW_W), button_h);
         place(
             self.forget,
@@ -404,7 +454,13 @@ impl Inner {
         );
         place(self.byline, left, byline_y, wide, self.px(LINE));
         place(self.title, left, title_y, wide, self.px(TITLE_H));
-        place(self.canvas, left, pad, wide, title_y - self.px(8) - pad);
+        place(
+            self.canvas,
+            left,
+            top + pad,
+            wide,
+            title_y - self.px(8) - pad - top,
+        );
     }
 
     /// Takes a new list, keeping what can be kept: the selection stays on the same
@@ -661,6 +717,1070 @@ impl Inner {
     }
 }
 
+// ---- The settings page ------------------------------------------------------
+//
+// One window painted by hand, because what it holds — pills, cards, a slider, a
+// switch, a preview with rounded corners — is not in the system's control set, and
+// wrapping each in an owner-drawn child would put a window per chip on the screen.
+// `Inner::build` says what is on the page and where; painting walks the result and
+// a click walks it again, so what is drawn and what can be pressed cannot part ways.
+
+/// What pressing an item means.
+#[derive(Clone)]
+enum Act {
+    Style(StyleKind),
+    Border(Border),
+    Colour,
+    Blur(BlurVariant),
+    Shape(Shape),
+    Region(Region),
+    Subject(Subject),
+    Artist(String),
+    Religious,
+    Slider,
+    Apply,
+}
+
+enum Kind {
+    Heading(String),
+    Card(String, bool),
+    Chip(String, bool),
+    /// The custom border colour, which opens the system's colour dialog.
+    Swatch([u8; 3]),
+    Label(String),
+    Slider(u8),
+    Switch(String, bool),
+    Preview,
+    Note(String),
+    Apply(String),
+}
+
+struct Item {
+    rect: RECT,
+    kind: Kind,
+    act: Option<Act>,
+    enabled: bool,
+    /// Whether it moves with the column; the preview and the bar do not.
+    scrolls: bool,
+}
+
+struct Built {
+    items: Vec<Item>,
+    viewport: RECT,
+}
+
+struct PageFonts {
+    chip: HFONT,
+    section: HFONT,
+    apply: HFONT,
+    note: HFONT,
+}
+
+impl PageFonts {
+    fn new(px: impl Fn(i32) -> i32) -> Self {
+        let make = |size: i32, weight: i32| {
+            // SAFETY: a complete description; a font that cannot be made comes
+            // back as a null handle, which selecting into a DC ignores.
+            unsafe {
+                CreateFontW(
+                    -px(size),
+                    0,
+                    0,
+                    0,
+                    weight,
+                    0,
+                    0,
+                    0,
+                    DEFAULT_CHARSET,
+                    OUT_DEFAULT_PRECIS,
+                    CLIP_DEFAULT_PRECIS,
+                    CLEARTYPE_QUALITY,
+                    0,
+                    w!("Segoe UI"),
+                )
+            }
+        };
+        Self {
+            chip: make(13, 500),
+            section: make(13, 600),
+            apply: make(15, 600),
+            note: make(13, 400),
+        }
+    }
+}
+
+impl Drop for PageFonts {
+    fn drop(&mut self) {
+        for font in [self.chip, self.section, self.apply, self.note] {
+            // SAFETY: made in `new` and no longer selected anywhere.
+            unsafe {
+                let _ = DeleteObject(HGDIOBJ(font.0));
+            }
+        }
+    }
+}
+
+fn colour(rgb: [u8; 3]) -> COLORREF {
+    COLORREF(rgb[0] as u32 | (rgb[1] as u32) << 8 | (rgb[2] as u32) << 16)
+}
+
+/// `rgb` blended towards white, keeping `keep` of it — GDI has no opacity, and a
+/// dimmed control on a white page is exactly this.
+fn mix(rgb: [u8; 3], keep: f32) -> [u8; 3] {
+    rgb.map(|c| (c as f32 * keep + 255.0 * (1.0 - keep)).round() as u8)
+}
+
+fn fill_round(hdc: HDC, r: &RECT, radius: i32, fill: [u8; 3], edge: Option<[u8; 3]>) {
+    // SAFETY: every object made here is put back out of the DC and deleted.
+    unsafe {
+        let brush = CreateSolidBrush(colour(fill));
+        let pen = match edge {
+            Some(e) => CreatePen(PS_SOLID, 1, colour(e)),
+            None => CreatePen(PS_NULL, 0, COLORREF(0)),
+        };
+        let old_brush = SelectObject(hdc, HGDIOBJ(brush.0));
+        let old_pen = SelectObject(hdc, HGDIOBJ(pen.0));
+        // A null pen leaves the right and bottom edge unpainted; a real one draws
+        // on them. Either way the rectangle is the one asked for.
+        let extra = i32::from(edge.is_none());
+        let _ = RoundRect(
+            hdc,
+            r.left,
+            r.top,
+            r.right + extra,
+            r.bottom + extra,
+            radius * 2,
+            radius * 2,
+        );
+        SelectObject(hdc, old_brush);
+        SelectObject(hdc, old_pen);
+        let _ = DeleteObject(HGDIOBJ(brush.0));
+        let _ = DeleteObject(HGDIOBJ(pen.0));
+    }
+}
+
+fn draw_text(hdc: HDC, text: &str, r: &RECT, font: HFONT, rgb: [u8; 3], format: DRAW_TEXT_FORMAT) {
+    let mut buffer: Vec<u16> = text.encode_utf16().collect();
+    let mut r = *r;
+    // SAFETY: `buffer` and `r` are ours for the call; the old font is put back.
+    unsafe {
+        let old = SelectObject(hdc, HGDIOBJ(font.0));
+        SetBkMode(hdc, TRANSPARENT);
+        SetTextColor(hdc, colour(rgb));
+        DrawTextW(hdc, &mut buffer, &mut r, format | DT_NOPREFIX);
+        SelectObject(hdc, old);
+    }
+}
+
+fn text_width(hdc: HDC, font: HFONT, text: &str) -> i32 {
+    let buffer: Vec<u16> = text.encode_utf16().collect();
+    let mut size = SIZE::default();
+    // SAFETY: as `draw_text`.
+    unsafe {
+        let old = SelectObject(hdc, HGDIOBJ(font.0));
+        let _ = GetTextExtentPoint32W(hdc, &buffer, &mut size);
+        SelectObject(hdc, old);
+    }
+    size.cx
+}
+
+/// A 32-bit DIB of `image`, top-down, for `StretchBlt`.
+fn dib_from_rgba(image: &image::RgbaImage) -> Option<Bitmap> {
+    let (width, height) = image.dimensions();
+    if width == 0 || height == 0 {
+        return None;
+    }
+    let info = BITMAPINFO {
+        bmiHeader: BITMAPINFOHEADER {
+            biSize: size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth: width as i32,
+            biHeight: -(height as i32),
+            biPlanes: 1,
+            biBitCount: 32,
+            biCompression: BI_RGB.0,
+            ..BITMAPINFOHEADER::default()
+        },
+        ..BITMAPINFO::default()
+    };
+    let mut bits: *mut c_void = null_mut();
+    // SAFETY: `info` describes the section; `bits` receives its pixels, which are
+    // `width * height * 4` bytes and stay valid until the bitmap is deleted.
+    let handle =
+        unsafe { CreateDIBSection(None, &info, DIB_RGB_COLORS, &mut bits, None, 0) }.ok()?;
+    if bits.is_null() {
+        // SAFETY: made just now and not selected anywhere.
+        unsafe {
+            let _ = DeleteObject(HGDIOBJ(handle.0));
+        }
+        return None;
+    }
+    // SAFETY: see above; the bitmap is not in a DC, so nothing else reads it yet.
+    let pixels =
+        unsafe { slice::from_raw_parts_mut(bits as *mut u8, width as usize * height as usize * 4) };
+    for (to, from) in pixels
+        .chunks_exact_mut(4)
+        .zip(image.as_raw().chunks_exact(4))
+    {
+        to.copy_from_slice(&[from[2], from[1], from[0], 255]);
+    }
+    Bitmap::measure(handle)
+}
+
+fn stretch_to(hdc: HDC, area: &RECT, bitmap: &Bitmap) {
+    let Some(source) = MemDc::holding(hdc, bitmap) else {
+        return;
+    };
+    // SAFETY: both DCs are live for the call.
+    unsafe {
+        SetStretchBltMode(hdc, HALFTONE);
+        let _ = SetBrushOrgEx(hdc, 0, 0, None);
+        let _ = StretchBlt(
+            hdc,
+            area.left,
+            area.top,
+            area.right - area.left,
+            area.bottom - area.top,
+            Some(source.dc),
+            0,
+            0,
+            bitmap.width,
+            bitmap.height,
+            SRCCOPY,
+        );
+    }
+}
+
+fn inside(r: &RECT, x: i32, y: i32) -> bool {
+    x >= r.left && x < r.right && y >= r.top && y < r.bottom
+}
+
+fn mouse(lparam: LPARAM) -> (i32, i32) {
+    (
+        (lparam.0 & 0xffff) as i16 as i32,
+        ((lparam.0 >> 16) & 0xffff) as i16 as i32,
+    )
+}
+
+fn wheel_delta(wparam: WPARAM) -> i32 {
+    ((wparam.0 >> 16) & 0xffff) as i16 as i32
+}
+
+/// Lays out a column of pills and rows, top to bottom, in one width.
+struct Column<'a> {
+    hdc: HDC,
+    fonts: &'a PageFonts,
+    scale: f64,
+    x0: i32,
+    width: i32,
+    y: i32,
+    items: Vec<Item>,
+}
+
+impl Column<'_> {
+    fn px(&self, logical: i32) -> i32 {
+        (logical as f64 * self.scale).round() as i32
+    }
+
+    fn push(&mut self, rect: RECT, kind: Kind, act: Option<Act>, enabled: bool) {
+        self.items.push(Item {
+            rect,
+            kind,
+            act,
+            enabled,
+            scrolls: true,
+        });
+    }
+
+    fn heading(&mut self, text: &str, gap_above: bool) {
+        if gap_above {
+            self.y += self.px(24);
+        }
+        let h = self.px(18);
+        let rect = RECT {
+            left: self.x0,
+            top: self.y,
+            right: self.x0 + self.width,
+            bottom: self.y + h,
+        };
+        self.push(rect, Kind::Heading(text.to_owned()), None, true);
+        self.y += h + self.px(10);
+    }
+
+    fn chips(&mut self, chips: Vec<(String, bool, Act)>, enabled: bool) {
+        let (h, gap, pad) = (self.px(CHIP_H), self.px(GAP), self.px(CHIP_PAD));
+        let (mut x, mut y) = (0, self.y);
+        for (label, selected, act) in chips {
+            let w = text_width(self.hdc, self.fonts.chip, &label) + 2 * pad;
+            if x > 0 && x + w > self.width {
+                x = 0;
+                y += h + gap;
+            }
+            let rect = RECT {
+                left: self.x0 + x,
+                top: y,
+                right: self.x0 + x + w,
+                bottom: y + h,
+            };
+            self.push(rect, Kind::Chip(label, selected), Some(act), enabled);
+            x += w + gap;
+        }
+        self.y = y + h;
+    }
+}
+
+impl Inner {
+    fn with_page_dc<R>(&self, f: impl FnOnce(HDC) -> R) -> R {
+        // SAFETY: released before returning.
+        let dc = unsafe { GetDC(Some(self.page)) };
+        let out = f(dc);
+        unsafe { ReleaseDC(Some(self.page), dc) };
+        out
+    }
+
+    /// Everything on the settings page, placed for the window as it is now and the
+    /// column scrolled as far as it is. Clamps the scroll to what there is to
+    /// scroll through, since only here is the length of the column known.
+    fn build(&self, hdc: HDC, fonts: &PageFonts) -> Built {
+        let mut client = RECT::default();
+        // SAFETY: `client` is a RECT.
+        let _ = unsafe { GetClientRect(self.page, &mut client) };
+        let pad = self.px(SETTINGS_PAD);
+        let preview_w = self.px(PREVIEW_W);
+        let x0 = pad + preview_w + pad;
+        let width = (client.right - x0 - pad).max(self.px(160));
+        let apply_h = self.px(CHIP_H + 6);
+        let bar_top = client.bottom - pad - apply_h;
+        let viewport = RECT {
+            left: x0,
+            top: 0,
+            right: x0 + width,
+            bottom: (bar_top - self.px(12)).max(1),
+        };
+
+        let pending = self.pending.borrow();
+        let filters = pending.filters_apply();
+        let mut fixed = Vec::new();
+
+        let preview_h = (preview_w as f64 / pending.aspect().max(0.1)).round() as i32;
+        fixed.push(Item {
+            rect: RECT {
+                left: pad,
+                top: pad,
+                right: pad + preview_w,
+                bottom: pad + preview_h.max(1),
+            },
+            kind: Kind::Preview,
+            act: None,
+            enabled: true,
+            scrolls: false,
+        });
+        let label = "Apply changes";
+        let apply_w = text_width(hdc, fonts.apply, label) + 2 * self.px(20);
+        let apply = RECT {
+            left: x0 + width - apply_w,
+            top: bar_top,
+            right: x0 + width,
+            bottom: bar_top + apply_h,
+        };
+        if let Some(note) = pending.note() {
+            fixed.push(Item {
+                rect: RECT {
+                    left: x0,
+                    right: apply.left - self.px(16),
+                    ..apply
+                },
+                kind: Kind::Note(note.to_owned()),
+                act: None,
+                enabled: true,
+                scrolls: false,
+            });
+        }
+        fixed.push(Item {
+            rect: apply,
+            kind: Kind::Apply(label.to_owned()),
+            act: Some(Act::Apply),
+            enabled: pending.can_apply(),
+            scrolls: false,
+        });
+
+        let mut col = Column {
+            hdc,
+            fonts,
+            scale: self.dpi() / 96.0,
+            x0,
+            width,
+            y: pad,
+            items: Vec::new(),
+        };
+
+        col.heading("Style", false);
+        let selected = pending.style_kind();
+        let (card_w, card_h, gap) = (col.px(CARD_W), col.px(CARD_H), col.px(GAP));
+        for (i, kind) in StyleKind::ALL.into_iter().enumerate() {
+            let left = x0 + i as i32 * (card_w + gap);
+            let rect = RECT {
+                left,
+                top: col.y,
+                right: left + card_w,
+                bottom: col.y + card_h,
+            };
+            col.push(
+                rect,
+                Kind::Card(kind.label().to_owned(), kind == selected),
+                Some(Act::Style(kind)),
+                true,
+            );
+        }
+        col.y += card_h;
+
+        match selected {
+            StyleKind::Borders => {
+                col.y += col.px(12);
+                let border = pending.border();
+                let custom = pending.custom_colour();
+                col.chips(
+                    vec![
+                        (
+                            "Black".into(),
+                            border == Border::Black,
+                            Act::Border(Border::Black),
+                        ),
+                        (
+                            "Automatic".into(),
+                            border == Border::Auto,
+                            Act::Border(Border::Auto),
+                        ),
+                        (
+                            "Custom".into(),
+                            matches!(border, Border::Custom { .. }),
+                            Act::Border(Border::Custom { rgb: custom }),
+                        ),
+                    ],
+                    true,
+                );
+                if matches!(border, Border::Custom { .. }) {
+                    col.y += col.px(10);
+                    let (w, h) = (col.px(120), col.px(CHIP_H));
+                    let rect = RECT {
+                        left: x0,
+                        top: col.y,
+                        right: x0 + w,
+                        bottom: col.y + h,
+                    };
+                    col.push(rect, Kind::Swatch(custom), Some(Act::Colour), true);
+                    col.y += h;
+                }
+            }
+            StyleKind::Blur => {
+                col.y += col.px(12);
+                let (variant, strength) = pending.blur();
+                col.chips(
+                    vec![
+                        (
+                            "Behind the picture".into(),
+                            variant == BlurVariant::Backdrop,
+                            Act::Blur(BlurVariant::Backdrop),
+                        ),
+                        (
+                            "Whole picture".into(),
+                            variant == BlurVariant::WholeImage,
+                            Act::Blur(BlurVariant::WholeImage),
+                        ),
+                    ],
+                    true,
+                );
+                col.y += col.px(10);
+                let h = col.px(24);
+                let label = RECT {
+                    left: x0,
+                    top: col.y,
+                    right: x0 + col.px(72),
+                    bottom: col.y + h,
+                };
+                let track = RECT {
+                    left: label.right + col.px(8),
+                    top: col.y,
+                    right: (label.right + col.px(8) + col.px(220)).min(x0 + width),
+                    bottom: col.y + h,
+                };
+                col.push(label, Kind::Label("Strength".into()), None, true);
+                col.push(track, Kind::Slider(strength), Some(Act::Slider), true);
+                col.y += h;
+            }
+            StyleKind::Zoom | StyleKind::Stretch => {}
+        }
+
+        col.heading("Shape", true);
+        let chips = pending
+            .shapes()
+            .into_iter()
+            .map(|c| (c.label, c.selected, Act::Shape(c.value)))
+            .collect();
+        col.chips(chips, filters);
+        col.heading("Origin", true);
+        let chips = pending
+            .regions()
+            .into_iter()
+            .map(|c| (c.label, c.selected, Act::Region(c.value)))
+            .collect();
+        col.chips(chips, filters);
+        col.heading("Subject", true);
+        let chips = pending
+            .subjects()
+            .into_iter()
+            .map(|c| (c.label, c.selected, Act::Subject(c.value)))
+            .collect();
+        col.chips(chips, filters);
+        let artists = pending.artists();
+        if !artists.is_empty() {
+            col.heading("Artist", true);
+            let chips = artists
+                .into_iter()
+                .map(|c| (c.label, c.selected, Act::Artist(c.value)))
+                .collect();
+            col.chips(chips, filters);
+        }
+        col.y += col.px(24);
+        let h = col.px(28);
+        let row = RECT {
+            left: x0,
+            top: col.y,
+            right: x0 + width,
+            bottom: col.y + h,
+        };
+        col.push(
+            row,
+            Kind::Switch("Hide religious scenes".into(), pending.hide_religious()),
+            Some(Act::Religious),
+            filters,
+        );
+        col.y += h + pad;
+
+        let longest = (col.y - viewport.bottom).max(0);
+        let scroll = self.scroll.get().clamp(0, longest);
+        self.scroll.set(scroll);
+        let mut items = col.items;
+        for item in &mut items {
+            item.rect.top -= scroll;
+            item.rect.bottom -= scroll;
+        }
+        items.extend(fixed);
+        Built { items, viewport }
+    }
+
+    fn changed(&self) {
+        self.refresh_preview();
+        // SAFETY: repaints one of our own children.
+        let _ = unsafe { InvalidateRect(Some(self.page), None, false) };
+    }
+
+    /// Renders the staged style at the pixels the card will be drawn at. Skipped
+    /// while the page is hidden, and made up for when it is shown.
+    fn refresh_preview(&self) {
+        if self.tab.get() != Tab::Settings {
+            self.stale.set(true);
+            return;
+        }
+        self.stale.set(false);
+        let image = self.pending.borrow().preview(self.px(PREVIEW_W) as u32);
+        *self.picture.borrow_mut() = image.as_ref().and_then(dib_from_rgba);
+    }
+
+    fn set_tab(&self, tab: Tab) {
+        self.tab.set(tab);
+        let favourites = tab == Tab::Favourites;
+        let (now, then) = if favourites {
+            (SW_SHOW, SW_HIDE)
+        } else {
+            (SW_HIDE, SW_SHOW)
+        };
+        for hwnd in [
+            self.list,
+            self.canvas,
+            self.title,
+            self.byline,
+            self.show,
+            self.forget,
+        ] {
+            // SAFETY: our own children.
+            let _ = unsafe { ShowWindow(hwnd, now) };
+        }
+        // SAFETY: as above.
+        unsafe {
+            let _ = ShowWindow(self.page, then);
+            let _ = InvalidateRect(Some(self.strip), None, false);
+            let _ = InvalidateRect(Some(self.parent), None, true);
+        }
+        if !favourites && self.stale.get() {
+            self.refresh_preview();
+        }
+    }
+
+    fn strip_segments(&self, client: &RECT) -> [RECT; 2] {
+        let (w, h) = (self.px(TAB_W), self.px(TAB_H));
+        let left = (client.right - 2 * w) / 2;
+        let top = (client.bottom - h) / 2;
+        [0, 1].map(|i| RECT {
+            left: left + i * w,
+            top,
+            right: left + (i + 1) * w,
+            bottom: top + h,
+        })
+    }
+
+    fn strip_click(&self, x: i32, y: i32) {
+        let mut client = RECT::default();
+        // SAFETY: `client` is a RECT.
+        let _ = unsafe { GetClientRect(self.strip, &mut client) };
+        let [favourites, settings] = self.strip_segments(&client);
+        if inside(&favourites, x, y) {
+            self.set_tab(Tab::Favourites);
+        } else if inside(&settings, x, y) {
+            self.set_tab(Tab::Settings);
+        }
+    }
+
+    fn wheel(&self, delta: i32) {
+        // A notch is 120; three lines of the column's own rhythm to a notch.
+        self.scroll
+            .set((self.scroll.get() - delta * self.px(48) / 120).max(0));
+        // SAFETY: repaints one of our own children.
+        let _ = unsafe { InvalidateRect(Some(self.page), None, false) };
+    }
+
+    fn page_press(&self, x: i32, y: i32) {
+        let fonts = PageFonts::new(|s| self.px(s));
+        let built = self.with_page_dc(|dc| self.build(dc, &fonts));
+        let hit = built.items.iter().rev().find(|item| {
+            item.enabled
+                && item.act.is_some()
+                && inside(&item.rect, x, y)
+                && (!item.scrolls || inside(&built.viewport, x, y))
+        });
+        let Some(Item { act: Some(act), .. }) = hit else {
+            return;
+        };
+        let act = act.clone();
+        drop(built);
+        match act {
+            Act::Slider => {
+                self.dragging.set(true);
+                // SAFETY: capture is released on button-up.
+                unsafe { SetCapture(self.page) };
+                self.slide(x);
+                return;
+            }
+            Act::Apply => {
+                let staged = self.pending.borrow().staged().clone();
+                (self.on_pick)(Pick::Apply(staged));
+                return;
+            }
+            Act::Colour => {
+                let current = self.pending.borrow().custom_colour();
+                let Some(rgb) = self.choose_colour(current) else {
+                    return;
+                };
+                self.pending.borrow_mut().set_border(Border::Custom { rgb });
+            }
+            Act::Style(kind) => self.pending.borrow_mut().set_style(kind),
+            Act::Border(border) => self.pending.borrow_mut().set_border(border),
+            Act::Blur(variant) => self.pending.borrow_mut().set_blur_variant(variant),
+            Act::Shape(shape) => self.pending.borrow_mut().set_shape(shape),
+            Act::Region(region) => self.pending.borrow_mut().toggle_region(region),
+            Act::Subject(subject) => self.pending.borrow_mut().toggle_subject(subject),
+            Act::Artist(name) => self.pending.borrow_mut().toggle_artist(&name),
+            Act::Religious => {
+                let hide = self.pending.borrow().hide_religious();
+                self.pending.borrow_mut().set_hide_religious(!hide);
+            }
+        }
+        self.changed();
+    }
+
+    /// Moves the strength to where the pointer is along the track.
+    fn slide(&self, x: i32) {
+        let fonts = PageFonts::new(|s| self.px(s));
+        let built = self.with_page_dc(|dc| self.build(dc, &fonts));
+        let Some(track) = built
+            .items
+            .iter()
+            .find(|item| matches!(item.kind, Kind::Slider(_)))
+            .map(|item| item.rect)
+        else {
+            return;
+        };
+        let along = (x - track.left) as f64 / (track.right - track.left).max(1) as f64;
+        let strength = (along.clamp(0.0, 1.0) * 100.0).round() as u8;
+        self.pending.borrow_mut().set_blur_strength(strength);
+        self.changed();
+    }
+
+    fn choose_colour(&self, current: [u8; 3]) -> Option<[u8; 3]> {
+        let mut custom = [COLORREF(0x00ff_ffff); 16];
+        let mut dialog = CHOOSECOLORW {
+            lStructSize: size_of::<CHOOSECOLORW>() as u32,
+            hwndOwner: self.parent,
+            rgbResult: colour(current),
+            lpCustColors: custom.as_mut_ptr(),
+            Flags: CC_RGBINIT | CC_FULLOPEN,
+            ..CHOOSECOLORW::default()
+        };
+        // SAFETY: `dialog` and the custom-colour table outlive the modal call, and
+        // no borrow of `pending` is held across it.
+        if !unsafe { ChooseColorW(&mut dialog) }.as_bool() {
+            return None;
+        }
+        let c = dialog.rgbResult.0;
+        Some([c as u8, (c >> 8) as u8, (c >> 16) as u8])
+    }
+
+    fn paint_page(&self, dc: HDC, client: &RECT) {
+        // SAFETY: the brush is made, used and deleted here.
+        unsafe {
+            let white = CreateSolidBrush(colour(WHITE));
+            FillRect(dc, client, white);
+            let _ = DeleteObject(HGDIOBJ(white.0));
+        }
+        let fonts = PageFonts::new(|s| self.px(s));
+        let built = self.build(dc, &fonts);
+        let v = built.viewport;
+        // SAFETY: the region is deleted below, after being taken out of the DC.
+        let clip = unsafe { CreateRectRgn(v.left, v.top, v.right, v.bottom) };
+        for item in &built.items {
+            if item.scrolls && (item.rect.bottom < v.top || item.rect.top > v.bottom) {
+                continue;
+            }
+            // SAFETY: as above.
+            unsafe {
+                SelectClipRgn(dc, if item.scrolls { Some(clip) } else { None });
+            }
+            self.paint_item(dc, item, &fonts);
+        }
+        // SAFETY: as above.
+        unsafe {
+            SelectClipRgn(dc, None);
+            let _ = DeleteObject(HGDIOBJ(clip.0));
+        }
+    }
+
+    fn paint_item(&self, dc: HDC, item: &Item, fonts: &PageFonts) {
+        let r = &item.rect;
+        let keep = if item.enabled { 1.0 } else { 0.5 };
+        let h = r.bottom - r.top;
+        let centred = DT_CENTER | DT_VCENTER | DT_SINGLELINE;
+        match &item.kind {
+            Kind::Heading(text) => draw_text(
+                dc,
+                text,
+                r,
+                fonts.section,
+                MUTED,
+                DT_LEFT | DT_VCENTER | DT_SINGLELINE,
+            ),
+            Kind::Label(text) => draw_text(
+                dc,
+                text,
+                r,
+                fonts.chip,
+                INK,
+                DT_LEFT | DT_VCENTER | DT_SINGLELINE,
+            ),
+            Kind::Card(text, on) | Kind::Chip(text, on) => {
+                let radius = if matches!(item.kind, Kind::Card(..)) {
+                    self.px(10)
+                } else {
+                    h / 2
+                };
+                let (fill, ink) = if *on { (INK, WHITE) } else { (CHIP, INK) };
+                fill_round(dc, r, radius, mix(fill, keep), None);
+                draw_text(dc, text, r, fonts.chip, mix(ink, keep), centred);
+            }
+            Kind::Swatch(rgb) => {
+                fill_round(dc, r, h / 2, *rgb, Some([0xd0, 0xd0, 0xd5]));
+                let luma = 0.299 * rgb[0] as f32 + 0.587 * rgb[1] as f32 + 0.114 * rgb[2] as f32;
+                let ink = if luma > 150.0 { INK } else { WHITE };
+                draw_text(dc, "Choose colour", r, fonts.chip, ink, centred);
+            }
+            Kind::Slider(value) => {
+                let knob = self.px(16);
+                let cy = (r.top + r.bottom) / 2;
+                let track = self.px(4);
+                let x = r.left + knob / 2 + ((r.right - r.left - knob) * *value as i32) / 100;
+                let bar = |left, right, rgb| {
+                    let rect = RECT {
+                        left,
+                        top: cy - track / 2,
+                        right,
+                        bottom: cy + track / 2,
+                    };
+                    fill_round(dc, &rect, track / 2, rgb, None);
+                };
+                bar(r.left, r.right, [0xd8, 0xda, 0xdf]);
+                bar(r.left, x, INK);
+                let ball = RECT {
+                    left: x - knob / 2,
+                    top: cy - knob / 2,
+                    right: x + knob / 2,
+                    bottom: cy + knob / 2,
+                };
+                fill_round(dc, &ball, knob / 2, INK, None);
+            }
+            Kind::Switch(text, on) => {
+                draw_text(
+                    dc,
+                    text,
+                    r,
+                    fonts.chip,
+                    mix(INK, keep),
+                    DT_LEFT | DT_VCENTER | DT_SINGLELINE,
+                );
+                let (w, sh) = (self.px(44), self.px(26));
+                let cy = (r.top + r.bottom) / 2;
+                let track = RECT {
+                    left: r.right - w,
+                    top: cy - sh / 2,
+                    right: r.right,
+                    bottom: cy + sh / 2,
+                };
+                let fill = if *on { INK } else { [0xd1, 0xd1, 0xd6] };
+                fill_round(dc, &track, sh / 2, mix(fill, keep), None);
+                let (inset, d) = (self.px(2), sh - 2 * self.px(2));
+                let left = if *on {
+                    track.right - inset - d
+                } else {
+                    track.left + inset
+                };
+                let knob = RECT {
+                    left,
+                    top: track.top + inset,
+                    right: left + d,
+                    bottom: track.top + inset + d,
+                };
+                fill_round(dc, &knob, d / 2, WHITE, None);
+            }
+            Kind::Preview => {
+                let radius = self.px(12);
+                // A soft shadow, as stacked translucent-looking rounded rectangles.
+                for i in (1..=5).rev() {
+                    let grow = self.px(3) * i;
+                    let shade = 255 - (6 - i as u8) * 2;
+                    let ring = RECT {
+                        left: r.left - grow,
+                        top: r.top - grow + self.px(10),
+                        right: r.right + grow,
+                        bottom: r.bottom + grow + self.px(10),
+                    };
+                    fill_round(dc, &ring, radius + grow, [shade; 3], None);
+                }
+                match self.picture.borrow().as_ref() {
+                    Some(bitmap) => {
+                        // SAFETY: the region is taken out of the DC before it is
+                        // deleted.
+                        unsafe {
+                            let clip = CreateRoundRectRgn(
+                                r.left,
+                                r.top,
+                                r.right + 1,
+                                r.bottom + 1,
+                                radius * 2,
+                                radius * 2,
+                            );
+                            SelectClipRgn(dc, Some(clip));
+                            stretch_to(dc, r, bitmap);
+                            SelectClipRgn(dc, None);
+                            let _ = DeleteObject(HGDIOBJ(clip.0));
+                        }
+                    }
+                    None => {
+                        fill_round(dc, r, radius, CHIP, None);
+                        draw_text(dc, "No picture yet", r, fonts.note, MUTED, centred);
+                    }
+                }
+            }
+            Kind::Note(text) => draw_text(
+                dc,
+                text,
+                r,
+                fonts.note,
+                MUTED,
+                DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS,
+            ),
+            Kind::Apply(text) => {
+                let keep = if item.enabled { 1.0 } else { 0.4 };
+                fill_round(dc, r, h / 2, mix(BLUE, keep), None);
+                draw_text(dc, text, r, fonts.apply, WHITE, centred);
+            }
+        }
+    }
+
+    fn paint_strip(&self, dc: HDC, client: &RECT) {
+        let settings = self.tab.get() == Tab::Settings;
+        // SAFETY: the system brush is not ours; the white one is deleted after use.
+        unsafe {
+            if settings {
+                let white = CreateSolidBrush(colour(WHITE));
+                FillRect(dc, client, white);
+                let _ = DeleteObject(HGDIOBJ(white.0));
+            } else {
+                FillRect(dc, client, GetSysColorBrush(COLOR_BTNFACE));
+            }
+        }
+        let fonts = PageFonts::new(|s| self.px(s));
+        let [a, b] = self.strip_segments(client);
+        let pill = RECT {
+            right: b.right,
+            ..a
+        };
+        let radius = (a.bottom - a.top) / 2;
+        fill_round(dc, &pill, radius, CHIP, None);
+        for (segment, label, on) in [(a, "Favourites", !settings), (b, "Settings", settings)] {
+            if on {
+                fill_round(dc, &segment, radius, INK, None);
+            }
+            draw_text(
+                dc,
+                label,
+                &segment,
+                fonts.chip,
+                if on { WHITE } else { INK },
+                DT_CENTER | DT_VCENTER | DT_SINGLELINE,
+            );
+        }
+    }
+}
+
+fn register_surface_class() -> Result<()> {
+    // SAFETY: the class is described in full; registering it twice fails harmlessly
+    // with "already exists", which is why the result is not read.
+    unsafe {
+        let module = GetModuleHandleW(None)?;
+        let class = WNDCLASSEXW {
+            cbSize: size_of::<WNDCLASSEXW>() as u32,
+            style: CS_HREDRAW | CS_VREDRAW,
+            lpfnWndProc: Some(surface_proc),
+            hInstance: HINSTANCE(module.0),
+            hCursor: LoadCursorW(None, IDC_ARROW)?,
+            lpszClassName: SURFACE_CLASS,
+            ..WNDCLASSEXW::default()
+        };
+        RegisterClassExW(&class);
+    }
+    Ok(())
+}
+
+/// A window of the hand-painted class, unplaced.
+fn surface(parent: HWND, visible: bool) -> Result<HWND> {
+    // SAFETY: the class was registered by `register_surface_class`.
+    unsafe {
+        let module = GetModuleHandleW(None)?;
+        let style = WS_CHILD.0 | if visible { WS_VISIBLE.0 } else { 0 };
+        Ok(CreateWindowExW(
+            WINDOW_EX_STYLE(0),
+            SURFACE_CLASS,
+            PCWSTR::null(),
+            WINDOW_STYLE(style),
+            0,
+            0,
+            0,
+            0,
+            Some(parent),
+            None,
+            Some(module.into()),
+            None,
+        )?)
+    }
+}
+
+/// Paints into a memory bitmap and copies it over in one go, so that scrolling and
+/// dragging do not flicker.
+fn paint_buffered(hwnd: HWND, draw: impl FnOnce(HDC, &RECT)) {
+    let mut ps = PAINTSTRUCT::default();
+    let mut client = RECT::default();
+    // SAFETY: BeginPaint/EndPaint bracket everything; the bitmap and memory DC are
+    // dropped (DC first) before EndPaint.
+    unsafe {
+        let hdc = BeginPaint(hwnd, &mut ps);
+        let _ = GetClientRect(hwnd, &mut client);
+        let handle = CreateCompatibleBitmap(hdc, client.right.max(1), client.bottom.max(1));
+        if let Some(bitmap) = Bitmap::measure(handle) {
+            if let Some(mem) = MemDc::holding(hdc, &bitmap) {
+                draw(mem.dc, &client);
+                let _ = BitBlt(
+                    hdc,
+                    0,
+                    0,
+                    client.right,
+                    client.bottom,
+                    Some(mem.dc),
+                    0,
+                    0,
+                    SRCCOPY,
+                );
+            }
+        }
+        let _ = EndPaint(hwnd, &ps);
+    }
+}
+
+/// The window procedure of the strip and the page. A click here says what was asked
+/// through `Inner`, which answers by `on_pick` where it leaves the window at all.
+unsafe extern "system" fn surface_proc(
+    hwnd: HWND,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    // SAFETY: the pointer is set after both windows exist and cleared when either
+    // is destroyed; `Inner` outlives them.
+    let inner = unsafe { (GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const Inner).as_ref() };
+    if let Some(inner) = inner {
+        let strip = hwnd == inner.strip;
+        match message {
+            WM_ERASEBKGND => return LRESULT(1),
+            WM_PAINT => {
+                paint_buffered(hwnd, |dc, client| {
+                    if strip {
+                        inner.paint_strip(dc, client)
+                    } else {
+                        inner.paint_page(dc, client)
+                    }
+                });
+                return LRESULT(0);
+            }
+            WM_LBUTTONDOWN => {
+                let (x, y) = mouse(lparam);
+                if strip {
+                    inner.strip_click(x, y);
+                } else {
+                    inner.page_press(x, y);
+                }
+                return LRESULT(0);
+            }
+            WM_MOUSEMOVE if !strip && inner.dragging.get() => {
+                inner.slide(mouse(lparam).0);
+                return LRESULT(0);
+            }
+            WM_LBUTTONUP if inner.dragging.get() => {
+                inner.dragging.set(false);
+                // SAFETY: releases the capture taken on button-down.
+                let _ = unsafe { ReleaseCapture() };
+                return LRESULT(0);
+            }
+            WM_MOUSEWHEEL if !strip => {
+                inner.wheel(wheel_delta(wparam));
+                return LRESULT(0);
+            }
+            WM_NCDESTROY => {
+                // SAFETY: nothing may reach `Inner` through a dying window.
+                unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0) };
+            }
+            _ => {}
+        }
+    }
+    // SAFETY: the default handling of the same message.
+    unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
+}
+
 impl Drop for Inner {
     fn drop(&mut self) {
         // SAFETY: the window's children are already gone or going with it; what is
@@ -719,6 +1839,12 @@ unsafe extern "system" fn subclass_proc(
     let inner = unsafe { &*(data as *const Inner) };
     match message {
         WM_SIZE => inner.layout(),
+        // The wheel goes to whichever window has the keyboard, which is never the
+        // page; it arrives here, and means the settings column when that is up.
+        WM_MOUSEWHEEL if inner.tab.get() == Tab::Settings => {
+            inner.wheel(wheel_delta(wparam));
+            return LRESULT(0);
+        }
         // tao's class has no background brush and only paints one when the program
         // asked for a colour, so what lies between the children is ours to paint.
         WM_ERASEBKGND => {
@@ -933,6 +2059,9 @@ impl Content {
             0,
             fonts.body,
         )?;
+        register_surface_class()?;
+        let strip = surface(parent, true)?;
+        let page = surface(parent, false)?;
         let button = |label: PCWSTR, id: i32| {
             child(
                 parent,
@@ -954,6 +2083,18 @@ impl Content {
             byline,
             show,
             forget,
+            strip,
+            page,
+            tab: Cell::new(Tab::Favourites),
+            pending: RefCell::new(Pending::new(
+                crate::settings::Settings::default(),
+                true,
+                16.0 / 10.0,
+            )),
+            picture: RefCell::new(None),
+            stale: Cell::new(true),
+            scroll: Cell::new(0),
+            dragging: Cell::new(false),
             fonts,
             shown: RefCell::new(Shown {
                 cards: Vec::new(),
@@ -980,8 +2121,16 @@ impl Content {
         .ok()
         .map_err(|e| anyhow!("listening to the favourites window: {e}"))?;
 
+        // SAFETY: the pointer stays valid while either window lives; `Inner` is
+        // dropped after tao's window, and `WM_NCDESTROY` clears it besides.
+        unsafe {
+            for hwnd in [strip, page] {
+                SetWindowLongPtrW(hwnd, GWLP_USERDATA, Rc::as_ptr(&inner) as isize);
+            }
+        }
         inner.layout();
         inner.point_at(None);
+        inner.set_tab(Tab::Favourites);
         Ok(Self { inner })
     }
 
@@ -997,8 +2146,18 @@ impl Content {
         );
     }
 
-    pub fn describe(&self, _snapshot: &Snapshot, favourites: &Favourites) {
+    pub fn describe(&self, snapshot: &Snapshot, favourites: &Favourites) {
+        {
+            let mut pending = self.inner.pending.borrow_mut();
+            pending.adopt(&snapshot.settings, snapshot.filters_apply, snapshot.aspect);
+            pending.set_picture(snapshot.shown.as_ref().map(|art| art.path.as_path()));
+        }
+        self.inner.changed();
         self.relist(favourites);
+    }
+
+    pub fn show_tab(&self, tab: Tab) {
+        self.inner.set_tab(tab);
     }
 
     pub fn describe_status(&self, _snapshot: &Snapshot) {}

@@ -25,6 +25,7 @@
 //! was going to be redrawn anyway.
 
 use crate::desktop::Pinned;
+use crate::placement::{Hang, Mode};
 use anyhow::{anyhow, Context, Result};
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
@@ -42,6 +43,41 @@ use std::time::Duration;
 /// The same meaning as `NSImageScaling::ScaleProportionallyUpOrDown` with clipping
 /// off, in the Dock's own numbering.
 const DOCK_PLACEMENT_FIT: i64 = 5;
+/// Placement code for "scale to fill the screen, cropping the overflow".
+///
+/// UNVERIFIED. The development machine's store only ever holds `5`; the other
+/// codes are the commonly reported ones for `preferences.key = 2` and were not
+/// confirmed against a real change of setting, because doing so would change the
+/// user's desktop. If Zoom lands as something else on the other Spaces, this is
+/// the first place to look.
+const DOCK_PLACEMENT_FILL: i64 = 1;
+/// Placement code for "stretch to the screen's shape". UNVERIFIED, as above.
+const DOCK_PLACEMENT_STRETCH: i64 = 3;
+
+fn dock_placement(mode: Mode) -> i64 {
+    match mode {
+        Mode::Fit => DOCK_PLACEMENT_FIT,
+        Mode::Fill => DOCK_PLACEMENT_FILL,
+        Mode::Stretch => DOCK_PLACEMENT_STRETCH,
+    }
+}
+
+/// A colour channel as the Dock stores it and AppKit takes it: a float in 0..1.
+fn unit(channel: u8) -> f64 {
+    f64::from(channel) / 255.0
+}
+
+/// The main display's size in device pixels, or `None` off the main thread.
+pub fn primary_screen() -> Option<(u32, u32)> {
+    let mtm = MainThreadMarker::new()?;
+    let screen = NSScreen::mainScreen(mtm)?;
+    let size = screen.frame().size;
+    let scale = screen.backingScaleFactor();
+    Some((
+        (size.width * scale).round() as u32,
+        (size.height * scale).round() as u32,
+    ))
+}
 
 /// How long to wait for the Dock to let go of its own database.
 ///
@@ -52,10 +88,10 @@ const DOCK_PLACEMENT_FIT: i64 = 5;
 /// — and it is the difference between a login-time write landing and not.
 const DOCK_BUSY_WAIT: Duration = Duration::from_millis(500);
 
-pub fn pin(path: &Path) -> Result<Pinned> {
-    set_active_space(path)?;
+pub fn pin(hang: &Hang) -> Result<Pinned> {
+    set_active_space(hang)?;
 
-    match spread_to_every_space(path) {
+    match spread_to_every_space(hang) {
         Ok(true) => Ok(Pinned::AfterRedraw),
         Ok(false) => Ok(Pinned::Everywhere),
         Err(e) => {
@@ -69,15 +105,15 @@ pub fn pin(path: &Path) -> Result<Pinned> {
 }
 
 /// The supported route: AppKit, for whichever Space is in front right now.
-fn set_active_space(path: &Path) -> Result<()> {
+fn set_active_space(hang: &Hang) -> Result<()> {
     let mtm = MainThreadMarker::new().ok_or_else(|| {
         anyhow!(
             "wallpaper must be set from the main thread: AppKit enumerates displays nowhere else"
         )
     })?;
 
-    let url = NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()));
-    let options = fit_letterboxed_in_black();
+    let url = NSURL::fileURLWithPath(&NSString::from_str(&hang.path.to_string_lossy()));
+    let options = desktop_image_options(hang);
     let workspace = NSWorkspace::sharedWorkspace();
 
     let screens = NSScreen::screens(mtm);
@@ -95,22 +131,31 @@ fn set_active_space(path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// The options that mean "show the whole picture, paint the leftovers black".
+/// The options for a [`Hang`].
 ///
 /// Fit-to-screen is a pair of settings rather than one: scale proportionally, and
 /// forbid clipping. AppKit's header is explicit that it is `allowClipping = NO`
 /// which "will make the image fully visible, but there may be empty space on the
 /// sides or top and bottom" — that empty space is what the fill colour paints.
-fn fit_letterboxed_in_black() -> Retained<NSDictionary<NSWorkspaceDesktopImageOptionKey, AnyObject>>
-{
-    let scaling = NSNumber::new_usize(NSImageScaling::ScaleProportionallyUpOrDown.0);
-    let clipping = NSNumber::new_bool(false);
+/// Fill is the same scaling with clipping allowed; stretch scales each axis on its
+/// own.
+fn desktop_image_options(
+    hang: &Hang,
+) -> Retained<NSDictionary<NSWorkspaceDesktopImageOptionKey, AnyObject>> {
+    let (scaling, allow_clipping) = match hang.mode {
+        Mode::Fit => (NSImageScaling::ScaleProportionallyUpOrDown, false),
+        Mode::Fill => (NSImageScaling::ScaleProportionallyUpOrDown, true),
+        Mode::Stretch => (NSImageScaling::ScaleAxesIndependently, false),
+    };
+    let scaling = NSNumber::new_usize(scaling.0);
+    let clipping = NSNumber::new_bool(allow_clipping);
 
-    // Built as calibrated RGB rather than reusing `NSColor::black`, which lives in
-    // the calibrated *white* space. The API accepts "colors that use or can be
-    // converted to use NSCalibratedRGBColorSpace"; supplying RGB directly does not
-    // lean on that conversion.
-    let black = NSColor::colorWithCalibratedRed_green_blue_alpha(0.0, 0.0, 0.0, 1.0);
+    // Built as calibrated RGB rather than converting a colour from another space:
+    // the API accepts "colors that use or can be converted to use
+    // NSCalibratedRGBColorSpace", and supplying RGB directly does not lean on that
+    // conversion (`NSColor::black` lives in the calibrated *white* space).
+    let [r, g, b] = hang.colour.map(unit);
+    let black = NSColor::colorWithCalibratedRed_green_blue_alpha(r, g, b, 1.0);
 
     let keys: [&NSWorkspaceDesktopImageOptionKey; 3] = unsafe {
         [
@@ -144,8 +189,10 @@ fn abbreviate(path: &Path) -> String {
 ///
 /// Returns whether anything actually changed, so the caller can avoid restarting
 /// the Dock when there was nothing to show it.
-fn spread_to_every_space(path: &Path) -> Result<bool> {
-    let stored = abbreviate(path);
+fn spread_to_every_space(hang: &Hang) -> Result<bool> {
+    let stored = abbreviate(&hang.path);
+    let placement = dock_placement(hang.mode);
+    let [red, green, blue] = hang.colour.map(unit);
     let mut db = rusqlite::Connection::open(dock_store()?)?;
     db.busy_timeout(DOCK_BUSY_WAIT)?;
 
@@ -159,11 +206,18 @@ fn spread_to_every_space(path: &Path) -> Result<bool> {
         return Ok(false);
     }
 
+    // A slot is up to date only when picture, placement and colour all match: the
+    // same path can be hung as fit one day and as zoom the next.
     let already: i64 = db.query_row(
-        "SELECT count(DISTINCT p.picture_id) FROM preferences p
-         JOIN data d ON d.rowid = p.data_id
-         WHERE p.key = 1 AND d.value = ?1",
-        [&stored],
+        "SELECT count(*) FROM pictures pic WHERE 5 = (
+             SELECT count(*) FROM preferences p JOIN data d ON d.rowid = p.data_id
+             WHERE p.picture_id = pic.rowid AND (
+                 (p.key = 1 AND d.value = ?1 AND typeof(d.value) = 'text') OR
+                 (p.key = 2 AND d.value = ?2 AND typeof(d.value) = 'integer') OR
+                 (p.key = 3 AND d.value = ?3 AND typeof(d.value) = 'real') OR
+                 (p.key = 4 AND d.value = ?4 AND typeof(d.value) = 'real') OR
+                 (p.key = 5 AND d.value = ?5 AND typeof(d.value) = 'real')))",
+        (&stored, placement, red, green, blue),
         |r| r.get(0),
     )?;
     if already == slots {
@@ -178,8 +232,12 @@ fn spread_to_every_space(path: &Path) -> Result<bool> {
         tx.execute("DELETE FROM preferences WHERE key IN (1,2,3,4,5)", [])?;
 
         let path_id = intern_text(&tx, &stored)?;
-        let fit_id = intern_int(&tx, DOCK_PLACEMENT_FIT)?;
-        let black_id = intern_real(&tx, 0.0)?;
+        let placement_id = intern_int(&tx, placement)?;
+        let channel_ids = [
+            intern_real(&tx, red)?,
+            intern_real(&tx, green)?,
+            intern_real(&tx, blue)?,
+        ];
 
         let picture_ids: Vec<i64> = tx
             .prepare("SELECT rowid FROM pictures")?
@@ -190,10 +248,10 @@ fn spread_to_every_space(path: &Path) -> Result<bool> {
             tx.prepare("INSERT INTO preferences(key, data_id, picture_id) VALUES (?1, ?2, ?3)")?;
         for picture_id in picture_ids {
             insert.execute((1, path_id, picture_id))?; // which image
-            insert.execute((2, fit_id, picture_id))?; // how it is placed
-            for channel in 3..=5 {
-                // the letterbox colour, one row per channel
-                insert.execute((channel, black_id, picture_id))?;
+            insert.execute((2, placement_id, picture_id))?; // how it is placed
+            for (key, data_id) in (3..=5).zip(channel_ids) {
+                // the margin colour, one row per channel
+                insert.execute((key, data_id, picture_id))?;
             }
         }
     }

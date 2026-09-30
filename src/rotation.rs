@@ -12,17 +12,25 @@
 //! day's own picture put back after one. The difference is entirely in what gets
 //! recorded — the desktop cannot tell them apart, and neither can the wallpaper.
 
-use crate::art::{self, Artwork};
+use crate::art::{self, Artwork, Selection};
 use crate::config::{Config, Paths, State};
 use crate::desktop;
+use crate::settings::Style;
 use anyhow::{Context, Result};
 use std::path::Path;
 
 /// Downloads the next picture, avoiding whatever is on the desktop now.
 ///
-/// Slow by nature, and safe to call from a worker thread.
-pub fn fetch(config: &Config, state: &State, cache: &Path) -> Result<Artwork> {
-    let source = art::source_for(&config.source, cache);
+/// Slow by nature, and safe to call from a worker thread — which is why
+/// `selection` arrives already measured: the screen can only be asked about on
+/// the main thread.
+pub fn fetch(
+    config: &Config,
+    state: &State,
+    cache: &Path,
+    selection: &Selection,
+) -> Result<Artwork> {
+    let source = art::source_for(&config.source, cache, selection);
     source
         .fetch(state.shown.as_ref())
         .with_context(|| format!("fetching from {}", source.label()))
@@ -40,11 +48,12 @@ pub fn fetch(config: &Config, state: &State, cache: &Path) -> Result<Artwork> {
 /// requires it.
 pub fn show(
     artwork: &Artwork,
+    style: &Style,
     config: &Config,
     paths: &Paths,
     state: &mut State,
 ) -> Result<desktop::Pinned> {
-    let pinned = desktop::pin(&artwork.path)?;
+    let pinned = desktop::pin(&artwork.path, style, &paths.cache)?;
     state.record_fetched(artwork, &paths.state)?;
     sweep(config, paths, state);
     Ok(pinned)
@@ -61,11 +70,12 @@ pub fn show(
 /// requires it.
 pub fn revisit(
     artwork: &Artwork,
+    style: &Style,
     config: &Config,
     paths: &Paths,
     state: &mut State,
 ) -> Result<desktop::Pinned> {
-    let pinned = desktop::pin(&artwork.path)?;
+    let pinned = desktop::pin(&artwork.path, style, &paths.cache)?;
     state.record_chosen(artwork, &paths.state)?;
     sweep(config, paths, state);
     Ok(pinned)
@@ -87,5 +97,5 @@ fn sweep(config: &Config, paths: &Paths, state: &State) {
         .fetched
         .as_ref()
         .map_or(Path::new(""), |art| art.path.as_path());
-    art::source_for(&config.source, &paths.cache).discard_all_but(todays);
+    art::source_for(&config.source, &paths.cache, &Selection::default()).discard_all_but(todays);
 }

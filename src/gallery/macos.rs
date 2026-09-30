@@ -9,25 +9,28 @@
 //! in, and it is what the two buttons are aimed at — three jobs, but one object,
 //! because all three are the same question of which picture is meant.
 
-use super::{Control, Pick, Snapshot};
+use super::{Control, Pending, Pick, Snapshot, StyleKind, Tab};
 use crate::art::Artwork;
 use crate::favourites::Favourites;
+use crate::settings::{BlurVariant, Border};
 use anyhow::{anyhow, Result};
 use objc2::rc::Retained;
-use objc2::runtime::AnyObject;
+use objc2::runtime::{AnyObject, NSObject};
 use objc2::{
-    define_class, msg_send, sel, AnyThread, DefinedClass, MainThreadMarker, MainThreadOnly,
+    define_class, msg_send, sel, AnyThread, DefinedClass, MainThreadMarker, MainThreadOnly, Message,
 };
 use objc2_app_kit::{
-    NSAutoresizingMaskOptions, NSBezierPath, NSBitmapImageRep, NSBorderType, NSButton,
-    NSCalibratedRGBColorSpace, NSColor, NSCompositingOperation, NSEvent, NSFont, NSGraphicsContext,
-    NSImage, NSImageScaling, NSImageView, NSScrollView, NSTextField, NSView,
+    NSAppearance, NSAppearanceCustomization, NSAppearanceNameAqua, NSAutoresizingMaskOptions,
+    NSBezierPath, NSBitmapImageRep, NSBorderType, NSButton, NSCalibratedRGBColorSpace, NSColor,
+    NSColorSpace, NSColorWell, NSCompositingOperation, NSEvent, NSFont, NSGraphicsContext, NSImage,
+    NSImageScaling, NSImageView, NSScrollView, NSSegmentSwitchTracking, NSSegmentedControl,
+    NSShadow, NSSlider, NSTextAlignment, NSTextField, NSView,
 };
-use objc2_foundation::{NSPoint, NSRect, NSSize, NSString, NSURL};
+use objc2_foundation::{NSArray, NSPoint, NSRect, NSSize, NSString, NSURL};
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::path::Path;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 use tao::platform::macos::WindowExtMacOS;
 use tao::window::Window;
 
@@ -489,10 +492,11 @@ fn thumbnail(path: &Path) -> Option<Retained<NSImage>> {
     Some(thumb)
 }
 
-/// The window's contents, which is the shelf: everything else either hangs off it
-/// or is a subview it never has to be asked about again.
+/// The window's contents: the shelf, which everything on the favourites tab hangs
+/// off, and the settings tab beside it.
 pub struct Content {
     shelf: Retained<Shelf>,
+    ui: Rc<Ui>,
 }
 
 impl Content {
@@ -515,11 +519,22 @@ impl Content {
 
         // A container of our own, so that the arithmetic below is written in
         // coordinates this file decides the orientation of rather than tao's.
-        let whole = NSView::initWithFrame(NSView::alloc(mtm), root.bounds());
-        whole.setAutoresizingMask(
+        let outer = NSView::initWithFrame(NSView::alloc(mtm), root.bounds());
+        outer.setAutoresizingMask(
             NSAutoresizingMaskOptions::ViewWidthSizable
                 | NSAutoresizingMaskOptions::ViewHeightSizable,
         );
+        let total = outer.bounds().size;
+        let below = NSRect::new(
+            NSPoint::new(0.0, 0.0),
+            NSSize::new(total.width, (total.height - STRIP).max(1.0)),
+        );
+        let fill = NSAutoresizingMaskOptions::ViewWidthSizable
+            | NSAutoresizingMaskOptions::ViewHeightSizable;
+
+        // The favourites tab: unchanged, only shorter by the strip above it.
+        let whole = NSView::initWithFrame(NSView::alloc(mtm), below);
+        whole.setAutoresizingMask(fill);
         let size = whole.bounds().size;
 
         let pane = NSView::initWithFrame(
@@ -529,13 +544,10 @@ impl Content {
                 NSSize::new((size.width - SHELF).max(1.0), size.height),
             ),
         );
-        pane.setAutoresizingMask(
-            NSAutoresizingMaskOptions::ViewWidthSizable
-                | NSAutoresizingMaskOptions::ViewHeightSizable,
-        );
+        pane.setAutoresizingMask(fill);
 
         let easel = Easel::build(mtm, &pane);
-        let shelf = Shelf::new(mtm, easel, on_pick);
+        let shelf = Shelf::new(mtm, easel, on_pick.clone());
 
         let scroll = NSScrollView::initWithFrame(
             NSScrollView::alloc(mtm),
@@ -558,9 +570,21 @@ impl Content {
 
         whole.addSubview(&scroll);
         whole.addSubview(&pane);
-        root.addSubview(&whole);
 
-        Ok(Self { shelf })
+        // The settings tab, laid over the same area and hidden until asked for.
+        let ui = Ui::build(mtm, below, on_pick, whole.clone());
+
+        outer.addSubview(&whole);
+        outer.addSubview(&ui.settings);
+        outer.addSubview(&ui.segments);
+        ui.segments.setFrame(NSRect::new(
+            NSPoint::new((total.width - TABS_W) / 2.0, total.height - 8.0 - TABS_H),
+            NSSize::new(TABS_W, TABS_H),
+        ));
+        root.addSubview(&outer);
+        ui.show_tab(Tab::Favourites);
+
+        Ok(Self { shelf, ui })
     }
 
     pub fn relist(&self, favourites: &Favourites) {
@@ -575,11 +599,1027 @@ impl Content {
         );
     }
 
-    pub fn describe(&self, _snapshot: &Snapshot, favourites: &Favourites) {
+    pub fn describe(&self, snapshot: &Snapshot, favourites: &Favourites) {
         self.relist(favourites);
+        self.ui.adopt(snapshot);
+    }
+
+    /// Brings one of the two tabs forward.
+    pub fn show_tab(&self, tab: Tab) {
+        self.ui.show_tab(tab);
     }
 
     pub fn describe_status(&self, _snapshot: &Snapshot) {}
 
     pub fn set_login(&self, _enabled: bool) {}
+}
+
+// ---------------------------------------------------------------------------
+// The settings tab.
+//
+// Everything decided here is `Pending`'s; this half only draws it and forwards
+// clicks into it. Chips and cards are custom-drawn views (`Pill`) rather than
+// buttons, because a filled capsule of arbitrary colour is not something an
+// `NSButton` will be, and the section rows are rebuilt from the model after every
+// click — the number of chips changes with what is chosen.
+// ---------------------------------------------------------------------------
+
+/// The strip above both tabs that holds the switch between them.
+const TABS_H: f64 = 28.0;
+const TABS_W: f64 = 220.0;
+const STRIP: f64 = TABS_H + 16.0;
+/// The bar under the sections, which stays put while they scroll.
+const BAR: f64 = 64.0;
+const OUTER: f64 = 24.0;
+const CARD_W: f64 = 300.0;
+/// Air left round the preview card for its shadow to fall into.
+const SHADOW_BELOW: f64 = 30.0;
+const LEFT: f64 = OUTER + CARD_W + OUTER;
+const GAP: f64 = 8.0;
+const CHIP_H: f64 = 30.0;
+
+const WHITE: u32 = 0xffffff;
+const INK: u32 = 0x1d1d1f;
+const MUTED: u32 = 0x6e6e73;
+const FILL: u32 = 0xeef0f3;
+const BLUE: u32 = 0x1a73e8;
+const MEDIUM: f64 = 0.23;
+const SEMIBOLD: f64 = 0.3;
+
+fn rgb(hex: u32, alpha: f64) -> Retained<NSColor> {
+    NSColor::colorWithSRGBRed_green_blue_alpha(
+        ((hex >> 16) & 0xff) as f64 / 255.0,
+        ((hex >> 8) & 0xff) as f64 / 255.0,
+        (hex & 0xff) as f64 / 255.0,
+        alpha,
+    )
+}
+
+/// Every caller passes an `NSView` or one of its subclasses, which is what makes
+/// widening the type sound.
+fn as_view<T: Message>(view: Retained<T>) -> Retained<NSView> {
+    unsafe { Retained::cast_unchecked(view) }
+}
+
+/// A single line of text at its natural size.
+fn text_label(
+    mtm: MainThreadMarker,
+    text: &str,
+    size: f64,
+    weight: f64,
+    hex: u32,
+) -> Retained<NSTextField> {
+    let label = NSTextField::labelWithString(&NSString::from_str(text), mtm);
+    label.setFont(Some(&NSFont::systemFontOfSize_weight(size, weight)));
+    label.setTextColor(Some(&rgb(hex, 1.0)));
+    label.sizeToFit();
+    label
+}
+
+struct PillIvars {
+    fill: u32,
+    /// Negative means a full capsule.
+    radius: f64,
+    enabled: Cell<bool>,
+    on_click: RefCell<Option<Rc<dyn Fn()>>>,
+}
+
+define_class!(
+    // SAFETY: NSView imposes nothing on a subclass beyond the main thread, and
+    // `Pill` does not implement `Drop`.
+    #[unsafe(super(NSView))]
+    #[thread_kind = MainThreadOnly]
+    #[ivars = PillIvars]
+    struct Pill;
+
+    impl Pill {
+        #[unsafe(method(drawRect:))]
+        fn draw_rect(&self, _dirty: NSRect) {
+            let bounds = self.bounds();
+            let radius = match self.ivars().radius {
+                r if r < 0.0 => bounds.size.height / 2.0,
+                r => r,
+            };
+            rgb(self.ivars().fill, 1.0).setFill();
+            NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(bounds, radius, radius).fill();
+        }
+
+        /// The text inside is only a picture of a word: the click belongs to the
+        /// pill, so it must not be swallowed by the label sitting on top of it.
+        #[unsafe(method(hitTest:))]
+        fn hit_test(&self, point: NSPoint) -> Option<&NSView> {
+            let frame = self.frame();
+            let inside = point.x >= frame.origin.x
+                && point.x < frame.origin.x + frame.size.width
+                && point.y >= frame.origin.y
+                && point.y < frame.origin.y + frame.size.height;
+            let this: &NSView = self;
+            inside.then_some(this)
+        }
+
+        /// Accepted at once for the same reason the shelf does: an accessory's
+        /// window is hardly ever the active one.
+        #[unsafe(method(acceptsFirstMouse:))]
+        fn accepts_first_mouse(&self, _event: Option<&NSEvent>) -> bool {
+            true
+        }
+
+        #[unsafe(method(mouseDown:))]
+        fn mouse_down(&self, _event: &NSEvent) {
+            if !self.ivars().enabled.get() {
+                return;
+            }
+            let click = self.ivars().on_click.borrow().clone();
+            if let Some(click) = click {
+                // The click usually rebuilds the row this pill is in, dropping it
+                // from its superview; hold on to it until the answer has returned.
+                let _keep = self.retain();
+                click();
+            }
+        }
+    }
+);
+
+impl Pill {
+    /// A pill with `text` on it. `width` of `None` fits the text plus `pad` either
+    /// side.
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        mtm: MainThreadMarker,
+        text: &str,
+        (size, weight): (f64, f64),
+        (ink, fill): (u32, u32),
+        radius: f64,
+        (width, height): (Option<f64>, f64),
+        pad: f64,
+        on_click: Option<Rc<dyn Fn()>>,
+    ) -> Retained<Self> {
+        let label = text_label(mtm, text, size, weight, ink);
+        let line = label.frame().size;
+        let width = width.unwrap_or(line.width.ceil() + pad * 2.0);
+        let this = Self::alloc(mtm).set_ivars(PillIvars {
+            fill,
+            radius,
+            enabled: Cell::new(true),
+            on_click: RefCell::new(on_click),
+        });
+        let frame = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(width, height));
+        let pill: Retained<Self> = unsafe { msg_send![super(this), initWithFrame: frame] };
+        label.setAlignment(NSTextAlignment::Center);
+        label.setFrame(NSRect::new(
+            NSPoint::new(0.0, ((height - line.height) / 2.0).floor()),
+            NSSize::new(width, line.height),
+        ));
+        pill.addSubview(&label);
+        pill
+    }
+
+    /// A pill that ignores clicks, dimmed to `dim` while it does.
+    fn set_enabled(&self, on: bool, dim: f64) {
+        self.ivars().enabled.set(on);
+        self.setAlphaValue(if on { 1.0 } else { dim });
+    }
+}
+
+struct PlateIvars {
+    fill: u32,
+    alpha: f64,
+}
+
+define_class!(
+    // SAFETY: as for `Pill`.
+    #[unsafe(super(NSView))]
+    #[thread_kind = MainThreadOnly]
+    #[ivars = PlateIvars]
+    struct Plate;
+
+    impl Plate {
+        #[unsafe(method(drawRect:))]
+        fn draw_rect(&self, _dirty: NSRect) {
+            rgb(self.ivars().fill, self.ivars().alpha).setFill();
+            NSBezierPath::fillRect(self.bounds());
+        }
+    }
+);
+
+impl Plate {
+    fn new(mtm: MainThreadMarker, frame: NSRect, fill: u32, alpha: f64) -> Retained<Self> {
+        let this = Self::alloc(mtm).set_ivars(PlateIvars { fill, alpha });
+        unsafe { msg_send![super(this), initWithFrame: frame] }
+    }
+}
+
+struct CanvasIvars {
+    image: RefCell<Option<Retained<NSImage>>>,
+    none_yet: Retained<NSTextField>,
+}
+
+define_class!(
+    // SAFETY: as for `Pill`.
+    #[unsafe(super(NSView))]
+    #[thread_kind = MainThreadOnly]
+    #[ivars = CanvasIvars]
+    struct Canvas;
+
+    impl Canvas {
+        #[unsafe(method(drawRect:))]
+        fn draw_rect(&self, _dirty: NSRect) {
+            let card = self.card();
+            if card.size.height < 1.0 {
+                return;
+            }
+            let path = NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(card, 12.0, 12.0);
+
+            // The shadow is cast by a white fill, so it is there whether or not the
+            // picture on top of it is.
+            NSGraphicsContext::saveGraphicsState_class();
+            let shadow = NSShadow::new();
+            shadow.setShadowOffset(NSSize::new(0.0, -10.0));
+            shadow.setShadowBlurRadius(30.0);
+            shadow.setShadowColor(Some(&rgb(0x000000, 0.08)));
+            shadow.set();
+            rgb(WHITE, 1.0).setFill();
+            path.fill();
+            NSGraphicsContext::restoreGraphicsState_class();
+
+            match &*self.ivars().image.borrow() {
+                Some(image) => {
+                    NSGraphicsContext::saveGraphicsState_class();
+                    path.addClip();
+                    image.drawInRect_fromRect_operation_fraction(
+                        card,
+                        NSRect::ZERO,
+                        NSCompositingOperation::SourceOver,
+                        1.0,
+                    );
+                    NSGraphicsContext::restoreGraphicsState_class();
+                }
+                None => {
+                    rgb(FILL, 1.0).setFill();
+                    path.fill();
+                }
+            }
+        }
+    }
+);
+
+impl Canvas {
+    fn new(mtm: MainThreadMarker) -> Retained<Self> {
+        let none_yet = text_label(mtm, "No picture yet", 13.0, 0.0, MUTED);
+        none_yet.setAlignment(NSTextAlignment::Center);
+        let this = Self::alloc(mtm).set_ivars(CanvasIvars {
+            image: RefCell::new(None),
+            none_yet,
+        });
+        let canvas: Retained<Self> = unsafe { msg_send![super(this), initWithFrame: NSRect::ZERO] };
+        canvas.addSubview(&canvas.ivars().none_yet);
+        canvas
+    }
+
+    /// Where the card itself sits in the view: the margins are its shadow's room.
+    fn card(&self) -> NSRect {
+        let height = self.bounds().size.height;
+        NSRect::new(
+            NSPoint::new(OUTER, SHADOW_BELOW),
+            NSSize::new(CARD_W, (height - OUTER - SHADOW_BELOW).max(0.0)),
+        )
+    }
+
+    /// Sizes the view to a card `height` tall, hung from the top of `above`.
+    fn place(&self, above: f64, height: f64) {
+        let total = OUTER + height + SHADOW_BELOW;
+        self.setFrame(NSRect::new(
+            NSPoint::new(0.0, above - total),
+            NSSize::new(LEFT, total),
+        ));
+        let card = self.card();
+        let note = &self.ivars().none_yet;
+        let line = note.frame().size.height;
+        note.setFrame(NSRect::new(
+            NSPoint::new(
+                card.origin.x,
+                card.origin.y + (card.size.height - line) / 2.0,
+            ),
+            NSSize::new(card.size.width, line),
+        ));
+        self.setNeedsDisplay(true);
+    }
+
+    fn set_image(&self, image: Option<Retained<NSImage>>) {
+        self.ivars().none_yet.setHidden(image.is_some());
+        *self.ivars().image.borrow_mut() = image;
+        self.setNeedsDisplay(true);
+    }
+}
+
+/// A picture made from the model's RGBA bytes, at the same many-pixels-few-points
+/// ratio the thumbnails use, so the preview is as sharp as they are.
+fn preview_image(pixels: &image::RgbaImage) -> Option<Retained<NSImage>> {
+    let (w, h) = pixels.dimensions();
+    if w == 0 || h == 0 {
+        return None;
+    }
+    // SAFETY: as in `thumbnail`; the explicit row length is the one the copy below
+    // assumes.
+    let rep = unsafe {
+        NSBitmapImageRep::initWithBitmapDataPlanes_pixelsWide_pixelsHigh_bitsPerSample_samplesPerPixel_hasAlpha_isPlanar_colorSpaceName_bytesPerRow_bitsPerPixel(
+            NSBitmapImageRep::alloc(),
+            std::ptr::null_mut(),
+            w as isize,
+            h as isize,
+            8,
+            4,
+            true,
+            false,
+            NSCalibratedRGBColorSpace,
+            (w * 4) as isize,
+            32,
+        )
+    }?;
+    let data = rep.bitmapData();
+    let bytes = pixels.as_raw();
+    if data.is_null() || bytes.len() != (w * h * 4) as usize {
+        return None;
+    }
+    // SAFETY: the rep owns `w * 4 * h` bytes at `data`, and `bytes` is exactly that
+    // long, checked above.
+    unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), data, bytes.len()) };
+    let points = NSSize::new(CARD_W, CARD_W * h as f64 / w as f64);
+    rep.setSize(points);
+    let image = NSImage::initWithSize(NSImage::alloc(), points);
+    image.addRepresentation(&rep);
+    Some(image)
+}
+
+/// A document view that counts rows from the top, and says when its width changes
+/// so the chips can be wrapped afresh.
+struct DocIvars {
+    width: Cell<f64>,
+    resized: RefCell<Option<Rc<dyn Fn()>>>,
+}
+
+define_class!(
+    // SAFETY: as for `Pill`.
+    #[unsafe(super(NSView))]
+    #[thread_kind = MainThreadOnly]
+    #[ivars = DocIvars]
+    struct Doc;
+
+    impl Doc {
+        #[unsafe(method(isFlipped))]
+        fn is_flipped(&self) -> bool {
+            true
+        }
+
+        #[unsafe(method(setFrameSize:))]
+        fn set_frame_size(&self, size: NSSize) {
+            let _: () = unsafe { msg_send![super(self), setFrameSize: size] };
+            if size.width != self.ivars().width.get() {
+                self.ivars().width.set(size.width);
+                let resized = self.ivars().resized.borrow().clone();
+                if let Some(resized) = resized {
+                    resized();
+                }
+            }
+        }
+    }
+);
+
+impl Doc {
+    fn new(mtm: MainThreadMarker, frame: NSRect) -> Retained<Self> {
+        let this = Self::alloc(mtm).set_ivars(DocIvars {
+            width: Cell::new(frame.size.width),
+            resized: RefCell::new(None),
+        });
+        unsafe { msg_send![super(this), initWithFrame: frame] }
+    }
+}
+
+struct ActionIvars {
+    ui: RefCell<Weak<Ui>>,
+}
+
+define_class!(
+    // SAFETY: NSObject imposes nothing on a subclass, and `Actions` does not
+    // implement `Drop`.
+    #[unsafe(super(NSObject))]
+    #[thread_kind = MainThreadOnly]
+    #[ivars = ActionIvars]
+    struct Actions;
+
+    /// What the native controls — the ones that are not a pill — aim at.
+    impl Actions {
+        #[unsafe(method(tabChanged:))]
+        fn tab_changed(&self, sender: Option<&AnyObject>) {
+            let Some(control) = sender.and_then(|s| s.downcast_ref::<NSSegmentedControl>()) else {
+                return;
+            };
+            let tab = if control.selectedSegment() == 1 {
+                Tab::Settings
+            } else {
+                Tab::Favourites
+            };
+            if let Some(ui) = self.ui() {
+                ui.show_tab(tab);
+            }
+        }
+
+        /// Fires when the slider is let go rather than all the way along, so the
+        /// preview is redrawn once and the slider is never rebuilt under the hand
+        /// that holds it.
+        #[unsafe(method(blurStrength:))]
+        fn blur_strength(&self, sender: Option<&AnyObject>) {
+            let Some(slider) = sender.and_then(|s| s.downcast_ref::<NSSlider>()) else {
+                return;
+            };
+            let strength = slider.doubleValue().round().clamp(0.0, 100.0) as u8;
+            if let Some(ui) = self.ui() {
+                ui.change_light(|p| p.set_blur_strength(strength));
+            }
+        }
+
+        #[unsafe(method(colourPicked:))]
+        fn colour_picked(&self, sender: Option<&AnyObject>) {
+            let Some(well) = sender.and_then(|s| s.downcast_ref::<NSColorWell>()) else {
+                return;
+            };
+            let Some(colour) = well
+                .color()
+                .colorUsingColorSpace(&NSColorSpace::sRGBColorSpace())
+            else {
+                return;
+            };
+            let byte = |c: f64| (c * 255.0).round().clamp(0.0, 255.0) as u8;
+            let rgb = [
+                byte(colour.redComponent()),
+                byte(colour.greenComponent()),
+                byte(colour.blueComponent()),
+            ];
+            if let Some(ui) = self.ui() {
+                ui.change_light(|p| p.set_border(Border::Custom { rgb }));
+            }
+        }
+
+        #[unsafe(method(religiousToggled:))]
+        fn religious_toggled(&self, sender: Option<&AnyObject>) {
+            let Some(button) = sender.and_then(|s| s.downcast_ref::<NSButton>()) else {
+                return;
+            };
+            let on = button.state() == 1;
+            if let Some(ui) = self.ui() {
+                ui.change(|p| p.set_hide_religious(on));
+            }
+        }
+    }
+);
+
+impl Actions {
+    fn new(mtm: MainThreadMarker) -> Retained<Self> {
+        let this = Self::alloc(mtm).set_ivars(ActionIvars {
+            ui: RefCell::new(Weak::new()),
+        });
+        unsafe { msg_send![super(this), init] }
+    }
+
+    fn ui(&self) -> Option<Rc<Ui>> {
+        self.ivars().ui.borrow().upgrade()
+    }
+}
+
+/// One stretch of the scrolling column, in the order it is laid out.
+enum Block {
+    /// A section's title.
+    Title(Retained<NSView>),
+    /// Views that wrap onto the next line when the column is too narrow.
+    Flow(Vec<Retained<NSView>>),
+    /// Views that share one line, centred on it.
+    Line(Vec<Retained<NSView>>),
+}
+
+/// The settings tab: the model, and the views drawn from it.
+struct Ui {
+    pending: RefCell<Pending>,
+    on_pick: Rc<dyn Fn(Pick)>,
+    mtm: MainThreadMarker,
+    actions: Retained<Actions>,
+    fav: Retained<NSView>,
+    settings: Retained<Plate>,
+    segments: Retained<NSSegmentedControl>,
+    canvas: Retained<Canvas>,
+    scroll: Retained<NSScrollView>,
+    doc: Retained<Doc>,
+    /// Built once and kept through every rebuild, because its own click is what
+    /// causes one and a control cannot be taken apart while it is answering.
+    religious: Retained<NSButton>,
+    apply: Retained<Pill>,
+    note: Retained<NSTextField>,
+    blocks: RefCell<Vec<Block>>,
+}
+
+impl Ui {
+    fn build(
+        mtm: MainThreadMarker,
+        frame: NSRect,
+        on_pick: Rc<dyn Fn(Pick)>,
+        fav: Retained<NSView>,
+    ) -> Rc<Self> {
+        let actions = Actions::new(mtm);
+        let target: &AnyObject = &actions;
+        let fill = NSAutoresizingMaskOptions::ViewWidthSizable
+            | NSAutoresizingMaskOptions::ViewHeightSizable;
+
+        let labels = NSArray::from_retained_slice(&[
+            NSString::from_str("Favourites"),
+            NSString::from_str("Settings"),
+        ]);
+        let segments = unsafe {
+            NSSegmentedControl::segmentedControlWithLabels_trackingMode_target_action(
+                &labels,
+                NSSegmentSwitchTracking::SelectOne,
+                Some(target),
+                Some(sel!(tabChanged:)),
+                mtm,
+            )
+        };
+        segments.setAutoresizingMask(
+            NSAutoresizingMaskOptions::ViewMinXMargin
+                | NSAutoresizingMaskOptions::ViewMaxXMargin
+                | NSAutoresizingMaskOptions::ViewMinYMargin,
+        );
+
+        let size = frame.size;
+        let settings = Plate::new(mtm, frame, WHITE, 1.0);
+        settings.setAutoresizingMask(fill);
+        // The tab is designed light only.
+        if let Some(aqua) = unsafe { NSAppearance::appearanceNamed(NSAppearanceNameAqua) } {
+            settings.setAppearance(Some(&aqua));
+        }
+
+        let canvas = Canvas::new(mtm);
+        canvas.setAutoresizingMask(
+            NSAutoresizingMaskOptions::ViewMaxXMargin | NSAutoresizingMaskOptions::ViewMinYMargin,
+        );
+
+        let scroll = NSScrollView::initWithFrame(
+            NSScrollView::alloc(mtm),
+            NSRect::new(
+                NSPoint::new(LEFT, BAR + 1.0),
+                NSSize::new(
+                    (size.width - LEFT).max(1.0),
+                    (size.height - BAR - 1.0).max(1.0),
+                ),
+            ),
+        );
+        scroll.setHasVerticalScroller(true);
+        scroll.setAutohidesScrollers(true);
+        scroll.setDrawsBackground(false);
+        scroll.setBorderType(NSBorderType::NoBorder);
+        scroll.setAutoresizingMask(fill);
+        let doc = Doc::new(
+            mtm,
+            NSRect::new(NSPoint::new(0.0, 0.0), scroll.contentSize()),
+        );
+        doc.setAutoresizingMask(NSAutoresizingMaskOptions::ViewWidthSizable);
+        scroll.setDocumentView(Some(&doc));
+
+        let religious = unsafe {
+            NSButton::checkboxWithTitle_target_action(
+                &NSString::from_str("Hide religious scenes"),
+                Some(target),
+                Some(sel!(religiousToggled:)),
+                mtm,
+            )
+        };
+        religious.sizeToFit();
+        doc.addSubview(&religious);
+
+        let hairline = Plate::new(
+            mtm,
+            NSRect::new(NSPoint::new(0.0, BAR), NSSize::new(size.width, 1.0)),
+            0x000000,
+            0.09,
+        );
+        hairline.setAutoresizingMask(
+            NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewMaxYMargin,
+        );
+
+        let apply = Pill::new(
+            mtm,
+            "Apply changes",
+            (15.0, SEMIBOLD),
+            (WHITE, BLUE),
+            -1.0,
+            (None, 36.0),
+            20.0,
+            None,
+        );
+        let apply_w = apply.frame().size.width;
+        apply.setFrameOrigin(NSPoint::new(
+            size.width - OUTER - apply_w,
+            (BAR - 36.0) / 2.0,
+        ));
+        apply.setAutoresizingMask(
+            NSAutoresizingMaskOptions::ViewMinXMargin | NSAutoresizingMaskOptions::ViewMaxYMargin,
+        );
+
+        let note = text_label(mtm, "", 13.0, 0.0, MUTED);
+        note.setAlignment(NSTextAlignment::Right);
+        note.setFrame(NSRect::new(
+            NSPoint::new(OUTER, (BAR - 16.0) / 2.0),
+            NSSize::new((size.width - OUTER * 2.0 - apply_w - 16.0).max(1.0), 16.0),
+        ));
+        note.setAutoresizingMask(
+            NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewMaxYMargin,
+        );
+
+        settings.addSubview(&canvas);
+        settings.addSubview(&scroll);
+        settings.addSubview(&hairline);
+        settings.addSubview(&apply);
+        settings.addSubview(&note);
+        settings.setHidden(true);
+
+        let ui = Rc::new(Self {
+            pending: RefCell::new(Pending::new(Default::default(), true, 16.0 / 10.0)),
+            on_pick,
+            mtm,
+            actions,
+            fav,
+            settings,
+            segments,
+            canvas,
+            scroll,
+            doc,
+            religious,
+            apply,
+            note,
+            blocks: RefCell::new(Vec::new()),
+        });
+        *ui.actions.ivars().ui.borrow_mut() = Rc::downgrade(&ui);
+        let weak = Rc::downgrade(&ui);
+        *ui.doc.ivars().resized.borrow_mut() = Some(Rc::new(move || {
+            if let Some(ui) = weak.upgrade() {
+                ui.layout();
+            }
+        }));
+        ui.apply.ivars().on_click.replace(Some(ui.hook(|ui| {
+            let staged = {
+                let pending = ui.pending.borrow();
+                if !pending.can_apply() {
+                    return;
+                }
+                pending.staged().clone()
+            };
+            (ui.on_pick)(Pick::Apply(staged));
+        })));
+        ui.rebuild();
+        ui
+    }
+
+    fn show_tab(&self, tab: Tab) {
+        self.fav.setHidden(tab != Tab::Favourites);
+        self.settings.setHidden(tab != Tab::Settings);
+        self.segments
+            .setSelectedSegment(if tab == Tab::Settings { 1 } else { 0 });
+    }
+
+    /// Takes what the loop has applied and the picture now on the desktop, and
+    /// redraws.
+    fn adopt(self: &Rc<Self>, snapshot: &Snapshot) {
+        {
+            let mut pending = self.pending.borrow_mut();
+            pending.adopt(&snapshot.settings, snapshot.filters_apply, snapshot.aspect);
+            pending.set_picture(snapshot.shown.as_ref().map(|art| art.path.as_path()));
+        }
+        self.rebuild();
+    }
+
+    /// A click handler that runs `act` on this tab if it is still there.
+    fn hook(self: &Rc<Self>, act: impl Fn(&Rc<Ui>) + 'static) -> Rc<dyn Fn()> {
+        let weak = Rc::downgrade(self);
+        Rc::new(move || {
+            if let Some(ui) = weak.upgrade() {
+                act(&ui);
+            }
+        })
+    }
+
+    /// Changes the model, then rebuilds every row, since the chips may differ.
+    fn change(self: &Rc<Self>, f: impl FnOnce(&mut Pending)) {
+        f(&mut self.pending.borrow_mut());
+        self.rebuild();
+    }
+
+    /// Changes the model and redraws only what shows the result, for controls
+    /// that must survive their own change.
+    fn change_light(&self, f: impl FnOnce(&mut Pending)) {
+        f(&mut self.pending.borrow_mut());
+        self.refresh();
+    }
+
+    fn chip(
+        self: &Rc<Self>,
+        text: &str,
+        selected: bool,
+        enabled: bool,
+        act: impl Fn(&Rc<Ui>) + 'static,
+    ) -> Retained<NSView> {
+        let (ink, fill) = if selected { (WHITE, INK) } else { (INK, FILL) };
+        let pill = Pill::new(
+            self.mtm,
+            text,
+            (13.0, MEDIUM),
+            (ink, fill),
+            -1.0,
+            (None, CHIP_H),
+            14.0,
+            Some(self.hook(act)),
+        );
+        pill.set_enabled(enabled, 0.5);
+        as_view(pill)
+    }
+
+    fn title(&self, text: &str) -> Block {
+        Block::Title(as_view(text_label(self.mtm, text, 13.0, SEMIBOLD, MUTED)))
+    }
+
+    /// Takes every row apart and builds it again from the model.
+    fn rebuild(self: &Rc<Self>) {
+        let blocks = self.blocks_from_model();
+
+        let keep: &NSView = &self.religious;
+        for view in self.doc.subviews().iter() {
+            if !std::ptr::eq(&*view, keep) {
+                view.removeFromSuperview();
+            }
+        }
+        for block in &blocks {
+            match block {
+                Block::Title(view) => self.doc.addSubview(view),
+                Block::Flow(views) | Block::Line(views) => {
+                    for view in views {
+                        if !std::ptr::eq(&**view, keep) {
+                            self.doc.addSubview(view);
+                        }
+                    }
+                }
+            }
+        }
+        *self.blocks.borrow_mut() = blocks;
+        self.layout();
+        self.refresh();
+    }
+
+    fn blocks_from_model(self: &Rc<Self>) -> Vec<Block> {
+        let p = self.pending.borrow();
+        let on = p.filters_apply();
+        let mut blocks = vec![self.title("Style")];
+
+        let cards = StyleKind::ALL
+            .into_iter()
+            .map(|kind| {
+                let selected = p.style_kind() == kind;
+                let (ink, fill) = if selected { (WHITE, INK) } else { (INK, FILL) };
+                as_view(Pill::new(
+                    self.mtm,
+                    kind.label(),
+                    (13.0, MEDIUM),
+                    (ink, fill),
+                    10.0,
+                    (Some(78.0), 56.0),
+                    0.0,
+                    Some(self.hook(move |ui| ui.change(|p| p.set_style(kind)))),
+                ))
+            })
+            .collect();
+        blocks.push(Block::Flow(cards));
+
+        match p.style_kind() {
+            StyleKind::Borders => {
+                let border = p.border();
+                blocks.push(Block::Flow(vec![
+                    self.chip("Black", border == Border::Black, true, |ui| {
+                        ui.change(|p| p.set_border(Border::Black))
+                    }),
+                    self.chip("Automatic", border == Border::Auto, true, |ui| {
+                        ui.change(|p| p.set_border(Border::Auto))
+                    }),
+                    self.chip(
+                        "Custom",
+                        matches!(border, Border::Custom { .. }),
+                        true,
+                        |ui| {
+                            ui.change(|p| {
+                                let rgb = p.custom_colour();
+                                p.set_border(Border::Custom { rgb })
+                            })
+                        },
+                    ),
+                ]));
+                if matches!(border, Border::Custom { .. }) {
+                    let [r, g, b] = p.custom_colour();
+                    let well = NSColorWell::initWithFrame(
+                        NSColorWell::alloc(self.mtm),
+                        NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(44.0, 28.0)),
+                    );
+                    well.setColor(&NSColor::colorWithSRGBRed_green_blue_alpha(
+                        r as f64 / 255.0,
+                        g as f64 / 255.0,
+                        b as f64 / 255.0,
+                        1.0,
+                    ));
+                    let target: &AnyObject = &self.actions;
+                    unsafe {
+                        well.setTarget(Some(target));
+                        well.setAction(Some(sel!(colourPicked:)));
+                    }
+                    blocks.push(Block::Line(vec![as_view(well)]));
+                }
+            }
+            StyleKind::Blur => {
+                let (variant, strength) = p.blur();
+                blocks.push(Block::Flow(vec![
+                    self.chip(
+                        "Behind the picture",
+                        variant == BlurVariant::Backdrop,
+                        true,
+                        |ui| ui.change(|p| p.set_blur_variant(BlurVariant::Backdrop)),
+                    ),
+                    self.chip(
+                        "Whole picture",
+                        variant == BlurVariant::WholeImage,
+                        true,
+                        |ui| ui.change(|p| p.set_blur_variant(BlurVariant::WholeImage)),
+                    ),
+                ]));
+                let target: &AnyObject = &self.actions;
+                let slider = unsafe {
+                    NSSlider::sliderWithValue_minValue_maxValue_target_action(
+                        strength as f64,
+                        0.0,
+                        100.0,
+                        Some(target),
+                        Some(sel!(blurStrength:)),
+                        self.mtm,
+                    )
+                };
+                slider.setContinuous(false);
+                slider.setFrame(NSRect::new(
+                    NSPoint::new(0.0, 0.0),
+                    NSSize::new(200.0, 20.0),
+                ));
+                blocks.push(Block::Line(vec![
+                    as_view(text_label(self.mtm, "Strength", 13.0, 0.0, MUTED)),
+                    as_view(slider),
+                ]));
+            }
+            StyleKind::Zoom | StyleKind::Stretch => {}
+        }
+
+        blocks.push(self.title("Shape"));
+        blocks.push(Block::Flow(
+            p.shapes()
+                .into_iter()
+                .map(|c| {
+                    let shape = c.value;
+                    self.chip(&c.label, c.selected, on, move |ui| {
+                        ui.change(|p| p.set_shape(shape))
+                    })
+                })
+                .collect(),
+        ));
+
+        blocks.push(self.title("Origin"));
+        blocks.push(Block::Flow(
+            p.regions()
+                .into_iter()
+                .map(|c| {
+                    let region = c.value;
+                    self.chip(&c.label, c.selected, on, move |ui| {
+                        ui.change(|p| p.toggle_region(region))
+                    })
+                })
+                .collect(),
+        ));
+
+        blocks.push(self.title("Subject"));
+        blocks.push(Block::Flow(
+            p.subjects()
+                .into_iter()
+                .map(|c| {
+                    let subject = c.value;
+                    self.chip(&c.label, c.selected, on, move |ui| {
+                        ui.change(|p| p.toggle_subject(subject))
+                    })
+                })
+                .collect(),
+        ));
+
+        let artists = p.artists();
+        if !artists.is_empty() {
+            blocks.push(self.title("Artist"));
+            blocks.push(Block::Flow(
+                artists
+                    .into_iter()
+                    .map(|c| {
+                        let artist = c.value;
+                        self.chip(&c.label, c.selected, on, move |ui| {
+                            ui.change(|p| p.toggle_artist(&artist))
+                        })
+                    })
+                    .collect(),
+            ));
+        }
+
+        self.religious.setState(p.hide_religious() as isize);
+        self.religious.setEnabled(on);
+        self.religious.setAlphaValue(if on { 1.0 } else { 0.5 });
+        blocks.push(Block::Line(vec![as_view(self.religious.clone())]));
+        blocks
+    }
+
+    /// Puts every view of the column where the current width says it goes.
+    ///
+    /// Only moves things, so it is safe to call while the column is being resized.
+    fn layout(&self) {
+        let width = self.doc.frame().size.width;
+        let inner = (width - OUTER * 2.0).max(60.0);
+        let mut y = 0.0;
+        let mut after_title = false;
+        for block in self.blocks.borrow().iter() {
+            match block {
+                Block::Title(view) => {
+                    y += OUTER;
+                    view.setFrameOrigin(NSPoint::new(OUTER, y));
+                    y += view.frame().size.height + 10.0;
+                    after_title = true;
+                    continue;
+                }
+                Block::Flow(views) => {
+                    if !after_title {
+                        y += 12.0;
+                    }
+                    let (mut x, mut row) = (0.0, 0.0_f64);
+                    for view in views {
+                        let size = view.frame().size;
+                        if x > 0.0 && x + size.width > inner {
+                            x = 0.0;
+                            y += row + GAP;
+                            row = 0.0;
+                        }
+                        view.setFrameOrigin(NSPoint::new(OUTER + x, y));
+                        x += size.width + GAP;
+                        row = row.max(size.height);
+                    }
+                    y += row;
+                }
+                Block::Line(views) => {
+                    if !after_title {
+                        y += 12.0;
+                    }
+                    let line = views
+                        .iter()
+                        .map(|v| v.frame().size.height)
+                        .fold(0.0, f64::max);
+                    let mut x = 0.0;
+                    for view in views {
+                        let size = view.frame().size;
+                        view.setFrameOrigin(NSPoint::new(
+                            OUTER + x,
+                            y + ((line - size.height) / 2.0).floor(),
+                        ));
+                        x += size.width + 12.0;
+                    }
+                    y += line;
+                }
+            }
+            after_title = false;
+        }
+        y += OUTER;
+        // Never shorter than the window, or the clip view hangs a short column from
+        // its bottom edge instead of its top.
+        let height = y.max(self.scroll.contentSize().height);
+        self.doc.setFrameSize(NSSize::new(width, height));
+    }
+
+    /// Redraws what depends on the staged choices without touching the rows.
+    fn refresh(&self) {
+        let p = self.pending.borrow();
+        let aspect = if p.aspect() > 0.1 {
+            p.aspect()
+        } else {
+            16.0 / 10.0
+        };
+        let above = self.settings.frame().size.height;
+        self.canvas.place(above, CARD_W / aspect);
+        // Twice the points, for a Retina display — see `RETINA`.
+        let image = p
+            .preview((CARD_W * RETINA) as u32)
+            .and_then(|pixels| preview_image(&pixels));
+        self.canvas.set_image(image);
+
+        self.apply.set_enabled(p.can_apply(), 0.4);
+        self.note
+            .setStringValue(&NSString::from_str(p.note().unwrap_or("")));
+    }
 }

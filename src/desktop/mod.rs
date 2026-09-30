@@ -4,6 +4,8 @@
 //! differently by every desktop. Keeping them behind one seam leaves rotation and
 //! presence concerned only with what the user asked for, not where it is running.
 
+use crate::placement;
+use crate::settings::Style;
 use anyhow::Result;
 use std::path::Path;
 
@@ -58,9 +60,10 @@ pub fn catch_up() {
     platform::catch_up();
 }
 
-/// Shows `path` on every display, scaled to fit entirely on screen with black
-/// filling the margins, and holds that placement against the things that would
-/// otherwise reset it.
+/// Shows `path` on every display placed as `style` says — fitted over coloured
+/// margins, zoomed, stretched, or over a blur of itself — and holds that placement
+/// against the things that would otherwise reset it. A style that needs a picture
+/// composed for it (see [`placement::resolve`]) draws one into `scratch`.
 ///
 /// Re-asserting the placement is deliberately not the caller's job. A caller that
 /// had to remember it would eventually forget, which is exactly the bug this
@@ -72,11 +75,33 @@ pub fn catch_up() {
 /// A backend may require this to run on the main thread. macOS does, because
 /// AppKit will only enumerate displays there; the GNOME backend has no such
 /// affinity.
-pub fn pin(path: &Path) -> Result<Pinned> {
+pub fn pin(path: &Path, style: &Style, scratch: &Path) -> Result<Pinned> {
     let path = path
         .canonicalize()
         .map_err(|e| anyhow::anyhow!("cannot read artwork at {}: {e}", path.display()))?;
-    platform::pin(&path)
+    let mut hang = placement::resolve(&path, style, primary_screen(), scratch)?;
+    hang.path = hang
+        .path
+        .canonicalize()
+        .map_err(|e| anyhow::anyhow!("cannot read {}: {e}", hang.path.display()))?;
+    platform::pin(&hang)
+}
+
+/// The main display's size in device pixels, width first — what a composed
+/// picture is drawn at, and what the shape filter measures paintings against.
+///
+/// Main-thread only on macOS, for the same reason as [`pin`]. Falls back to a
+/// common laptop panel if the desktop will not say.
+pub fn primary_screen() -> (u32, u32) {
+    platform::primary_screen()
+        .filter(|&(w, h)| w > 0 && h > 0)
+        .unwrap_or((2560, 1600))
+}
+
+/// [`primary_screen`] as width ÷ height.
+pub fn primary_aspect() -> f64 {
+    let (w, h) = primary_screen();
+    f64::from(w) / f64::from(h)
 }
 
 /// Opens `url` in the desktop's default browser.

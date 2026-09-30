@@ -11,16 +11,18 @@
 //! `Pinned::AfterRedraw`, not `Everywhere`.
 
 use crate::desktop::Pinned;
+use crate::placement::{Hang, Mode};
 use anyhow::{bail, Context, Result};
-use std::path::Path;
 use windows::core::{HSTRING, PCWSTR};
 use windows::Win32::Foundation::{COLORREF, RPC_E_CHANGED_MODE};
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CoTaskMemFree, CLSCTX_ALL, COINIT_APARTMENTTHREADED,
 };
-use windows::Win32::UI::Shell::{DesktopWallpaper, IDesktopWallpaper, DWPOS_FIT};
+use windows::Win32::UI::Shell::{
+    DesktopWallpaper, IDesktopWallpaper, DWPOS_FILL, DWPOS_FIT, DWPOS_STRETCH,
+};
 
-pub fn pin(path: &Path) -> Result<Pinned> {
+pub fn pin(hang: &Hang) -> Result<Pinned> {
     // Any thread may be asked to pin, and COM has to be entered on the one doing it.
     // A thread that already chose the other apartment model is left as it is — the
     // desktop object is usable from either.
@@ -35,17 +37,24 @@ pub fn pin(path: &Path) -> Result<Pinned> {
         unsafe { CoCreateInstance(&DesktopWallpaper, None, CLSCTX_ALL) }
             .context("reaching the shell's wallpaper service")?;
 
-    let wanted = shell_path(&path.to_string_lossy());
+    let wanted = shell_path(&hang.path.to_string_lossy());
     let wanted_h = HSTRING::from(&wanted);
+
+    let position = match hang.mode {
+        Mode::Fit => DWPOS_FIT,
+        Mode::Fill => DWPOS_FILL,
+        Mode::Stretch => DWPOS_STRETCH,
+    };
+    let [r, g, b] = hang.colour.map(u32::from);
 
     // SAFETY: every argument outlives its call; a null monitor id means all of them.
     unsafe {
         desktop
-            .SetBackgroundColor(COLORREF(0))
-            .context("setting the margins to black")?;
+            .SetBackgroundColor(COLORREF(r | g << 8 | b << 16))
+            .context("setting the margin colour")?;
         desktop
-            .SetPosition(DWPOS_FIT)
-            .context("setting the wallpaper to fit")?;
+            .SetPosition(position)
+            .context("setting the wallpaper placement")?;
         desktop
             .SetWallpaper(PCWSTR::null(), &wanted_h)
             .context("setting the wallpaper")?;

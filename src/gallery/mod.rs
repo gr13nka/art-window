@@ -1,25 +1,34 @@
-//! A window in which the kept pictures can be looked at, and not merely named.
+//! A window in which the kept pictures can be looked at, and not merely named —
+//! and in which the paintings to come, and how they are hung, are chosen.
 //!
 //! The menu bar can list favourites but it cannot show them: a row of forty-four
 //! characters of Met catalogue prose is no way to recognise a painting you liked.
-//! So there is a window — a column of thumbnails to pick from, and whichever is
-//! picked shown large enough to judge.
+//! So there is a window with two tabs. *Favourites* is a column of thumbnails to
+//! pick from, and whichever is picked shown large enough to judge. *Settings* is
+//! the filters and placement styles, with a preview of the picture on the desktop
+//! hung the way they say — too many choices, and too visual, for menu rows.
 //!
 //! What is in the window, how it is laid out and how a thumbnail is made are the
-//! platform half's business. This half owns the window itself and the vocabulary a
-//! click comes back in, which is deliberately only two words wide: everything else
-//! a person does in there — scrolling, selecting, looking — changes nothing outside
-//! the window and so never leaves it.
+//! platform half's business. What the settings tab *decides* is [`Pending`]'s, so
+//! the platforms only draw it. This half owns the window itself and the vocabulary
+//! a click comes back in, which is deliberately only three words wide: everything
+//! else a person does in there — scrolling, selecting, looking, trying out a style
+//! before applying it — changes nothing outside the window and so never leaves it.
 
 use crate::art::Artwork;
 use crate::config::State;
 use crate::desktop;
 use crate::favourites::Favourites;
+use crate::settings::Settings;
 use anyhow::{anyhow, Result};
 use std::rc::Rc;
 use tao::dpi::LogicalSize;
 use tao::event_loop::EventLoopWindowTarget;
 use tao::window::{Window, WindowBuilder, WindowId};
+
+mod pending;
+#[allow(unused_imports)]
+pub use pending::{Chip, Pending, StyleKind};
 
 #[cfg(target_os = "macos")]
 mod macos;
@@ -44,6 +53,17 @@ pub enum Pick {
     Show(String),
     /// Drop this one from the list.
     Forget(String),
+    /// Use these settings from now on — what *Apply changes* says. Everything
+    /// staged before it stays in the window.
+    Apply(Settings),
+}
+
+/// Which half of the window to bring forward.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Tab {
+    #[default]
+    Favourites,
+    Settings,
 }
 
 /// An action from the Linux control strip. Kept separate from [`Pick`] because
@@ -68,6 +88,13 @@ struct Snapshot {
     fetching: bool,
     status: Option<String>,
     starts_at_login: bool,
+    /// What is applied now; the window stages its changes against this.
+    settings: Settings,
+    /// Whether the configured source honours filters — see [`Pending::note`].
+    filters_apply: bool,
+    /// The main display's width ÷ height, read on the main thread by whoever
+    /// fills this in, so the platform never has to ask.
+    aspect: f64,
 }
 
 /// The window of kept pictures — shut most of the time, and then not there at all.
@@ -93,9 +120,6 @@ struct Open {
     content: platform::Content,
 }
 
-#[cfg(any(target_os = "macos", windows))]
-const TITLE: &str = "Favourites";
-#[cfg(target_os = "linux")]
 const TITLE: &str = "Art Window";
 const OPENS_AT: LogicalSize<f64> = LogicalSize::new(940.0, 640.0);
 const NO_SMALLER_THAN: LogicalSize<f64> = LogicalSize::new(560.0, 400.0);
@@ -107,13 +131,15 @@ impl Gallery {
             on_control: Rc::new(on_control),
             snapshot: Snapshot {
                 starts_at_login: desktop::starts_at_login(),
+                filters_apply: true,
+                aspect: desktop::primary_aspect(),
                 ..Snapshot::default()
             },
             open: None,
         }
     }
 
-    /// Opens the window on `favourites`, or brings it forward if it is already up.
+    /// Opens the window on `tab`, or brings it forward if it is already up.
     ///
     /// Bringing it forward is [`Window::set_focus`] and not merely raising it: this
     /// program is an `Accessory` — no Dock tile, never the active application — so
@@ -123,9 +149,12 @@ impl Gallery {
         &mut self,
         target: &EventLoopWindowTarget<T>,
         favourites: &Favourites,
+        tab: Tab,
     ) -> Result<()> {
+        self.snapshot.aspect = desktop::primary_aspect();
         if let Some(open) = &self.open {
             open.content.describe(&self.snapshot, favourites);
+            open.content.show_tab(tab);
             platform::present(&open.window);
             return Ok(());
         }
@@ -142,9 +171,25 @@ impl Gallery {
         let content =
             platform::Content::install(&window, self.on_pick.clone(), self.on_control.clone())?;
         content.describe(&self.snapshot, favourites);
+        content.show_tab(tab);
         platform::present(&window);
         self.open = Some(Open { window, content });
         Ok(())
+    }
+
+    /// Tells the settings tab what is in force now. Only the settings tab reads
+    /// this, and only as the baseline its staged changes are measured from.
+    pub fn set_settings(
+        &mut self,
+        settings: &Settings,
+        filters_apply: bool,
+        favourites: &Favourites,
+    ) {
+        self.snapshot.settings = settings.clone();
+        self.snapshot.filters_apply = filters_apply;
+        if let Some(open) = &self.open {
+            open.content.describe(&self.snapshot, favourites);
+        }
     }
 
     /// Updates everything shared by the tray and combined Linux window.

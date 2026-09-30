@@ -13,12 +13,22 @@ use windows::Win32::System::Console::{
 };
 use windows::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_DWORD};
 use windows::Win32::UI::Shell::ShellExecuteW;
-use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+use windows::Win32::UI::WindowsAndMessaging::{
+    GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN, SW_SHOWNORMAL,
+};
 
 pub(crate) use instance::Instance;
 
-pub(super) fn pin(path: &Path) -> Result<Pinned> {
-    wallpaper::pin(path)
+pub(super) fn pin(hang: &crate::placement::Hang) -> Result<Pinned> {
+    wallpaper::pin(hang)
+}
+
+/// The primary display's size in physical pixels; the process is PerMonitorV2 DPI
+/// aware, so `GetSystemMetrics` does not answer in scaled units.
+pub(super) fn primary_screen() -> Option<(u32, u32)> {
+    // SAFETY: plain queries with no arguments to borrow.
+    let (w, h) = unsafe { (GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN)) };
+    (w > 0 && h > 0).then_some((w as u32, h as u32))
 }
 
 /// Nothing to publish: the shell service `pin` writes through repaints as it goes.

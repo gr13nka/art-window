@@ -16,7 +16,9 @@ mod day;
 mod desktop;
 mod favourites;
 mod gallery;
+mod placement;
 mod rotation;
+mod settings;
 mod tray;
 mod wake;
 
@@ -58,6 +60,7 @@ fn main() -> Result<()> {
     if let Mode::Where = mode {
         println!("config  {}", paths.config.display());
         println!("state   {}", paths.state.display());
+        println!("choices {}", paths.settings.display());
         println!("cache   {}", paths.cache.display());
         println!("kept    {}", paths.favourites.display());
         println!(
@@ -91,14 +94,20 @@ fn main() -> Result<()> {
         Mode::Tray => {
             #[cfg(windows)]
             desktop::log_to(&paths.state.with_file_name("art-window.log"));
-            tray::run(paths, config, state)
+            let settings = settings::Settings::load(&paths.settings);
+            tray::run(paths, config, settings, state)
         }
         Mode::Once { only_if_due } => {
             if only_if_due && !state.is_due() {
                 return Ok(());
             }
-            let artwork = rotation::fetch(&config, &state, &paths.cache)?;
-            let pinned = rotation::show(&artwork, &config, &paths, &mut state)?;
+            let settings = settings::Settings::load(&paths.settings);
+            let selection = art::Selection {
+                filters: settings.filters.clone(),
+                screen_aspect: desktop::primary_aspect(),
+            };
+            let artwork = rotation::fetch(&config, &state, &paths.cache, &selection)?;
+            let pinned = rotation::show(&artwork, &settings.style, &config, &paths, &mut state)?;
             // A one-shot command has no next redraw to wait for and nobody to
             // surprise: whoever typed it is watching a terminal and asked for the
             // wallpaper to change now. See `desktop::catch_up`.

@@ -25,12 +25,13 @@
 //! the event loop's own queue, where the main thread hangs it. Nothing is shared
 //! between the two; the worker gets copies and returns a value.
 
-use crate::art::Artwork;
+use crate::art::{Artwork, Selection, SourceSpec};
 use crate::config::{now_secs, Config, Paths, State};
 use crate::desktop::{self, Pinned};
 use crate::favourites::Favourites;
-use crate::gallery::{Control, Gallery, Pick};
+use crate::gallery::{Control, Gallery, Pick, Tab};
 use crate::rotation;
+use crate::settings::{Settings, Style};
 use crate::wake;
 use anyhow::{anyhow, Result};
 use std::path::{Path, PathBuf};
@@ -126,6 +127,10 @@ enum Wanted {
     Forget(String),
     /// Open the window where the kept pictures can be looked at.
     Gallery,
+    /// Open the same window on its settings tab.
+    Settings,
+    /// Use these settings from now on.
+    Apply(Settings),
     Browse,
     Reapply,
     Login(bool),
@@ -151,6 +156,7 @@ impl From<Pick> for Wanted {
         match pick {
             Pick::Show(key) => Self::Show(key),
             Pick::Forget(key) => Self::Forget(key),
+            Pick::Apply(settings) => Self::Apply(settings),
         }
     }
 }
@@ -224,7 +230,7 @@ impl Owed {
     /// the state. Each asking spends one of [`PATIENCE`], and an error ends them:
     /// a picture that cannot be put up at all is not made puttable by asking twice
     /// more.
-    fn press(&mut self, shown: Option<&Artwork>) -> Result<()> {
+    fn press(&mut self, shown: Option<&Artwork>, style: &Style, scratch: &Path) -> Result<()> {
         match self.at {
             Some(at) if at <= now_secs() => self.at = None,
             _ => return Ok(()),
@@ -232,7 +238,7 @@ impl Owed {
         let Some(art) = shown else { return Ok(()) };
 
         self.tries = self.tries.saturating_sub(1);
-        let pinned = desktop::pin(&art.path)?;
+        let pinned = desktop::pin(&art.path, style, scratch)?;
         self.remember_visibility(pinned, &art.path);
         if pinned == Pinned::InPart && self.tries > 0 {
             self.at = Some(now_secs() + RE_PIN.as_secs());
@@ -272,7 +278,7 @@ impl Owed {
 }
 
 /// Runs until the user picks Quit.
-pub fn run(paths: Paths, config: Config, mut state: State) -> Result<()> {
+pub fn run(paths: Paths, config: Config, mut settings: Settings, mut state: State) -> Result<()> {
     #[cfg(target_os = "linux")]
     {
         glib::set_prgname(Some(desktop::APP_ID));
@@ -381,6 +387,11 @@ pub fn run(paths: Paths, config: Config, mut state: State) -> Result<()> {
             let _ = control_proxy.send_event(Wake::Chose(control.into()));
         },
     )?;
+    // Only the museum catalogue knows a painting's region, subject, artist or
+    // size; the window says so rather than offering filters that do nothing.
+    let filters_apply = matches!(config.source, SourceSpec::Museums);
+    ui.gallery
+        .set_settings(&settings, filters_apply, &favourites);
     ui.describe(&state, &favourites);
 
     let mut tray: Option<TrayIcon> = None;
@@ -472,7 +483,7 @@ pub fn run(paths: Paths, config: Config, mut state: State) -> Result<()> {
                     if !starting {
                         window_requested = true;
                     }
-                    if let Err(error) = ui.present(target, &favourites) {
+                    if let Err(error) = ui.present(target, &favourites, Tab::Favourites) {
                         report(&error);
                         *control_flow = ControlFlow::Exit;
                         return;
@@ -524,7 +535,7 @@ pub fn run(paths: Paths, config: Config, mut state: State) -> Result<()> {
                     }
                 } else {
                     tray.take();
-                    if let Err(error) = ui.present(target, &favourites) {
+                    if let Err(error) = ui.present(target, &favourites, Tab::Favourites) {
                         report(&error);
                         *control_flow = ControlFlow::Exit;
                         return;
@@ -561,7 +572,7 @@ pub fn run(paths: Paths, config: Config, mut state: State) -> Result<()> {
                 // below still has to be wound.
                 if !std::mem::take(&mut superseded) {
                     match result.and_then(|artwork| {
-                        rotation::show(&artwork, &config, &paths, &mut state)
+                        rotation::show(&artwork, &settings.style, &config, &paths, &mut state)
                             .map(|pinned| (artwork, pinned))
                     }) {
                         Ok((artwork, pinned)) => {
@@ -612,16 +623,48 @@ pub fn run(paths: Paths, config: Config, mut state: State) -> Result<()> {
 
             Wanted::Next => asked_for_next = true,
 
-            Wanted::Gallery => {
+            Wanted::Gallery | Wanted::Settings => {
                 #[cfg(target_os = "linux")]
                 {
                     window_requested = true;
                 }
-                if let Err(e) = ui.present(target, &favourites) {
+                let tab = match wanted {
+                    Wanted::Settings => Tab::Settings,
+                    _ => Tab::Favourites,
+                };
+                if let Err(e) = ui.present(target, &favourites, tab) {
                     report(&e);
-                    ui.set_status("Could not open the favourites window");
+                    ui.set_status("Could not open the window");
                 }
             }
+
+            // Filters wait for the next picture — the one on the desktop was chosen
+            // under the old ones and is still a fair choice. A new style does not
+            // wait: the person pressing Apply is looking at the preview of exactly
+            // this picture hung that way, and expects to see it. Only the Space in
+            // front of them, though; the rest catch up at the next redraw, as every
+            // other change does.
+            Wanted::Apply(chosen) => match chosen.save(&paths.settings) {
+                Ok(()) => {
+                    let restyled = chosen.style != settings.style;
+                    settings = chosen;
+                    ui.gallery
+                        .set_settings(&settings, filters_apply, &favourites);
+                    if let Some(art) = state.shown.as_ref().filter(|_| restyled) {
+                        match desktop::pin(&art.path, &settings.style, &paths.cache) {
+                            Ok(pinned) => owed.took(pinned, &art.path),
+                            Err(error) => {
+                                report(&error);
+                                ui.set_status("Could not hang the picture that way");
+                            }
+                        }
+                    }
+                }
+                Err(error) => {
+                    report(&error);
+                    ui.set_status("Could not save the settings");
+                }
+            },
 
             Wanted::Browse => {
                 if let Some(url) = state
@@ -638,7 +681,7 @@ pub fn run(paths: Paths, config: Config, mut state: State) -> Result<()> {
             // the next redraw is not what it means.
             Wanted::Reapply => {
                 if let Some(art) = &state.shown {
-                    match desktop::pin(&art.path) {
+                    match desktop::pin(&art.path, &settings.style, &paths.cache) {
                         Ok(pinned) => {
                             owed.took(pinned, &art.path);
                             if pinned != Pinned::InPart {
@@ -708,7 +751,7 @@ pub fn run(paths: Paths, config: Config, mut state: State) -> Result<()> {
         }
 
         if let Some(art) = chosen {
-            match rotation::revisit(&art, &config, &paths, &mut state) {
+            match rotation::revisit(&art, &settings.style, &config, &paths, &mut state) {
                 Ok(pinned) => {
                     // Nothing is owed that this has not just answered, and a
                     // download already in the air would only undo it.
@@ -731,7 +774,7 @@ pub fn run(paths: Paths, config: Config, mut state: State) -> Result<()> {
         // though: that picture is about to be replaced, and the loop would be
         // pressing for a painting nobody will see.
         if !fetching {
-            if let Err(e) = owed.press(state.shown.as_ref()) {
+            if let Err(e) = owed.press(state.shown.as_ref(), &settings.style, &paths.cache) {
                 report(&e);
                 ui.set_status("Could not re-apply the wallpaper");
             }
@@ -758,7 +801,12 @@ pub fn run(paths: Paths, config: Config, mut state: State) -> Result<()> {
             // not waiting for tomorrow; the request is taken either way, so that one
             // made while a download was in the air cannot start a second later on.
             ui.set_fetching(true);
-            spawn_fetch(&config, &state, &paths, proxy.clone());
+            // Measured here because only the main thread may ask about screens.
+            let selection = Selection {
+                filters: settings.filters.clone(),
+                screen_aspect: desktop::primary_aspect(),
+            };
+            spawn_fetch(&config, &state, &paths, selection, proxy.clone());
             fetching = true;
             ControlFlow::Wait
         } else if let Some(left) = [cooling_off, owed.left()].into_iter().flatten().min() {
@@ -774,12 +822,19 @@ pub fn run(paths: Paths, config: Config, mut state: State) -> Result<()> {
 }
 
 /// Hands the slow half of a rotation to a thread that is allowed to block.
-fn spawn_fetch(config: &Config, state: &State, paths: &Paths, proxy: EventLoopProxy<Wake>) {
+fn spawn_fetch(
+    config: &Config,
+    state: &State,
+    paths: &Paths,
+    selection: Selection,
+    proxy: EventLoopProxy<Wake>,
+) {
     let config = config.clone();
     let state = state.clone();
     let cache = paths.cache.clone();
     std::thread::spawn(move || {
-        let _ = proxy.send_event(Wake::Fetched(rotation::fetch(&config, &state, &cache)));
+        let fetched = rotation::fetch(&config, &state, &cache, &selection);
+        let _ = proxy.send_event(Wake::Fetched(fetched));
     });
 }
 
@@ -816,7 +871,9 @@ struct Ui {
     /// Opens the window the kept pictures can be looked at in. Greyed while there
     /// is nothing kept, since an empty window says less than a greyed row does.
     favourites: MenuItem,
-    /// That window. Shut, until this row is clicked.
+    /// Opens the same window on the filters and placement styles.
+    settings: MenuItem,
+    /// That window. Shut, until one of these rows is clicked.
     gallery: Gallery,
     /// The way back from a kept picture to the one the rotation brought in. Its
     /// text names that picture, so it says what it would return to.
@@ -839,6 +896,7 @@ impl Ui {
             next: MenuItem::new("Next picture", true, None),
             keep: MenuItem::new("Add to favourites", false, None),
             favourites: MenuItem::new("Favourites…", false, None),
+            settings: MenuItem::new("Settings…", true, None),
             gallery: Gallery::new(on_pick, on_control),
             today: MenuItem::new(NO_WAY_BACK, false, None),
             reapply: MenuItem::new("Re-apply wallpaper", false, None),
@@ -856,6 +914,7 @@ impl Ui {
                 &ui.favourites,
                 &ui.today,
                 &PredefinedMenuItem::separator(),
+                &ui.settings,
                 &ui.reapply,
                 &ui.login,
                 &PredefinedMenuItem::separator(),
@@ -923,8 +982,9 @@ impl Ui {
         &mut self,
         target: &EventLoopWindowTarget<T>,
         favourites: &Favourites,
+        tab: Tab,
     ) -> Result<()> {
-        self.gallery.present(target, favourites)
+        self.gallery.present(target, favourites, tab)
     }
 
     /// Whether `id` names the window this program opened.
@@ -978,6 +1038,8 @@ impl Ui {
             return Wanted::Keep;
         } else if click.id == self.favourites.id() {
             return Wanted::Gallery;
+        } else if click.id == self.settings.id() {
+            return Wanted::Settings;
         } else if click.id == self.today.id() {
             return Wanted::Today;
         } else if click.id == self.next.id() {
@@ -1122,6 +1184,10 @@ mod tests {
         assert!(matches!(
             Wanted::from(Pick::Forget("two".into())),
             Wanted::Forget(key) if key == "two"
+        ));
+        assert!(matches!(
+            Wanted::from(Pick::Apply(Settings::default())),
+            Wanted::Apply(s) if s == Settings::default()
         ));
     }
 

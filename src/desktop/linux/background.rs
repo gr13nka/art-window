@@ -1,8 +1,8 @@
 //! GNOME's fit-and-letterbox wallpaper settings.
 
+use crate::placement::{Hang, Mode};
 use anyhow::{anyhow, bail, Context, Result};
 use gio::prelude::SettingsExt;
-use std::path::Path;
 
 const SCHEMA: &str = "org.gnome.desktop.background";
 const PICTURE: &str = "picture-uri";
@@ -23,7 +23,8 @@ pub(super) fn inspect() -> Result<Inspection> {
     })
 }
 
-pub(super) fn pin(path: &Path) -> Result<()> {
+pub(super) fn pin(hang: &Hang) -> Result<()> {
+    let path = &hang.path;
     if std::env::var_os("DBUS_SESSION_BUS_ADDRESS").is_none() {
         bail!("DBUS_SESSION_BUS_ADDRESS is not set; refusing a wallpaper write that may vanish");
     }
@@ -34,9 +35,19 @@ pub(super) fn pin(path: &Path) -> Result<()> {
 
     // Placement is part of putting a picture up, never a setting callers have to
     // remember separately. Set it before clearing the URI so any brief bare frame
-    // is already the intended black.
-    set(&settings, "picture-options", "scaled")?;
-    set(&settings, "primary-color", "#000000")?;
+    // is already the intended colour.
+    let option = match hang.mode {
+        Mode::Fit => "scaled",
+        Mode::Fill => "zoom",
+        Mode::Stretch => "stretched",
+    };
+    let [r, g, b] = hang.colour;
+    set(&settings, "picture-options", option)?;
+    set(
+        &settings,
+        "primary-color",
+        &format!("#{r:02x}{g:02x}{b:02x}"),
+    )?;
     set(&settings, "color-shading-type", "solid")?;
 
     // dconf drops same-value writes and emits no service-side notification. A
