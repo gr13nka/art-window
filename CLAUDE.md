@@ -542,3 +542,13 @@ icon from it — macOS `AppIcon.icns`, the Linux SVG, the Windows `.ico`, the iO
 outputs are checked in, so no build needs it. Edit the SVG and rerun the script;
 never touch a derived file by hand. The menu-bar glyph is separate: ASCII art in
 `tray.rs`.
+
+## The website
+
+`site/` is the landing page at artwindow.alps-project.online, plus the iPhone &
+iPad waitlist: `subscribe.php` appends the address and date to a CSV outside the
+web root, and nothing else is stored. It needs a PHP host; see `site/HOSTING.md`.
+The privacy policy is the `#privacy` sheet at the bottom of `index.html`, and it
+promises no cookies, analytics, third-party scripts or services, and apps that
+send nothing but the painting download. Adding any of those means changing the
+policy and its date in the same commit.
