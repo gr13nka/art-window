@@ -153,3 +153,22 @@ things worth knowing before reaching for the debugger: the quarantined file usua
 passes `pragma integrity_check`, so its name is not evidence of what went wrong, and
 an empty store is also the one case where `pin` is *supposed* to do nothing beyond
 the active Space, because `slots == 0` returns early by design.
+
+## Unplugging a display
+
+Disconnecting an external monitor moves its Spaces onto the screens that remain,
+and they arrive showing the Dock's default picture rather than the painting. The
+likely mechanism is that the Dock makes new (space, display) slots in `pictures` for
+them, and `pin` never wrote those slots because they did not exist yet. That has not
+been caught in the act yet. Snapshot `select rowid,* from pictures` and the query
+above before and after an unplug to confirm it.
+
+The answer does not depend on the mechanism. `wake::displays` forwards
+`NSApplicationDidChangeScreenParametersNotification` (from the *default*
+notification centre, the reverse of the wake notification). The loop answers it
+the way it answers beginning a session: the picture is owed again, `SETTLE` (five
+seconds) later, so the Dock has finished rearranging before it is written over.
+`pin` then puts it back on the Space in front of each screen at once and fills
+in any new slots in the store. Those land as `Pinned::AfterRedraw`, like any other
+write, so the Spaces out of sight show it after the next wake, not with a Dock
+restart while the user is looking at the screen.

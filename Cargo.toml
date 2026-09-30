@@ -36,7 +36,7 @@ objc2-foundation = { version = "0.3", features = [
     "NSDate", "NSTimeZone", "NSNotification", "NSOperation", "NSGeometry", "block2",
 ] }
 objc2-app-kit = { version = "0.3", features = [
-    "NSWorkspace", "NSScreen", "NSColor", "NSCell", "objc2-core-foundation",
+    "NSWorkspace", "NSScreen", "NSColor", "NSCell", "NSApplication", "objc2-core-foundation",
     # The favourites window. Most of these are already compiled in by way of tao
     # and tray-icon, but a feature nobody asks for is a feature a dependency may
     # stop asking for, and then the build breaks for reasons nothing here explains.

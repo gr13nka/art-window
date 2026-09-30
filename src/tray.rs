@@ -75,6 +75,15 @@ const RETRY: Duration = Duration::from_secs(15 * 60);
 const RE_PIN: Duration = Duration::from_secs(60);
 const PATIENCE: u32 = 5;
 
+/// How long after the displays change before the picture is offered again.
+///
+/// The notification arrives while macOS is still moving Spaces between screens and
+/// the Dock is still giving them its default picture. Asked at once, the painting
+/// would go up and then be painted over, or be refused outright by a store the Dock
+/// is holding. A few seconds is enough for the rearranging to finish, and short
+/// enough that the default picture is only a glimpse.
+const SETTLE: Duration = Duration::from_secs(5);
+
 /// Something that needs the main thread's attention.
 enum Wake {
     /// A menu item was clicked. Forwarded rather than acted on where it arrives,
@@ -91,6 +100,9 @@ enum Wake {
     /// the clock at the tail of the loop is re-read after every event, which is the
     /// whole reason it lives there rather than in an arm of its own.
     Woke,
+    /// A display was attached, detached or rearranged. On macOS the Spaces that
+    /// move between screens arrive showing the Dock's default picture.
+    Rearranged,
 }
 
 /// What an event asks of the event loop.
@@ -186,7 +198,12 @@ impl Owed {
     /// said — what beginning a session owes, because a session that has just begun
     /// is one whose desktop nobody has seen yet.
     fn owe(&mut self) {
-        self.at = Some(now_secs());
+        self.owe_after(Duration::ZERO);
+    }
+
+    /// Owes an asking `delay` from now, whatever the desktop last said.
+    fn owe_after(&mut self, delay: Duration) {
+        self.at = Some(now_secs() + delay.as_secs());
         self.tries = PATIENCE;
     }
 
@@ -323,6 +340,17 @@ pub fn run(paths: Paths, config: Config, mut state: State) -> Result<()> {
             None
         }
     };
+    // Held the same way and for the same reason as the wake watch above.
+    let rearranged_proxy = proxy.clone();
+    let _rearranged = wake::displays(move || {
+        let _ = rearranged_proxy.send_event(Wake::Rearranged);
+    })
+    .unwrap_or_else(|error| {
+        // Losing it costs only the rescue after an unplug; the next wake or login
+        // still re-asserts the picture.
+        report(&error);
+        None
+    });
 
     let mut favourites = Favourites::open(&paths.favourites)?;
 
@@ -544,6 +572,17 @@ pub fn run(paths: Paths, config: Config, mut state: State) -> Result<()> {
             // moments a blanked desktop costs nothing.
             Event::UserEvent(Wake::Woke) => {
                 redrawing = true;
+                Wanted::Nothing
+            }
+
+            // A monitor unplugged leaves its Spaces on the screens that remain,
+            // showing the Dock's default. What is owed is exactly what beginning a
+            // session owes — the picture asked for again, whatever the desktop last
+            // said — once the rearranging has settled. Not a redraw, though: the
+            // user is looking straight at the screen, so the Spaces out of sight
+            // wait for the next wake as they always do.
+            Event::UserEvent(Wake::Rearranged) => {
+                owed.owe_after(SETTLE);
                 Wanted::Nothing
             }
 

@@ -379,6 +379,13 @@ back, which makes it a free moment to restart the Dock for any Space still waiti
 on a picture — see `desktop::catch_up`. A failed logind subscription is nonfatal
 because the GLib timer is the backstop.
 
+**So is a display being unplugged.** On macOS the departing monitor's Spaces land
+on the remaining screens showing the Dock's default picture. `wake::displays`
+forwards `NSApplicationDidChangeScreenParametersNotification` (default centre, not
+the workspace's), and its arm owes an asking `SETTLE` seconds later — the same debt
+beginning a session owes — without counting as a redraw, since the user is looking
+at the screen. See `docs/macos-wallpaper.md#unplugging-a-display`.
+
 **The favourites window is tao's, and only what is inside it is AppKit's.** A
 `WindowBuilder` buys the title bar, the close button arriving as
 `WindowEvent::CloseRequested`, resizing, and `Window::set_focus()` — which already

@@ -9,6 +9,11 @@
 //!
 //! Small enough to keep both platform bodies in this file: NSWorkspace on macOS
 //! and logind on Linux.
+//!
+//! The displays changing is the same kind of news and lives here too. On macOS
+//! unplugging a monitor moves its Spaces onto the screens that remain, and the Dock
+//! greets them with its own default picture — so something has to say it happened
+//! for the loop to put the painting back. See [`displays`].
 
 /// Calls `on_wake` on the main thread each time the machine wakes from sleep.
 ///
@@ -16,6 +21,20 @@
 /// are wanted; dropping it stops them.
 pub fn watch(on_wake: impl Fn() + 'static) -> anyhow::Result<Watch> {
     Watch::new(on_wake)
+}
+
+/// Calls `on_change` each time a display is attached, detached or rearranged.
+///
+/// Only macOS is watched. GNOME keeps one wallpaper URI whatever is plugged in, so
+/// elsewhere this answers `None` and nothing is ever called.
+#[cfg(target_os = "macos")]
+pub fn displays(on_change: impl Fn() + 'static) -> anyhow::Result<Option<Watch>> {
+    Watch::displays(on_change).map(Some)
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn displays(_on_change: impl Fn() + 'static) -> anyhow::Result<Option<Watch>> {
+    Ok(None)
 }
 
 #[cfg(target_os = "macos")]
@@ -26,43 +45,73 @@ mod platform {
     use block2::RcBlock;
     use objc2::rc::Retained;
     use objc2::runtime::{AnyObject, NSObjectProtocol, ProtocolObject};
-    use objc2_app_kit::{NSWorkspace, NSWorkspaceDidWakeNotification};
-    use objc2_foundation::{NSNotification, NSNotificationCenter, NSOperationQueue};
+    use objc2_app_kit::{
+        NSApplicationDidChangeScreenParametersNotification, NSWorkspace,
+        NSWorkspaceDidWakeNotification,
+    };
+    use objc2_foundation::{
+        NSNotification, NSNotificationCenter, NSNotificationName, NSOperationQueue,
+    };
     use std::ptr::NonNull;
 
-    /// A live subscription to `NSWorkspaceDidWakeNotification`.
-    ///
-    /// Sleep and wake are the workspace's business rather than the default centre's,
-    /// which is why this goes through `NSWorkspace` and not `NSNotificationCenter`
-    /// directly — the default centre never sees these.
+    /// A live subscription to one notification.
     pub struct Watch {
         centre: Retained<NSNotificationCenter>,
         token: Retained<ProtocolObject<dyn NSObjectProtocol>>,
     }
 
     impl Watch {
+        /// `NSWorkspaceDidWakeNotification`. Sleep and wake are the workspace's
+        /// business rather than the default centre's, which is why this goes
+        /// through `NSWorkspace` — the default centre never sees these.
         pub(super) fn new(on_wake: impl Fn() + 'static) -> anyhow::Result<Self> {
+            let centre = NSWorkspace::sharedWorkspace().notificationCenter();
+            // SAFETY: AppKit's own static.
+            Ok(Self::observe(
+                centre,
+                unsafe { NSWorkspaceDidWakeNotification },
+                on_wake,
+            ))
+        }
+
+        /// `NSApplicationDidChangeScreenParametersNotification`. The reverse of
+        /// waking: `NSApplication` posts this to the *default* centre, and the
+        /// workspace's never sees it.
+        pub(super) fn displays(on_change: impl Fn() + 'static) -> anyhow::Result<Self> {
+            let centre = NSNotificationCenter::defaultCenter();
+            // SAFETY: AppKit's own static.
+            Ok(Self::observe(
+                centre,
+                unsafe { NSApplicationDidChangeScreenParametersNotification },
+                on_change,
+            ))
+        }
+
+        fn observe(
+            centre: Retained<NSNotificationCenter>,
+            name: &NSNotificationName,
+            then: impl Fn() + 'static,
+        ) -> Self {
             // The notification itself says nothing worth reading: that it arrived at
             // all is the entire message.
-            let block = RcBlock::new(move |_: NonNull<NSNotification>| on_wake());
-            let centre = NSWorkspace::sharedWorkspace().notificationCenter();
+            let block = RcBlock::new(move |_: NonNull<NSNotification>| then());
             // The main queue, because what this wakes goes on to touch AppKit and
             // the state the event loop owns.
             let queue = NSOperationQueue::mainQueue();
 
-            // SAFETY: the name is AppKit's own static, the block outlives the
+            // SAFETY: the name is one of AppKit's statics, the block outlives the
             // subscription by living in the token, and the queue is the main one,
             // which is where the block's only side effect belongs.
             let token = unsafe {
                 centre.addObserverForName_object_queue_usingBlock(
-                    Some(NSWorkspaceDidWakeNotification),
+                    Some(name),
                     None,
                     Some(&queue),
                     &block,
                 )
             };
 
-            Ok(Self { centre, token })
+            Self { centre, token }
         }
     }
 
