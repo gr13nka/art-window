@@ -631,10 +631,19 @@ const STRIP: f64 = TABS_H + 16.0;
 /// The bar under the sections, which stays put while they scroll.
 const BAR: f64 = 64.0;
 const OUTER: f64 = 24.0;
-const CARD_W: f64 = 300.0;
-/// Air left round the preview card for its shadow to fall into.
+/// The preview takes about half the tab, within these widths. It is rendered once
+/// at the larger, and drawn smaller when the window is.
+const PREVIEW_MIN: f64 = 300.0;
+const PREVIEW_MAX: f64 = 560.0;
+/// Air left under the preview card for its shadow to fall into.
 const SHADOW_BELOW: f64 = 30.0;
-const LEFT: f64 = OUTER + CARD_W + OUTER;
+/// Space above a section's title, so that sections read as separate groups.
+const SECTION_GAP: f64 = 28.0;
+/// Between a tile and the ring round it, plus the ring's own thickness. A tile's
+/// view reserves this much on every side so the ring is drawn inside it.
+const RING_GAP: f64 = 3.0;
+const RING_W: f64 = 2.5;
+const RING: f64 = RING_GAP + RING_W;
 const GAP: f64 = 8.0;
 const CHIP_H: f64 = 30.0;
 
@@ -642,7 +651,7 @@ const WHITE: u32 = 0xffffff;
 const INK: u32 = 0x1d1d1f;
 const MUTED: u32 = 0x6e6e73;
 const FILL: u32 = 0xeef0f3;
-const BLUE: u32 = 0x1a73e8;
+const BLUE: u32 = 0x1a5ce0;
 const MEDIUM: f64 = 0.23;
 const SEMIBOLD: f64 = 0.3;
 
@@ -676,10 +685,24 @@ fn text_label(
     label
 }
 
+/// How a pill is dressed. The palette is decided here and nowhere else: callers
+/// say what a pill *is* (chosen, not chosen) and never what colour it is.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Look {
+    /// Solid blue with white text: the button that matters, and a chosen chip.
+    Primary,
+    /// White with a hairline border: a chip or tile that is not chosen.
+    Plain,
+    /// `Plain` with a blue ring standing off from it: the chosen tile. Needs a
+    /// view that reserves [`RING`] on every side.
+    Ringed,
+}
+
 struct PillIvars {
-    fill: u32,
-    /// Negative means a full capsule.
+    look: Look,
     radius: f64,
+    /// Room reserved round the shape, inside the view, for a ring to be drawn in.
+    inset: f64,
     enabled: Cell<bool>,
     on_click: RefCell<Option<Rc<dyn Fn()>>>,
 }
@@ -695,20 +718,51 @@ define_class!(
     impl Pill {
         #[unsafe(method(drawRect:))]
         fn draw_rect(&self, _dirty: NSRect) {
+            let PillIvars {
+                look,
+                radius,
+                inset,
+                ..
+            } = *self.ivars();
             let bounds = self.bounds();
-            let radius = match self.ivars().radius {
-                r if r < 0.0 => bounds.size.height / 2.0,
-                r => r,
-            };
-            rgb(self.ivars().fill, 1.0).setFill();
-            NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(bounds, radius, radius).fill();
+            let shape = shrink(bounds, inset);
+            match look {
+                Look::Primary => rgb(BLUE, 1.0).setFill(),
+                Look::Plain | Look::Ringed => rgb(WHITE, 1.0).setFill(),
+            }
+            NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(shape, radius, radius).fill();
+            if look == Look::Primary {
+                return;
+            }
+            // A stroke is centred on its path, so the path sits half a line inside
+            // the edge to keep the whole hairline inside the shape.
+            let hairline = NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(
+                shrink(shape, 0.5),
+                radius - 0.5,
+                radius - 0.5,
+            );
+            hairline.setLineWidth(1.0);
+            rgb(0x000000, 0.12).setStroke();
+            hairline.stroke();
+            if look == Look::Ringed {
+                let ring = NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(
+                    shrink(bounds, RING_W / 2.0),
+                    radius + inset - RING_W / 2.0,
+                    radius + inset - RING_W / 2.0,
+                );
+                ring.setLineWidth(RING_W);
+                rgb(BLUE, 1.0).setStroke();
+                ring.stroke();
+            }
         }
 
         /// The text inside is only a picture of a word: the click belongs to the
-        /// pill, so it must not be swallowed by the label sitting on top of it.
+        /// pill, so it must not be swallowed by the label sitting on top of it. Only
+        /// the shape answers, not the room reserved round it, so that neighbours
+        /// whose rings overlap in the gap between them do not fight over it.
         #[unsafe(method(hitTest:))]
         fn hit_test(&self, point: NSPoint) -> Option<&NSView> {
-            let frame = self.frame();
+            let frame = shrink(self.frame(), self.ivars().inset);
             let inside = point.x >= frame.origin.x
                 && point.x < frame.origin.x + frame.size.width
                 && point.y >= frame.origin.y
@@ -740,34 +794,52 @@ define_class!(
     }
 );
 
+/// `rect` with `by` taken off every side.
+fn shrink(rect: NSRect, by: f64) -> NSRect {
+    NSRect::new(
+        NSPoint::new(rect.origin.x + by, rect.origin.y + by),
+        NSSize::new(rect.size.width - by * 2.0, rect.size.height - by * 2.0),
+    )
+}
+
 impl Pill {
-    /// A pill with `text` on it. `width` of `None` fits the text plus `pad` either
-    /// side.
+    /// A pill with `text` on it. `shape` is the size of the visible shape, and a
+    /// `width` of `None` fits the text plus `pad` either side; the view is larger
+    /// by `inset` on every side.
     #[allow(clippy::too_many_arguments)]
     fn new(
         mtm: MainThreadMarker,
         text: &str,
-        (size, weight): (f64, f64),
-        (ink, fill): (u32, u32),
+        size: f64,
+        look: Look,
         radius: f64,
         (width, height): (Option<f64>, f64),
         pad: f64,
+        inset: f64,
         on_click: Option<Rc<dyn Fn()>>,
     ) -> Retained<Self> {
+        let (ink, weight) = match look {
+            Look::Primary => (WHITE, SEMIBOLD),
+            Look::Plain | Look::Ringed => (INK, MEDIUM),
+        };
         let label = text_label(mtm, text, size, weight, ink);
         let line = label.frame().size;
         let width = width.unwrap_or(line.width.ceil() + pad * 2.0);
         let this = Self::alloc(mtm).set_ivars(PillIvars {
-            fill,
+            look,
             radius,
+            inset,
             enabled: Cell::new(true),
             on_click: RefCell::new(on_click),
         });
-        let frame = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(width, height));
+        let frame = NSRect::new(
+            NSPoint::new(0.0, 0.0),
+            NSSize::new(width + inset * 2.0, height + inset * 2.0),
+        );
         let pill: Retained<Self> = unsafe { msg_send![super(this), initWithFrame: frame] };
         label.setAlignment(NSTextAlignment::Center);
         label.setFrame(NSRect::new(
-            NSPoint::new(0.0, ((height - line.height) / 2.0).floor()),
+            NSPoint::new(inset, inset + ((height - line.height) / 2.0).floor()),
             NSSize::new(width, line.height),
         ));
         pill.addSubview(&label);
@@ -809,8 +881,56 @@ impl Plate {
     }
 }
 
+/// The settings tab's own surface: white, and it says when its size changes so
+/// that the preview and the column can be laid out again for the new one.
+struct PaneIvars {
+    size: Cell<NSSize>,
+    resized: RefCell<Option<Rc<dyn Fn()>>>,
+}
+
+define_class!(
+    // SAFETY: as for `Pill`.
+    #[unsafe(super(NSView))]
+    #[thread_kind = MainThreadOnly]
+    #[ivars = PaneIvars]
+    struct Pane;
+
+    impl Pane {
+        #[unsafe(method(drawRect:))]
+        fn draw_rect(&self, _dirty: NSRect) {
+            rgb(WHITE, 1.0).setFill();
+            NSBezierPath::fillRect(self.bounds());
+        }
+
+        #[unsafe(method(setFrameSize:))]
+        fn set_frame_size(&self, size: NSSize) {
+            let _: () = unsafe { msg_send![super(self), setFrameSize: size] };
+            let before = self.ivars().size.get();
+            if size.width != before.width || size.height != before.height {
+                self.ivars().size.set(size);
+                let resized = self.ivars().resized.borrow().clone();
+                if let Some(resized) = resized {
+                    resized();
+                }
+            }
+        }
+    }
+);
+
+impl Pane {
+    fn new(mtm: MainThreadMarker, frame: NSRect) -> Retained<Self> {
+        let this = Self::alloc(mtm).set_ivars(PaneIvars {
+            size: Cell::new(frame.size),
+            resized: RefCell::new(None),
+        });
+        unsafe { msg_send![super(this), initWithFrame: frame] }
+    }
+}
+
 struct CanvasIvars {
     image: RefCell<Option<Retained<NSImage>>>,
+    /// How wide the card is drawn; the picture is scaled down to it.
+    card_w: Cell<f64>,
     none_yet: Retained<NSTextField>,
 }
 
@@ -828,15 +948,15 @@ define_class!(
             if card.size.height < 1.0 {
                 return;
             }
-            let path = NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(card, 12.0, 12.0);
+            let path = NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(card, 10.0, 10.0);
 
             // The shadow is cast by a white fill, so it is there whether or not the
             // picture on top of it is.
             NSGraphicsContext::saveGraphicsState_class();
             let shadow = NSShadow::new();
-            shadow.setShadowOffset(NSSize::new(0.0, -10.0));
-            shadow.setShadowBlurRadius(30.0);
-            shadow.setShadowColor(Some(&rgb(0x000000, 0.08)));
+            shadow.setShadowOffset(NSSize::new(0.0, -6.0));
+            shadow.setShadowBlurRadius(24.0);
+            shadow.setShadowColor(Some(&rgb(0x000000, 0.10)));
             shadow.set();
             rgb(WHITE, 1.0).setFill();
             path.fill();
@@ -869,6 +989,7 @@ impl Canvas {
         none_yet.setAlignment(NSTextAlignment::Center);
         let this = Self::alloc(mtm).set_ivars(CanvasIvars {
             image: RefCell::new(None),
+            card_w: Cell::new(PREVIEW_MIN),
             none_yet,
         });
         let canvas: Retained<Self> = unsafe { msg_send![super(this), initWithFrame: NSRect::ZERO] };
@@ -881,16 +1002,20 @@ impl Canvas {
         let height = self.bounds().size.height;
         NSRect::new(
             NSPoint::new(OUTER, SHADOW_BELOW),
-            NSSize::new(CARD_W, (height - OUTER - SHADOW_BELOW).max(0.0)),
+            NSSize::new(
+                self.ivars().card_w.get(),
+                (height - OUTER - SHADOW_BELOW).max(0.0),
+            ),
         )
     }
 
-    /// Sizes the view to a card `height` tall, hung from the top of `above`.
-    fn place(&self, above: f64, height: f64) {
-        let total = OUTER + height + SHADOW_BELOW;
+    /// Sizes the view to a card of `card` size, hung from the top of `above`.
+    fn place(&self, above: f64, card: NSSize) {
+        let total = OUTER + card.height + SHADOW_BELOW;
+        self.ivars().card_w.set(card.width);
         self.setFrame(NSRect::new(
             NSPoint::new(0.0, above - total),
-            NSSize::new(LEFT, total),
+            NSSize::new(OUTER * 2.0 + card.width, total),
         ));
         let card = self.card();
         let note = &self.ivars().none_yet;
@@ -944,7 +1069,7 @@ fn preview_image(pixels: &image::RgbaImage) -> Option<Retained<NSImage>> {
     // SAFETY: the rep owns `w * 4 * h` bytes at `data`, and `bytes` is exactly that
     // long, checked above.
     unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), data, bytes.len()) };
-    let points = NSSize::new(CARD_W, CARD_W * h as f64 / w as f64);
+    let points = NSSize::new(PREVIEW_MAX, PREVIEW_MAX * h as f64 / w as f64);
     rep.setSize(points);
     let image = NSImage::initWithSize(NSImage::alloc(), points);
     image.addRepresentation(&rep);
@@ -1086,6 +1211,14 @@ impl Actions {
     }
 }
 
+/// The room a view reserves round its visible shape, if it is a pill.
+fn bleed(view: &NSView) -> f64 {
+    let object: &AnyObject = view;
+    object
+        .downcast_ref::<Pill>()
+        .map_or(0.0, |pill| pill.ivars().inset)
+}
+
 /// One stretch of the scrolling column, in the order it is laid out.
 enum Block {
     /// A section's title.
@@ -1096,6 +1229,13 @@ enum Block {
     Line(Vec<Retained<NSView>>),
 }
 
+/// What a row's clickable shape is: a text chip, or a larger tile with a ring.
+#[derive(Clone, Copy)]
+enum Face {
+    Chip,
+    Tile,
+}
+
 /// The settings tab: the model, and the views drawn from it.
 struct Ui {
     pending: RefCell<Pending>,
@@ -1103,7 +1243,7 @@ struct Ui {
     mtm: MainThreadMarker,
     actions: Retained<Actions>,
     fav: Retained<NSView>,
-    settings: Retained<Plate>,
+    settings: Retained<Pane>,
     segments: Retained<NSSegmentedControl>,
     canvas: Retained<Canvas>,
     scroll: Retained<NSScrollView>,
@@ -1148,24 +1288,23 @@ impl Ui {
         );
 
         let size = frame.size;
-        let settings = Plate::new(mtm, frame, WHITE, 1.0);
+        let settings = Pane::new(mtm, frame);
         settings.setAutoresizingMask(fill);
         // The tab is designed light only.
         if let Some(aqua) = unsafe { NSAppearance::appearanceNamed(NSAppearanceNameAqua) } {
             settings.setAppearance(Some(&aqua));
         }
 
+        // The canvas and the scroll view are placed by `arrange`, which owns their
+        // frames, so neither autoresizes.
         let canvas = Canvas::new(mtm);
-        canvas.setAutoresizingMask(
-            NSAutoresizingMaskOptions::ViewMaxXMargin | NSAutoresizingMaskOptions::ViewMinYMargin,
-        );
 
         let scroll = NSScrollView::initWithFrame(
             NSScrollView::alloc(mtm),
             NSRect::new(
-                NSPoint::new(LEFT, BAR + 1.0),
+                NSPoint::new(OUTER * 2.0 + PREVIEW_MIN, BAR + 1.0),
                 NSSize::new(
-                    (size.width - LEFT).max(1.0),
+                    (size.width - OUTER * 2.0 - PREVIEW_MIN).max(1.0),
                     (size.height - BAR - 1.0).max(1.0),
                 ),
             ),
@@ -1174,7 +1313,6 @@ impl Ui {
         scroll.setAutohidesScrollers(true);
         scroll.setDrawsBackground(false);
         scroll.setBorderType(NSBorderType::NoBorder);
-        scroll.setAutoresizingMask(fill);
         let doc = Doc::new(
             mtm,
             NSRect::new(NSPoint::new(0.0, 0.0), scroll.contentSize()),
@@ -1206,17 +1344,18 @@ impl Ui {
         let apply = Pill::new(
             mtm,
             "Apply changes",
-            (15.0, SEMIBOLD),
-            (WHITE, BLUE),
-            -1.0,
-            (None, 36.0),
+            14.0,
+            Look::Primary,
+            8.0,
+            (None, 32.0),
             20.0,
+            0.0,
             None,
         );
         let apply_w = apply.frame().size.width;
         apply.setFrameOrigin(NSPoint::new(
             size.width - OUTER - apply_w,
-            (BAR - 36.0) / 2.0,
+            (BAR - 32.0) / 2.0,
         ));
         apply.setAutoresizingMask(
             NSAutoresizingMaskOptions::ViewMinXMargin | NSAutoresizingMaskOptions::ViewMaxYMargin,
@@ -1260,6 +1399,12 @@ impl Ui {
         *ui.doc.ivars().resized.borrow_mut() = Some(Rc::new(move || {
             if let Some(ui) = weak.upgrade() {
                 ui.layout();
+            }
+        }));
+        let weak = Rc::downgrade(&ui);
+        *ui.settings.ivars().resized.borrow_mut() = Some(Rc::new(move || {
+            if let Some(ui) = weak.upgrade() {
+                ui.arrange();
             }
         }));
         ui.apply.ivars().on_click.replace(Some(ui.hook(|ui| {
@@ -1317,30 +1462,46 @@ impl Ui {
         self.refresh();
     }
 
+    /// The one constructor for everything clickable in a row. `selected` is all a
+    /// caller says about looks; the pill decides what that means.
     fn chip(
         self: &Rc<Self>,
+        face: Face,
         text: &str,
         selected: bool,
         enabled: bool,
         act: impl Fn(&Rc<Ui>) + 'static,
     ) -> Retained<NSView> {
-        let (ink, fill) = if selected { (WHITE, INK) } else { (INK, FILL) };
-        let pill = Pill::new(
-            self.mtm,
-            text,
-            (13.0, MEDIUM),
-            (ink, fill),
-            -1.0,
-            (None, CHIP_H),
-            14.0,
-            Some(self.hook(act)),
-        );
+        let pill = match face {
+            Face::Chip => Pill::new(
+                self.mtm,
+                text,
+                13.0,
+                if selected { Look::Primary } else { Look::Plain },
+                8.0,
+                (None, CHIP_H),
+                14.0,
+                0.0,
+                Some(self.hook(act)),
+            ),
+            Face::Tile => Pill::new(
+                self.mtm,
+                text,
+                13.0,
+                if selected { Look::Ringed } else { Look::Plain },
+                10.0,
+                (Some(96.0), 64.0),
+                0.0,
+                RING,
+                Some(self.hook(act)),
+            ),
+        };
         pill.set_enabled(enabled, 0.5);
         as_view(pill)
     }
 
     fn title(&self, text: &str) -> Block {
-        Block::Title(as_view(text_label(self.mtm, text, 13.0, SEMIBOLD, MUTED)))
+        Block::Title(as_view(text_label(self.mtm, text, 13.0, SEMIBOLD, INK)))
     }
 
     /// Takes every row apart and builds it again from the model.
@@ -1348,7 +1509,10 @@ impl Ui {
         let blocks = self.blocks_from_model();
 
         let keep: &NSView = &self.religious;
-        for view in self.doc.subviews().iter() {
+        // Collected first: `subviews` may hand back the live array, and removing
+        // from it mid-enumeration panics.
+        let old: Vec<_> = self.doc.subviews().iter().collect();
+        for view in old {
             if !std::ptr::eq(&*view, keep) {
                 view.removeFromSuperview();
             }
@@ -1378,18 +1542,13 @@ impl Ui {
         let cards = StyleKind::ALL
             .into_iter()
             .map(|kind| {
-                let selected = p.style_kind() == kind;
-                let (ink, fill) = if selected { (WHITE, INK) } else { (INK, FILL) };
-                as_view(Pill::new(
-                    self.mtm,
+                self.chip(
+                    Face::Tile,
                     kind.label(),
-                    (13.0, MEDIUM),
-                    (ink, fill),
-                    10.0,
-                    (Some(78.0), 56.0),
-                    0.0,
-                    Some(self.hook(move |ui| ui.change(|p| p.set_style(kind)))),
-                ))
+                    p.style_kind() == kind,
+                    true,
+                    move |ui| ui.change(|p| p.set_style(kind)),
+                )
             })
             .collect();
         blocks.push(Block::Flow(cards));
@@ -1398,13 +1557,18 @@ impl Ui {
             StyleKind::Borders => {
                 let border = p.border();
                 blocks.push(Block::Flow(vec![
-                    self.chip("Black", border == Border::Black, true, |ui| {
+                    self.chip(Face::Chip, "Black", border == Border::Black, true, |ui| {
                         ui.change(|p| p.set_border(Border::Black))
                     }),
-                    self.chip("Automatic", border == Border::Auto, true, |ui| {
-                        ui.change(|p| p.set_border(Border::Auto))
-                    }),
                     self.chip(
+                        Face::Chip,
+                        "Automatic",
+                        border == Border::Auto,
+                        true,
+                        |ui| ui.change(|p| p.set_border(Border::Auto)),
+                    ),
+                    self.chip(
+                        Face::Chip,
                         "Custom",
                         matches!(border, Border::Custom { .. }),
                         true,
@@ -1440,12 +1604,14 @@ impl Ui {
                 let (variant, strength) = p.blur();
                 blocks.push(Block::Flow(vec![
                     self.chip(
+                        Face::Chip,
                         "Behind the picture",
                         variant == BlurVariant::Backdrop,
                         true,
                         |ui| ui.change(|p| p.set_blur_variant(BlurVariant::Backdrop)),
                     ),
                     self.chip(
+                        Face::Chip,
                         "Whole picture",
                         variant == BlurVariant::WholeImage,
                         true,
@@ -1482,7 +1648,7 @@ impl Ui {
                 .into_iter()
                 .map(|c| {
                     let shape = c.value;
-                    self.chip(&c.label, c.selected, on, move |ui| {
+                    self.chip(Face::Chip, &c.label, c.selected, on, move |ui| {
                         ui.change(|p| p.set_shape(shape))
                     })
                 })
@@ -1495,7 +1661,7 @@ impl Ui {
                 .into_iter()
                 .map(|c| {
                     let region = c.value;
-                    self.chip(&c.label, c.selected, on, move |ui| {
+                    self.chip(Face::Chip, &c.label, c.selected, on, move |ui| {
                         ui.change(|p| p.toggle_region(region))
                     })
                 })
@@ -1508,7 +1674,7 @@ impl Ui {
                 .into_iter()
                 .map(|c| {
                     let subject = c.value;
-                    self.chip(&c.label, c.selected, on, move |ui| {
+                    self.chip(Face::Chip, &c.label, c.selected, on, move |ui| {
                         ui.change(|p| p.toggle_subject(subject))
                     })
                 })
@@ -1523,7 +1689,7 @@ impl Ui {
                     .into_iter()
                     .map(|c| {
                         let artist = c.value;
-                        self.chip(&c.label, c.selected, on, move |ui| {
+                        self.chip(Face::Chip, &c.label, c.selected, on, move |ui| {
                             ui.change(|p| p.toggle_artist(&artist))
                         })
                     })
@@ -1549,7 +1715,7 @@ impl Ui {
         for block in self.blocks.borrow().iter() {
             match block {
                 Block::Title(view) => {
-                    y += OUTER;
+                    y += SECTION_GAP;
                     view.setFrameOrigin(NSPoint::new(OUTER, y));
                     y += view.frame().size.height + 10.0;
                     after_title = true;
@@ -1561,15 +1727,19 @@ impl Ui {
                     }
                     let (mut x, mut row) = (0.0, 0.0_f64);
                     for view in views {
+                        // A tile's view is larger than the shape it shows, by the
+                        // room for its ring; it is the shape that lines up.
+                        let bleed = bleed(view);
                         let size = view.frame().size;
-                        if x > 0.0 && x + size.width > inner {
+                        let (w, h) = (size.width - bleed * 2.0, size.height - bleed * 2.0);
+                        if x > 0.0 && x + w > inner {
                             x = 0.0;
                             y += row + GAP;
                             row = 0.0;
                         }
-                        view.setFrameOrigin(NSPoint::new(OUTER + x, y));
-                        x += size.width + GAP;
-                        row = row.max(size.height);
+                        view.setFrameOrigin(NSPoint::new(OUTER + x - bleed, y - bleed));
+                        x += w + GAP;
+                        row = row.max(h);
                     }
                     y += row;
                 }
@@ -1602,21 +1772,43 @@ impl Ui {
         self.doc.setFrameSize(NSSize::new(width, height));
     }
 
+    /// Places the preview at the top left and the column beside it, for the tab's
+    /// current size. Only moves things, so it is safe to call while the window is
+    /// being dragged: the picture is not made again, only drawn smaller.
+    fn arrange(&self) {
+        let size = self.settings.frame().size;
+        let aspect = match self.pending.borrow().aspect() {
+            a if a > 0.1 => a,
+            _ => 16.0 / 10.0,
+        };
+        let wide = ((size.width - OUTER * 3.0) / 2.0).clamp(PREVIEW_MIN, PREVIEW_MAX);
+        // A tall picture in a short window gives up width rather than reaching
+        // down into the bar.
+        let room = (size.height - BAR - 1.0 - OUTER - SHADOW_BELOW).max(1.0);
+        let card_w = wide.min(room * aspect);
+        self.canvas
+            .place(size.height, NSSize::new(card_w, card_w / aspect));
+
+        let left = OUTER * 2.0 + wide;
+        self.scroll.setFrame(NSRect::new(
+            NSPoint::new(left, BAR + 1.0),
+            NSSize::new(
+                (size.width - left).max(1.0),
+                (size.height - BAR - 1.0).max(1.0),
+            ),
+        ));
+    }
+
     /// Redraws what depends on the staged choices without touching the rows.
     fn refresh(&self) {
         let p = self.pending.borrow();
-        let aspect = if p.aspect() > 0.1 {
-            p.aspect()
-        } else {
-            16.0 / 10.0
-        };
-        let above = self.settings.frame().size.height;
-        self.canvas.place(above, CARD_W / aspect);
-        // Twice the points, for a Retina display — see `RETINA`.
+        // Made once at the largest the card can be, at twice the points for a
+        // Retina display — see `RETINA` — and scaled down by the canvas.
         let image = p
-            .preview((CARD_W * RETINA) as u32)
+            .preview((PREVIEW_MAX * RETINA) as u32)
             .and_then(|pixels| preview_image(&pixels));
         self.canvas.set_image(image);
+        self.arrange();
 
         self.apply.set_enabled(p.can_apply(), 0.4);
         self.note
