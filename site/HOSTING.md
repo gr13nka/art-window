@@ -52,14 +52,17 @@ On a static host the form will show "Didn’t go through".
 
 4. **Server config.**
 
-   nginx (inside the site's `server { … }`, with the certificate lines already there):
+   nginx. First, in the `http { … }` block — the `limit_req` below names this zone,
+   and `nginx -t` fails without it:
+   ```nginx
+   # at most a few signups per minute from one address
+   limit_req_zone $binary_remote_addr zone=artwindow:1m rate=6r/m;
+   ```
+   Then inside the site's `server { … }`, with the certificate lines already there:
    ```nginx
    root /var/www/art-window;
    index index.html;
 
-   # at most a few signups per minute from one address
-   # (put the limit_req_zone line in the http { } block)
-   # limit_req_zone $binary_remote_addr zone=artwindow:1m rate=6r/m;
    location = /subscribe.php {
        limit_req zone=artwindow burst=5 nodelay;
        include snippets/fastcgi-php.conf;
