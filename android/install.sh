@@ -21,7 +21,11 @@ if [ ! -x "${JAVA_HOME:-}/bin/java" ] && [ -x /usr/libexec/java_home ]; then
     export JAVA_HOME
 fi
 
-"$root/gradlew" -p "$root" assembleDebug
+# Cargo.toml's version is the only one there is. Without it the build calls itself
+# 0.1.0, and a phone holding any later build refuses the install as a downgrade.
+version=$(sed -n 's/^version = "\(.*\)"$/\1/p' "$root/../Cargo.toml" | head -n 1)
+
+"$root/gradlew" -p "$root" assembleDebug "-PappVersion=$version"
 
 adb install -r "$apk"
 adb shell am start -n dev.artwindow/.MainActivity
