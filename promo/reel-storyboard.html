@@ -284,11 +284,11 @@ var FRAMES = [
         caption('And on your TV.'));
     } },
   { l: 'F', t: '12.0 – 15.0 s', cap: '(end card)',
-    pic: 'White. The app’s pixel glyph in black, with a thin six-colour stripe beneath it, a nod to the 1984 poster. Then “Art Window.”, “A painting a day. Never cropped.”, a black “Free download” pill, and one grey line naming the platforms.',
+    pic: 'White. The app’s pixel glyph in black, with a thin six-colour stripe beneath it, a nod to the 1984 poster. Then “Art Window.”, “A painting a day. Never cropped.”, a black “Download” pill, and one grey line naming the platforms.',
     mot: 'The devices lift away. The glyph draws on pixel by pixel, with its sun last, landing on the final note. The stripe wipes in left to right, the words fade up and the pill presses like a key. Long hold.',
     snd: 'The motif resolves on one low chord as the sun lands, then a room-tone tail.',
     svg: function () {
-      var cta = 'Free download', pw = measure(cta, 34, 600) + 96;
+      var cta = 'Download', pw = measure(cta, 34, 600) + 96;
       return frame(glyph(540 - 9 * 12, 440, 12, P.ink) + stripe(540 - 60, 640, 120, 6) +
         txt(540, 770, 'Art Window.', 84, P.ink, ' text-anchor="middle" font-weight="700" letter-spacing="-2"') +
         txt(540, 840, 'A painting a day. Never cropped.', 36, P.soft, ' text-anchor="middle"') +

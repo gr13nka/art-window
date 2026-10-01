@@ -405,7 +405,7 @@ function render(T) {
     var w1 = rise2(C.word), w2 = rise2(C.sub), w3 = rise2(C.platforms), kq = eo(ph(T, C.pill, C.pill + .4));
     o.push(txt(540, 790 + w1.y, 'Art Window', 88, INK, ' text-anchor="middle" font-weight="700" letter-spacing="-2.5" opacity="' + w1.o + '"'));
     o.push(txt(540, 856 + w2.y, 'A new painting every day.', 38, GREY, ' text-anchor="middle" opacity="' + w2.o + '"'));
-    var cta = 'Free download', pw = measure(cta, 34, 600) + 100;
+    var cta = 'Download', pw = measure(cta, 34, 600) + 100;
     var press = T >= C.pillPress ? Math.sin(Math.PI * ph(T, C.pillPress, C.pillPress + .2)) : 0, pc = lerp(.92, 1, kq) - .05 * press;
     o.push(g(rr(540 - pw / 2, 930, pw, 88, 44, BLUE) +
       txt(540, 974, cta, 34, '#fff', ' text-anchor="middle" dominant-baseline="central" font-weight="600"'),

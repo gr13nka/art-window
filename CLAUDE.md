@@ -557,3 +557,14 @@ The privacy policy is the `#privacy` sheet at the bottom of `index.html`, and it
 promises no cookies, analytics, third-party scripts or services, and apps that
 send nothing but the painting download. Adding any of those means changing the
 policy and its date in the same commit.
+
+**The site states a price the apps do not enforce yet.** Since 2026-10-01 the model
+is paid: the daily painting is free, and one licence — $14.99 once, for every
+device — unlocks the settings tab's filters and placement styles. Favourites stay
+free. No app checks a licence and there is no checkout, which is why the page says
+"Licences go on sale soon" rather than carrying a Buy button. A checkout or a
+licence check is a third-party service or something the apps send, so either one
+changes the privacy policy too. The page no longer links to the repository or the
+guide. Promo material (`promo/reel.html`, `promo/scripts/`) says neither "free" nor
+a price. The `docs/2026-09-29_AG_*` documents still argue the free model they were
+written under.
