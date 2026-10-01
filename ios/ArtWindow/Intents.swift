@@ -4,7 +4,7 @@ import Foundation
 import UniformTypeIdentifiers
 
 /// Shortcuts gives an intent about thirty seconds; past that the automation fails
-/// visibly at 00:05. A download that is still going is left running for the next
+/// visibly at 05:05. A download that is still going is left running for the next
 /// caller — `Rotation` hands it the same turn — and this one returns what it has.
 private let turnBudget: Duration = .seconds(25)
 

@@ -59,7 +59,6 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import java.io.File
-import java.time.LocalDate
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -77,7 +76,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
 
         RotationJob.scheduleDaily(applicationContext)
-        if (State(applicationContext).isDue(LocalDate.now())) {
+        if (State(applicationContext).isDue(Day.today())) {
             RotationJob.scheduleNow(applicationContext, force = false)
         }
 
@@ -224,7 +223,7 @@ private fun MainActivity.ArtWindowApp(context: Context) {
                         }
                     }
                     Text(
-                        text = statusLine(status, owed = State(context).isDue(LocalDate.now())),
+                        text = statusLine(status, owed = State(context).isDue(Day.today())),
                         style = MaterialTheme.typography.bodySmall,
                         modifier = Modifier
                             .align(Alignment.CenterHorizontally)

@@ -18,21 +18,21 @@ over a picture ready to be set:
   as on Android, so *Set Wallpaper* has nothing left to crop.
 - **Next Picture** (`NextPictureIntent`) does the same after forcing a new
   download, and so spends the day, like the desktop's `record_fetched`.
-- A **personal automation** joins them: Time of Day, daily at 00:05, *Run
+- A **personal automation** joins them: Time of Day, daily at 05:05, *Run
   Immediately*, Get Today's Painting → Set Wallpaper with *Show Preview* off. An app
   cannot create an automation for the user, so the app walks through the steps once
   on first launch and keeps the guide in Settings.
 
 **The intent never fails because of the network.** An automation that fails at
-00:05 leaves an error banner for the morning. So a download that fails or runs
+05:05 leaves an error banner for the morning. So a download that fails or runs
 past the intent's budget (about 25 s, under the system's limit) falls through
 and returns the painting already shown. The failure still cools off, and
 `isDue` still says the day is owed, so the next run retries. The only error
 the intent throws is *nothing has ever been downloaded*.
 
 **The download usually happens before the automation.** A `BGAppRefreshTask`
-(`dev.artwindow.refresh`) is scheduled a few minutes after the next local
-midnight and calls `Rotation.turn(force: false)`. iOS runs these tasks when it
+(`dev.artwindow.refresh`) is scheduled a few minutes after the next day begins —
+05:00 local, `Day.beginsAtHour`, the desktop's rule — and calls `Rotation.turn(force: false)`. iOS runs these tasks when it
 chooses, so this is only a head start. The intent is what guarantees a painting
 is delivered. Opening the app does the same.
 
@@ -43,8 +43,8 @@ also serves StandBy) draws `widget.jpg` from the App Group container.
 `Rotation` writes that copy, downsampled to 1000 px on the long side, whenever
 the shown painting changes, because a widget extension's memory limit would
 not survive decoding an original of up to 30 MB. Rotation then reloads the
-timelines. The timeline itself holds one entry that expires at the next local
-midnight. The widget has the same relationship to the painting as `ArtDream`
+timelines. The timeline itself holds one entry that expires when the next day
+begins. The widget has the same relationship to the painting as `ArtDream`
 on Android TV: it shows what is there and asks for nothing.
 
 Lock-screen accessory widgets are left out on purpose. The system renders them

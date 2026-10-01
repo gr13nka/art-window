@@ -132,7 +132,9 @@ it before touching `src/desktop/macos/wallpaper.rs`.
   scheduled behind it.
 - **The scheduler compares calendar days; it never counts down and never counts
   hours.** `State::is_due` asks `day::local` whether the date has changed since
-  `last_success`, and that is the only thing that decides a picture is owed. Both
+  `last_success`, and that is the only thing that decides a picture is owed. A day
+  begins at 05:00 local (`day::DAY_BEGINS`), not midnight: a picture fetched at
+  half past midnight used to be the "old" one waiting the next morning. Both
   halves of that are load-bearing and both were once wrong. An *interval* — the
   original `refresh_hours` — drifts, because a machine asleep past the appointed
   moment settles the day whenever it wakes and that becomes the new anchor; left
@@ -453,7 +455,10 @@ matter across the boundary:
 - **Only `Rotation.turn` fetches, and only one turn at a time.** It takes a
   `tryLock` rather than queuing a second attempt behind the first.
 - **The day is a calendar comparison, never a countdown.** `State.isDue` compares
-  `LocalDate` epoch days — the same rule as the desktop's `is_due`.
+  `LocalDate` epoch days — the same rule as the desktop's `is_due`, including the
+  05:00 start: every caller asks `Day.today()` rather than `LocalDate.now()`. iOS
+  keeps the same hour in `Day.beginsAtHour`, and its Shortcuts automation runs at
+  05:05 for that reason.
 - **The list is generated, never hand-edited, and applies only objective gates.**
   `catalogue/build.py` — a separate, offline pipeline, see **External services**
   above — walks the Met, the National Gallery of Art (Washington), the Cleveland

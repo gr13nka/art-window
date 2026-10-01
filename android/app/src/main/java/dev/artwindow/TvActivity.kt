@@ -50,7 +50,6 @@ import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
-import java.time.LocalDate
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -74,7 +73,7 @@ class TvActivity : ComponentActivity() {
         }
 
         RotationJob.scheduleDaily(applicationContext)
-        if (State(applicationContext).isDue(LocalDate.now())) {
+        if (State(applicationContext).isDue(Day.today())) {
             RotationJob.scheduleNow(applicationContext, force = false)
         }
 
@@ -171,7 +170,7 @@ private fun TvApp(context: Context, openDreamSettings: () -> Boolean) {
                     if (overlayOpen) {
                         Overlay(
                             artwork = artwork,
-                            statusText = statusLine(status, owed = State(context).isDue(LocalDate.now())),
+                            statusText = statusLine(status, owed = State(context).isDue(Day.today())),
                             isFavourite = artwork?.let { shown -> favourites.any { sameArtwork(it.artwork, shown) } } == true,
                             fetching = status is Status.Fetching,
                             canAct = !status.isBusy,

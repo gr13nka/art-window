@@ -5,8 +5,17 @@
 //! Nothing else in the program needs a calendar, so this is the whole of one — one
 //! number per instant, and comparison is the only operation on it.
 
-/// The local calendar day the instant `at` — Unix seconds — falls on, numbered from
-/// the epoch.
+/// When a day begins, in seconds after local midnight: five in the morning.
+///
+/// Not midnight, because midnight is often still last night. A laptop open at
+/// half past twelve would spend the new day on a picture its owner sees before
+/// bed, and the morning would open on that same "old" painting. Five o'clock is
+/// past anyone's late night and before anyone's morning, so the first time the lid
+/// opens after it, the picture is new.
+const DAY_BEGINS: i64 = 5 * 60 * 60;
+
+/// The local day the instant `at` — Unix seconds — falls in, numbered from the
+/// epoch, each one running from [`DAY_BEGINS`] to the same hour the next morning.
 ///
 /// Only the difference between two of these means anything. The number is not a
 /// date, cannot be formatted as one, and is never shown to anyone.
@@ -16,7 +25,7 @@ pub fn local(at: u64) -> i64 {
     // rather than towards zero. A clock that wrong is nobody's real problem, but
     // truncation there would read as "same day" — the one answer that stops the
     // rotation rather than nudging it.
-    (at as i64 + offset(at)).div_euclid(SECONDS_PER_DAY)
+    (at as i64 + offset(at) - DAY_BEGINS).div_euclid(SECONDS_PER_DAY)
 }
 
 /// Seconds east of UTC where the user is, as of `at`.
@@ -143,5 +152,26 @@ mod windows_tests {
         let zone = new_york();
         assert_eq!(offset_in(&zone, 1_704_067_200), -5 * 60 * 60);
         assert_eq!(offset_in(&zone, 1_719_792_000), -4 * 60 * 60);
+    }
+}
+
+#[cfg(test)]
+mod boundary_tests {
+    use super::{local, offset, DAY_BEGINS};
+
+    /// Local midnight before `at`, in whatever timezone the tests run in. Picked
+    /// in late September, when no zone changes its clocks, so the hours that
+    /// follow are plain hours.
+    fn midnight_before(at: u64) -> u64 {
+        let into_day = (at as i64 + offset(at)).rem_euclid(24 * 60 * 60);
+        (at as i64 - into_day) as u64
+    }
+
+    #[test]
+    fn a_day_turns_over_at_five_in_the_morning_not_at_midnight() {
+        let midnight = midnight_before(1_790_200_000);
+        let five = midnight + DAY_BEGINS as u64;
+        assert_eq!(local(midnight - 60), local(midnight + 60));
+        assert_ne!(local(five - 60), local(five + 60));
     }
 }

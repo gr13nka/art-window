@@ -22,35 +22,42 @@ final class DayStateTests: XCTestCase {
 
     // MARK: Day
 
-    func testDayChangesAtLocalMidnightNotUTC() {
-        // 03:59Z is 23:59 the evening before in New York (EDT); 04:00Z is the new day.
-        let before = Day.local(date("2026-06-10T03:59:00Z"), calendar: calendar)
-        let after = Day.local(date("2026-06-10T04:00:00Z"), calendar: calendar)
+    func testDayChangesAtFiveInTheLocalMorningNotAtMidnight() {
+        // 04:00Z is midnight in New York (EDT) and still the evening's day; 09:00Z is
+        // five in the morning, when the new one begins.
+        let evening = Day.local(date("2026-06-10T03:59:00Z"), calendar: calendar)
+        let pastMidnight = Day.local(date("2026-06-10T04:00:00Z"), calendar: calendar)
+        let before = Day.local(date("2026-06-10T08:59:00Z"), calendar: calendar)
+        let after = Day.local(date("2026-06-10T09:00:00Z"), calendar: calendar)
+        XCTAssertEqual(evening, pastMidnight)
+        XCTAssertEqual(pastMidnight, before)
         XCTAssertEqual(after - before, 1)
         XCTAssertEqual(Day.local(date("1970-01-01T12:00:00Z"), calendar: Calendar(identifier: .gregorian).with(tz: "UTC")), 0)
     }
 
     func testDaylightSavingStartDoesNotSkipOrRepeatADay() {
         // 2026-03-08 has 23 hours in New York.
-        let early = Day.local(date("2026-03-08T05:00:00Z"), calendar: calendar)  // 00:00 EST
-        let late = Day.local(date("2026-03-09T03:59:00Z"), calendar: calendar)   // 23:59 EDT
-        let next = Day.local(date("2026-03-09T04:00:00Z"), calendar: calendar)   // 00:00 EDT
+        let early = Day.local(date("2026-03-08T09:00:00Z"), calendar: calendar)  // 05:00 EDT
+        let late = Day.local(date("2026-03-09T08:59:00Z"), calendar: calendar)   // 04:59 EDT
+        let next = Day.local(date("2026-03-09T09:00:00Z"), calendar: calendar)   // 05:00 EDT
         XCTAssertEqual(early, late)
         XCTAssertEqual(next, early + 1)
     }
 
     func testDaylightSavingEndDoesNotSkipOrRepeatADay() {
         // 2026-11-01 has 25 hours in New York.
-        let early = Day.local(date("2026-11-01T04:00:00Z"), calendar: calendar)  // 00:00 EDT
-        let late = Day.local(date("2026-11-02T04:59:00Z"), calendar: calendar)   // 23:59 EST
-        let next = Day.local(date("2026-11-02T05:00:00Z"), calendar: calendar)   // 00:00 EST
+        let early = Day.local(date("2026-11-01T10:00:00Z"), calendar: calendar)  // 05:00 EST
+        let late = Day.local(date("2026-11-02T09:59:00Z"), calendar: calendar)   // 04:59 EST
+        let next = Day.local(date("2026-11-02T10:00:00Z"), calendar: calendar)   // 05:00 EST
         XCTAssertEqual(early, late)
         XCTAssertEqual(next, early + 1)
     }
 
-    func testNextMidnightIsTheStartOfTheFollowingLocalDay() {
-        let next = Day.nextMidnight(after: date("2026-03-08T12:00:00Z"), calendar: calendar)
-        XCTAssertEqual(next, date("2026-03-09T04:00:00Z"))
+    func testNextStartIsFiveInTheMorningOfTheFollowingLocalDay() {
+        let next = Day.nextStart(after: date("2026-03-08T12:00:00Z"), calendar: calendar)
+        XCTAssertEqual(next, date("2026-03-09T09:00:00Z"))
+        // Before five, the next start is later the same date.
+        XCTAssertEqual(Day.nextStart(after: date("2026-06-10T05:00:00Z"), calendar: calendar), date("2026-06-10T09:00:00Z"))
     }
 
     // MARK: RotationState
@@ -61,7 +68,8 @@ final class DayStateTests: XCTestCase {
         XCTAssertTrue(state.isDue(now: morning, calendar: calendar))
         state.lastSuccessDay = Day.local(morning, calendar: calendar)
         XCTAssertFalse(state.isDue(now: date("2026-06-11T03:00:00Z"), calendar: calendar), "still the same evening")
-        XCTAssertTrue(state.isDue(now: date("2026-06-11T04:00:00Z"), calendar: calendar))
+        XCTAssertFalse(state.isDue(now: date("2026-06-11T04:30:00Z"), calendar: calendar), "past midnight is still last night")
+        XCTAssertTrue(state.isDue(now: date("2026-06-11T09:00:00Z"), calendar: calendar))
     }
 
     func testCoolingOffIsWallClock() {

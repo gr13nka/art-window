@@ -297,8 +297,9 @@ undo it.
 - **The daily job runs hourly, unmetered, and persisted** across reboots. Each
   run does nothing but ask `State.isDue` — a comparison of `LocalDate` epoch
   days, exactly the desktop's `State::is_due` rule: compare calendar days,
-  never count down and never count hours. The painting changes on the first
-  hourly check after midnight on Wi-Fi. Unmetered is the default because an
+  never count down and never count hours. A day begins at 05:00 (`Day.today`),
+  as on the desktop, so the painting changes on the first hourly check after
+  five in the morning on Wi-Fi. Unmetered is the default because an
   original download runs 2–30 MB.
 - **`Next picture` is a one-off job on any network**, and it spends the day —
   the same rule as the desktop's `record_fetched`: a picture that came from the

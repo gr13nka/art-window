@@ -116,7 +116,7 @@ debug APK.
 It replaces both the home and lock screen wallpaper, and — unlike the desktop —
 fills the screen rather than letterboxing, picking only paintings tall enough for
 that to look right. See [Art Window for Android](android.md) for why. The
-painting changes on the first hourly check after midnight, over Wi-Fi.
+painting changes on the first hourly check after 05:00, over Wi-Fi.
 
 ### iPhone and iPad
 

@@ -2,7 +2,6 @@ package dev.artwindow
 
 import android.content.Context
 import android.util.Log
-import java.time.LocalDate
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -51,7 +50,7 @@ object Rotation {
         if (!running.compareAndSet(false, true)) return
         try {
             val state = State(context)
-            val today = LocalDate.now()
+            val today = Day.today()
             if (!force && !state.isDue(today)) return
 
             _status.value = Status.Fetching()
@@ -127,7 +126,7 @@ object Rotation {
         val state = State(context)
         val preferences = WallpaperPreferencesStore(context).load()
         Wallpaper.pin(context, artwork, context.screen(), preferences)
-        state.recordChosen(artwork, LocalDate.now())
+        state.recordChosen(artwork, Day.today())
         state.fetchedArtwork?.path?.let { Museums(context.cacheDir, Catalogue.load(context)).discardAllBut(it) }
         favourites.discardAllBut(artwork.path)
     }

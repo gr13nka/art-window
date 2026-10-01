@@ -10,7 +10,6 @@ import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.TextView
-import java.time.LocalDate
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.Dispatchers
@@ -62,7 +61,7 @@ class ArtDream : DreamService() {
         setContentView(root)
 
         RotationJob.scheduleDaily(applicationContext)
-        if (State(applicationContext).isDue(LocalDate.now())) {
+        if (State(applicationContext).isDue(Day.today())) {
             RotationJob.scheduleNow(applicationContext, force = false)
         }
 

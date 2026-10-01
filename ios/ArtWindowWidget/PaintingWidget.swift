@@ -29,9 +29,9 @@ struct PaintingProvider: TimelineProvider {
         completion(context.isPreview ? .placeholder : .current())
     }
 
-    /// One entry that lapses at local midnight, when a new painting may be owed.
+    /// One entry that lapses when the next day begins and a new painting may be owed.
     func getTimeline(in context: Context, completion: @escaping (Timeline<PaintingEntry>) -> Void) {
-        completion(Timeline(entries: [.current()], policy: .after(Day.nextMidnight(after: .now))))
+        completion(Timeline(entries: [.current()], policy: .after(Day.nextStart(after: .now))))
     }
 }
 

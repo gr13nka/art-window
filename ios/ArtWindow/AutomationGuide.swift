@@ -11,14 +11,14 @@ struct AutomationGuide: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
-                    Text("iOS only lets Shortcuts change the wallpaper. Set this up once and a new painting arrives every night.")
+                    Text("iOS only lets Shortcuts change the wallpaper. Set this up once and a new painting arrives every morning.")
                         .foregroundStyle(.secondary)
 
                     step(1, "Open Shortcuts, tap Automation, then the + button.") {
                         MockRow(items: ["Shortcuts", "Automation", "Gallery"], highlighted: 1)
                     }
-                    step(2, "Choose Time of Day. Set 00:05, Repeat Daily, and Run Immediately.") {
-                        MockList(rows: [("Time of Day", "00:05"), ("Repeat", "Daily"), ("Run Immediately", "✓")])
+                    step(2, "Choose Time of Day. Set 05:05, Repeat Daily, and Run Immediately.") {
+                        MockList(rows: [("Time of Day", "05:05"), ("Repeat", "Daily"), ("Run Immediately", "✓")])
                     }
                     step(3, "Add the action Get Today's Painting, from Art Window.") {
                         MockList(rows: [("Get Today's Painting", "Art Window")])

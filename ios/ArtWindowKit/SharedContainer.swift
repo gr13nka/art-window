@@ -45,24 +45,34 @@ public enum SharedContainer {
 /// The whole calendar this program has: one number per instant, comparison the only
 /// operation — `day::local` on the desktop, `LocalDate.toEpochDay` on Android.
 ///
-/// The number is the days-since-1970 of the *wall-clock* date at that instant, taken by
-/// adding the zone's offset for that very instant to local midnight rather than for
+/// A day begins at five in the morning on the wall clock, not at midnight — the same
+/// rule as `day::DAY_BEGINS` on the desktop. Midnight is often still last night: a
+/// painting fetched at half past twelve would be the "old" one waiting in the morning.
+///
+/// The number is the days-since-1970 of the *wall-clock* date the day began on, taken
+/// by adding the zone's offset for that very instant to local midnight rather than for
 /// now, so the hours either side of a daylight-saving change do not read as the wrong
 /// day. It is deliberately independent of the calendar's era or year numbering.
 public enum Day {
+    /// The wall-clock hour a day begins at.
+    public static let beginsAtHour = 5
+
     public static func local(_ date: Date, calendar: Calendar = .current) -> Int {
-        let midnight = calendar.startOfDay(for: date)
+        var midnight = calendar.startOfDay(for: date)
+        // Before five the day has not begun, so the instant belongs to the date before.
+        if calendar.component(.hour, from: date) < beginsAtHour,
+           let yesterday = calendar.date(byAdding: .day, value: -1, to: midnight) {
+            midnight = calendar.startOfDay(for: yesterday)
+        }
         let offset = calendar.timeZone.secondsFromGMT(for: midnight)
         let localSeconds = Int(midnight.timeIntervalSince1970.rounded()) + offset
         return Int((Double(localSeconds) / 86_400).rounded(.down))
     }
 
-    /// The first instant of the next local day, for a widget timeline that should turn
-    /// over exactly when a new painting becomes owed.
-    public static func nextMidnight(after date: Date, calendar: Calendar = .current) -> Date {
-        guard let tomorrow = calendar.date(byAdding: .day, value: 1, to: date) else {
-            return date.addingTimeInterval(86_400)
-        }
-        return calendar.startOfDay(for: tomorrow)
+    /// The first instant of the next day, for a widget timeline that should turn over
+    /// exactly when a new painting becomes owed.
+    public static func nextStart(after date: Date, calendar: Calendar = .current) -> Date {
+        calendar.nextDate(after: date, matching: DateComponents(hour: beginsAtHour), matchingPolicy: .nextTime)
+            ?? date.addingTimeInterval(86_400)
     }
 }

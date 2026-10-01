@@ -7,11 +7,11 @@ import SwiftUI
 enum RefreshSchedule {
     static let identifier = "dev.artwindow.refresh"
 
-    /// A few minutes past local midnight, so the day has changed by the time it runs
-    /// and the file is usually on disk before the 00:05 automation asks for it.
+    /// A few minutes past the start of the day, so the day has changed by the time it
+    /// runs and the file is usually on disk when the 05:05 automation asks for it.
     static func schedule() {
         let request = BGAppRefreshTaskRequest(identifier: identifier)
-        request.earliestBeginDate = Day.nextMidnight(after: .now).addingTimeInterval(5 * 60)
+        request.earliestBeginDate = Day.nextStart(after: .now).addingTimeInterval(2 * 60)
         try? BGTaskScheduler.shared.submit(request)
     }
 }
