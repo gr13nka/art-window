@@ -121,7 +121,7 @@ struct Open {
 }
 
 const TITLE: &str = "Art Window";
-const OPENS_AT: LogicalSize<f64> = LogicalSize::new(940.0, 640.0);
+const OPENS_AT: LogicalSize<f64> = LogicalSize::new(1180.0, 780.0);
 const NO_SMALLER_THAN: LogicalSize<f64> = LogicalSize::new(560.0, 400.0);
 
 impl Gallery {

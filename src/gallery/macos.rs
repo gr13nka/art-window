@@ -20,11 +20,12 @@ use objc2::{
     define_class, msg_send, sel, AnyThread, DefinedClass, MainThreadMarker, MainThreadOnly, Message,
 };
 use objc2_app_kit::{
-    NSAppearance, NSAppearanceCustomization, NSAppearanceNameAqua, NSAutoresizingMaskOptions,
-    NSBezierPath, NSBitmapImageRep, NSBorderType, NSButton, NSCalibratedRGBColorSpace, NSColor,
-    NSColorSpace, NSColorWell, NSCompositingOperation, NSEvent, NSFont, NSGraphicsContext, NSImage,
-    NSImageScaling, NSImageView, NSScrollView, NSSegmentSwitchTracking, NSSegmentedControl,
-    NSShadow, NSSlider, NSTextAlignment, NSTextField, NSView,
+    NSAutoresizingMaskOptions, NSBezierPath, NSBitmapImageRep, NSBorderType, NSButton,
+    NSCalibratedRGBColorSpace, NSColor, NSColorSpace, NSColorWell, NSCompositingOperation, NSEvent,
+    NSFont, NSGraphicsContext, NSImage, NSImageScaling, NSImageView, NSScrollView,
+    NSSegmentSwitchTracking, NSSegmentedControl, NSShadow, NSSlider, NSTextAlignment, NSTextField,
+    NSView, NSVisualEffectBlendingMode, NSVisualEffectMaterial, NSVisualEffectState,
+    NSVisualEffectView, NSWindow, NSWindowStyleMask, NSWindowTitleVisibility,
 };
 use objc2_foundation::{NSArray, NSPoint, NSRect, NSSize, NSString, NSURL};
 use std::cell::{Cell, RefCell};
@@ -517,6 +518,15 @@ impl Content {
         // goes when it goes.
         let root: &NSView = unsafe { &*(window.ns_view() as *const NSView) };
 
+        // The content runs up under a see-through title bar, so the material below
+        // is one surface from the top edge down. The tabs say what the window is,
+        // which is why the title itself is hidden.
+        let ns_window: &NSWindow = unsafe { &*(window.ns_window() as *const NSWindow) };
+        ns_window.setStyleMask(ns_window.styleMask() | NSWindowStyleMask::FullSizeContentView);
+        ns_window.setTitlebarAppearsTransparent(true);
+        ns_window.setTitleVisibility(NSWindowTitleVisibility::Hidden);
+        let title_bar = root.bounds().size.height - ns_window.contentLayoutRect().size.height;
+
         // A container of our own, so that the arithmetic below is written in
         // coordinates this file decides the orientation of rather than tao's.
         let outer = NSView::initWithFrame(NSView::alloc(mtm), root.bounds());
@@ -527,8 +537,21 @@ impl Content {
         let total = outer.bounds().size;
         let below = NSRect::new(
             NSPoint::new(0.0, 0.0),
-            NSSize::new(total.width, (total.height - STRIP).max(1.0)),
+            NSSize::new(total.width, (total.height - title_bar - STRIP).max(1.0)),
         );
+
+        // Held active: this is an accessory's window and hardly ever the key one,
+        // and a material that follows the window's state would sit there greyed.
+        let material =
+            NSVisualEffectView::initWithFrame(NSVisualEffectView::alloc(mtm), root.bounds());
+        material.setMaterial(NSVisualEffectMaterial::UnderWindowBackground);
+        material.setBlendingMode(NSVisualEffectBlendingMode::BehindWindow);
+        material.setState(NSVisualEffectState::Active);
+        material.setAutoresizingMask(
+            NSAutoresizingMaskOptions::ViewWidthSizable
+                | NSAutoresizingMaskOptions::ViewHeightSizable,
+        );
+        outer.addSubview(&material);
         let fill = NSAutoresizingMaskOptions::ViewWidthSizable
             | NSAutoresizingMaskOptions::ViewHeightSizable;
 
@@ -578,7 +601,10 @@ impl Content {
         outer.addSubview(&ui.settings);
         outer.addSubview(&ui.segments);
         ui.segments.setFrame(NSRect::new(
-            NSPoint::new((total.width - TABS_W) / 2.0, total.height - 8.0 - TABS_H),
+            NSPoint::new(
+                (total.width - TABS_W) / 2.0,
+                total.height - title_bar - 8.0 - TABS_H,
+            ),
             NSSize::new(TABS_W, TABS_H),
         ));
         root.addSubview(&outer);
@@ -647,21 +673,41 @@ const RING: f64 = RING_GAP + RING_W;
 const GAP: f64 = 8.0;
 const CHIP_H: f64 = 30.0;
 
-const WHITE: u32 = 0xffffff;
-const INK: u32 = 0x1d1d1f;
-const MUTED: u32 = 0x6e6e73;
-const FILL: u32 = 0xeef0f3;
-const BLUE: u32 = 0x1a5ce0;
 const MEDIUM: f64 = 0.23;
 const SEMIBOLD: f64 = 0.3;
 
-fn rgb(hex: u32, alpha: f64) -> Retained<NSColor> {
-    NSColor::colorWithSRGBRed_green_blue_alpha(
-        ((hex >> 16) & 0xff) as f64 / 255.0,
-        ((hex >> 8) & 0xff) as f64 / 255.0,
-        (hex & 0xff) as f64 / 255.0,
-        alpha,
-    )
+/// The tab's colours, by role. Every one is a system colour, resolved when it is
+/// drawn, so the tab follows light and dark and the user's accent colour, and the
+/// translucent material behind it shows through instead of being painted over.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Tone {
+    Ink,
+    Muted,
+    Accent,
+    OnAccent,
+    /// A chip that is not chosen: a faint wash over the material, not a fill.
+    Wash,
+    Line,
+    Placeholder,
+    Shadow,
+    /// Opaque, so that the preview's shadow is as dark as a solid card's.
+    Solid,
+}
+
+impl Tone {
+    fn color(self) -> Retained<NSColor> {
+        match self {
+            Tone::Ink => NSColor::labelColor(),
+            Tone::Muted => NSColor::secondaryLabelColor(),
+            Tone::Accent => NSColor::controlAccentColor(),
+            Tone::OnAccent => NSColor::whiteColor(),
+            Tone::Wash => NSColor::labelColor().colorWithAlphaComponent(0.06),
+            Tone::Line => NSColor::separatorColor(),
+            Tone::Placeholder => NSColor::quaternaryLabelColor(),
+            Tone::Shadow => NSColor::blackColor().colorWithAlphaComponent(0.18),
+            Tone::Solid => NSColor::windowBackgroundColor(),
+        }
+    }
 }
 
 /// Every caller passes an `NSView` or one of its subclasses, which is what makes
@@ -676,11 +722,11 @@ fn text_label(
     text: &str,
     size: f64,
     weight: f64,
-    hex: u32,
+    tone: Tone,
 ) -> Retained<NSTextField> {
     let label = NSTextField::labelWithString(&NSString::from_str(text), mtm);
     label.setFont(Some(&NSFont::systemFontOfSize_weight(size, weight)));
-    label.setTextColor(Some(&rgb(hex, 1.0)));
+    label.setTextColor(Some(&tone.color()));
     label.sizeToFit();
     label
 }
@@ -727,8 +773,8 @@ define_class!(
             let bounds = self.bounds();
             let shape = shrink(bounds, inset);
             match look {
-                Look::Primary => rgb(BLUE, 1.0).setFill(),
-                Look::Plain | Look::Ringed => rgb(WHITE, 1.0).setFill(),
+                Look::Primary => Tone::Accent.color().setFill(),
+                Look::Plain | Look::Ringed => Tone::Wash.color().setFill(),
             }
             NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(shape, radius, radius).fill();
             if look == Look::Primary {
@@ -742,7 +788,7 @@ define_class!(
                 radius - 0.5,
             );
             hairline.setLineWidth(1.0);
-            rgb(0x000000, 0.12).setStroke();
+            Tone::Line.color().setStroke();
             hairline.stroke();
             if look == Look::Ringed {
                 let ring = NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(
@@ -751,7 +797,7 @@ define_class!(
                     radius + inset - RING_W / 2.0,
                 );
                 ring.setLineWidth(RING_W);
-                rgb(BLUE, 1.0).setStroke();
+                Tone::Accent.color().setStroke();
                 ring.stroke();
             }
         }
@@ -819,8 +865,8 @@ impl Pill {
         on_click: Option<Rc<dyn Fn()>>,
     ) -> Retained<Self> {
         let (ink, weight) = match look {
-            Look::Primary => (WHITE, SEMIBOLD),
-            Look::Plain | Look::Ringed => (INK, MEDIUM),
+            Look::Primary => (Tone::OnAccent, SEMIBOLD),
+            Look::Plain | Look::Ringed => (Tone::Ink, MEDIUM),
         };
         let label = text_label(mtm, text, size, weight, ink);
         let line = label.frame().size;
@@ -854,8 +900,7 @@ impl Pill {
 }
 
 struct PlateIvars {
-    fill: u32,
-    alpha: f64,
+    fill: Tone,
 }
 
 define_class!(
@@ -868,20 +913,20 @@ define_class!(
     impl Plate {
         #[unsafe(method(drawRect:))]
         fn draw_rect(&self, _dirty: NSRect) {
-            rgb(self.ivars().fill, self.ivars().alpha).setFill();
+            self.ivars().fill.color().setFill();
             NSBezierPath::fillRect(self.bounds());
         }
     }
 );
 
 impl Plate {
-    fn new(mtm: MainThreadMarker, frame: NSRect, fill: u32, alpha: f64) -> Retained<Self> {
-        let this = Self::alloc(mtm).set_ivars(PlateIvars { fill, alpha });
+    fn new(mtm: MainThreadMarker, frame: NSRect, fill: Tone) -> Retained<Self> {
+        let this = Self::alloc(mtm).set_ivars(PlateIvars { fill });
         unsafe { msg_send![super(this), initWithFrame: frame] }
     }
 }
 
-/// The settings tab's own surface: white, and it says when its size changes so
+/// The settings tab's own surface: see-through to the window's material, and it says when its size changes so
 /// that the preview and the column can be laid out again for the new one.
 struct PaneIvars {
     size: Cell<NSSize>,
@@ -896,12 +941,6 @@ define_class!(
     struct Pane;
 
     impl Pane {
-        #[unsafe(method(drawRect:))]
-        fn draw_rect(&self, _dirty: NSRect) {
-            rgb(WHITE, 1.0).setFill();
-            NSBezierPath::fillRect(self.bounds());
-        }
-
         #[unsafe(method(setFrameSize:))]
         fn set_frame_size(&self, size: NSSize) {
             let _: () = unsafe { msg_send![super(self), setFrameSize: size] };
@@ -950,15 +989,15 @@ define_class!(
             }
             let path = NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(card, 10.0, 10.0);
 
-            // The shadow is cast by a white fill, so it is there whether or not the
-            // picture on top of it is.
+            // The shadow is cast by an opaque fill, so it is there whether or not
+            // the picture on top of it is.
             NSGraphicsContext::saveGraphicsState_class();
             let shadow = NSShadow::new();
             shadow.setShadowOffset(NSSize::new(0.0, -6.0));
             shadow.setShadowBlurRadius(24.0);
-            shadow.setShadowColor(Some(&rgb(0x000000, 0.10)));
+            shadow.setShadowColor(Some(&Tone::Shadow.color()));
             shadow.set();
-            rgb(WHITE, 1.0).setFill();
+            Tone::Solid.color().setFill();
             path.fill();
             NSGraphicsContext::restoreGraphicsState_class();
 
@@ -975,7 +1014,7 @@ define_class!(
                     NSGraphicsContext::restoreGraphicsState_class();
                 }
                 None => {
-                    rgb(FILL, 1.0).setFill();
+                    Tone::Placeholder.color().setFill();
                     path.fill();
                 }
             }
@@ -985,7 +1024,7 @@ define_class!(
 
 impl Canvas {
     fn new(mtm: MainThreadMarker) -> Retained<Self> {
-        let none_yet = text_label(mtm, "No picture yet", 13.0, 0.0, MUTED);
+        let none_yet = text_label(mtm, "No picture yet", 13.0, 0.0, Tone::Muted);
         none_yet.setAlignment(NSTextAlignment::Center);
         let this = Self::alloc(mtm).set_ivars(CanvasIvars {
             image: RefCell::new(None),
@@ -1195,6 +1234,13 @@ define_class!(
                 ui.change(|p| p.set_hide_religious(on));
             }
         }
+
+        #[unsafe(method(applyPressed:))]
+        fn apply_pressed(&self, _sender: Option<&AnyObject>) {
+            if let Some(ui) = self.ui() {
+                ui.apply_staged();
+            }
+        }
     }
 );
 
@@ -1251,7 +1297,7 @@ struct Ui {
     /// Built once and kept through every rebuild, because its own click is what
     /// causes one and a control cannot be taken apart while it is answering.
     religious: Retained<NSButton>,
-    apply: Retained<Pill>,
+    apply: Retained<NSButton>,
     note: Retained<NSTextField>,
     blocks: RefCell<Vec<Block>>,
 }
@@ -1290,10 +1336,6 @@ impl Ui {
         let size = frame.size;
         let settings = Pane::new(mtm, frame);
         settings.setAutoresizingMask(fill);
-        // The tab is designed light only.
-        if let Some(aqua) = unsafe { NSAppearance::appearanceNamed(NSAppearanceNameAqua) } {
-            settings.setAppearance(Some(&aqua));
-        }
 
         // The canvas and the scroll view are placed by `arrange`, which owns their
         // frames, so neither autoresizes.
@@ -1309,7 +1351,7 @@ impl Ui {
                 ),
             ),
         );
-        scroll.setHasVerticalScroller(true);
+        scroll.setHasVerticalScroller(false);
         scroll.setAutohidesScrollers(true);
         scroll.setDrawsBackground(false);
         scroll.setBorderType(NSBorderType::NoBorder);
@@ -1334,34 +1376,32 @@ impl Ui {
         let hairline = Plate::new(
             mtm,
             NSRect::new(NSPoint::new(0.0, BAR), NSSize::new(size.width, 1.0)),
-            0x000000,
-            0.09,
+            Tone::Line,
         );
         hairline.setAutoresizingMask(
             NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewMaxYMargin,
         );
 
-        let apply = Pill::new(
-            mtm,
-            "Apply changes",
-            14.0,
-            Look::Primary,
-            8.0,
-            (None, 32.0),
-            20.0,
-            0.0,
-            None,
-        );
-        let apply_w = apply.frame().size.width;
-        apply.setFrameOrigin(NSPoint::new(
-            size.width - OUTER - apply_w,
-            (BAR - 32.0) / 2.0,
+        // The same native push button as *Set as wallpaper*, so the two tabs
+        // share one kind of button.
+        let apply = unsafe {
+            NSButton::buttonWithTitle_target_action(
+                &NSString::from_str("Apply"),
+                Some(target),
+                Some(sel!(applyPressed:)),
+                mtm,
+            )
+        };
+        let apply_w = 96.0;
+        apply.setFrame(NSRect::new(
+            NSPoint::new(size.width - OUTER - apply_w, (BAR - BUTTON_H) / 2.0),
+            NSSize::new(apply_w, BUTTON_H),
         ));
         apply.setAutoresizingMask(
             NSAutoresizingMaskOptions::ViewMinXMargin | NSAutoresizingMaskOptions::ViewMaxYMargin,
         );
 
-        let note = text_label(mtm, "", 13.0, 0.0, MUTED);
+        let note = text_label(mtm, "", 13.0, 0.0, Tone::Muted);
         note.setAlignment(NSTextAlignment::Right);
         note.setFrame(NSRect::new(
             NSPoint::new(OUTER, (BAR - 16.0) / 2.0),
@@ -1407,18 +1447,20 @@ impl Ui {
                 ui.arrange();
             }
         }));
-        ui.apply.ivars().on_click.replace(Some(ui.hook(|ui| {
-            let staged = {
-                let pending = ui.pending.borrow();
-                if !pending.can_apply() {
-                    return;
-                }
-                pending.staged().clone()
-            };
-            (ui.on_pick)(Pick::Apply(staged));
-        })));
         ui.rebuild();
         ui
+    }
+
+    /// Hands the staged settings to the loop, if there is anything to apply.
+    fn apply_staged(&self) {
+        let staged = {
+            let pending = self.pending.borrow();
+            if !pending.can_apply() {
+                return;
+            }
+            pending.staged().clone()
+        };
+        (self.on_pick)(Pick::Apply(staged));
     }
 
     fn show_tab(&self, tab: Tab) {
@@ -1501,7 +1543,13 @@ impl Ui {
     }
 
     fn title(&self, text: &str) -> Block {
-        Block::Title(as_view(text_label(self.mtm, text, 13.0, SEMIBOLD, INK)))
+        Block::Title(as_view(text_label(
+            self.mtm,
+            text,
+            13.0,
+            SEMIBOLD,
+            Tone::Ink,
+        )))
     }
 
     /// Takes every row apart and builds it again from the model.
@@ -1635,7 +1683,7 @@ impl Ui {
                     NSSize::new(200.0, 20.0),
                 ));
                 blocks.push(Block::Line(vec![
-                    as_view(text_label(self.mtm, "Strength", 13.0, 0.0, MUTED)),
+                    as_view(text_label(self.mtm, "Strength", 13.0, 0.0, Tone::Muted)),
                     as_view(slider),
                 ]));
             }
@@ -1810,7 +1858,7 @@ impl Ui {
         self.canvas.set_image(image);
         self.arrange();
 
-        self.apply.set_enabled(p.can_apply(), 0.4);
+        self.apply.setEnabled(p.can_apply());
         self.note
             .setStringValue(&NSString::from_str(p.note().unwrap_or("")));
     }
