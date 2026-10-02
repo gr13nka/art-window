@@ -7,8 +7,10 @@
 //! a desk of mismatched monitors. So [`resolve`] mostly *translates*: it answers a
 //! [`Hang`] naming the original file and an option. The pixels are read for two
 //! reasons only — to measure the colour of a picture's edge for automatic borders,
-//! and to compose a blurred backdrop, which no desktop offers and so has to be
-//! drawn here and handed over as a new file.
+//! and to compose a picture, which no desktop offers and so has to be drawn here
+//! and handed over as a new file. A blurred backdrop is one such composition, and
+//! [`cover_to`] and [`cover_to_fit`], for a video-call background that is not a
+//! desktop at all, are the others.
 //!
 //! [`Preview`] draws every style, in miniature, with the same code, so what the
 //! settings window shows is what [`resolve`] would hang.
@@ -17,7 +19,8 @@
 //! without anything decoding it; only hanging it does.
 
 use crate::settings::{BlurVariant, Border, Style};
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
+use image::codecs::jpeg::JpegEncoder;
 use image::imageops::{self, FilterType};
 use image::{Rgba, RgbaImage};
 use std::path::{Path, PathBuf};
@@ -55,6 +58,9 @@ const MAX_BLUR_RADIUS: u32 = 24;
 const EDGE_SAMPLE: u32 = 160;
 /// The long side of the copy [`Preview`] keeps.
 const PREVIEW_SOURCE: u32 = 720;
+/// The JPEG qualities [`cover_to_fit`] tries, best first. Below the last the
+/// blocks start to show on a painting, and a smaller size looks better than that.
+const FIT_QUALITIES: [u8; 6] = [88, 80, 72, 64, 56, 48];
 
 /// Turns `style` into something the desktop can hang on a `screen` of that many
 /// pixels, drawing a new picture into `scratch` only if the style needs one.
@@ -102,6 +108,47 @@ pub fn resolve(path: &Path, style: &Style, screen: (u32, u32), scratch: &Path) -
             }
         }
     })
+}
+
+/// Writes `path` cropped to cover exactly `size` pixels, as a PNG at `out`.
+///
+/// For a picture some other program will hang for itself, where there is no desktop
+/// to ask for fill: a meeting app's virtual background takes whatever file it is
+/// given and shows it at its own size, so the crop has to be made here. Centred,
+/// like [`Style::Zoom`], and never distorted. The directory of `out` must exist.
+pub fn cover_to(path: &Path, size: (u32, u32), out: &Path) -> Result<()> {
+    let (w, h) = (size.0.max(1), size.1.max(1));
+    let source = decode(path)?.to_rgba8();
+    image::DynamicImage::ImageRgba8(cover(&source, w, h))
+        .to_rgb8()
+        .save_with_format(out, image::ImageFormat::Png)
+        .with_context(|| format!("writing {}", out.display()))
+}
+
+/// `path` cropped to cover one of `sizes` and encoded as a JPEG of at most `budget`
+/// bytes, in memory.
+///
+/// For a place that will take a picture only if it is no bigger than the file it
+/// replaces. Sizes are tried in the order given, so callers pass the largest first,
+/// and within each the qualities from best to worst: the first encoding that fits
+/// wins, which makes it the sharpest picture the budget allows rather than merely
+/// a small one. The picture is decoded once. Errors when not even the last size at
+/// the lowest quality fits.
+pub fn cover_to_fit(path: &Path, sizes: &[(u32, u32)], budget: usize) -> Result<Vec<u8>> {
+    let source = decode(path)?.to_rgba8();
+    for &(w, h) in sizes {
+        let rgb = image::DynamicImage::ImageRgba8(cover(&source, w.max(1), h.max(1))).to_rgb8();
+        for quality in FIT_QUALITIES {
+            let mut jpeg = Vec::new();
+            JpegEncoder::new_with_quality(&mut jpeg, quality)
+                .encode_image(&rgb)
+                .context("encoding a JPEG")?;
+            if jpeg.len() <= budget {
+                return Ok(jpeg);
+            }
+        }
+    }
+    bail!("the picture does not fit in {budget} bytes at any size tried")
 }
 
 /// A small copy of one picture, kept so the settings window can redraw it in any
@@ -353,6 +400,61 @@ mod tests {
         assert_ne!(first.path, second.path);
         let size = image::image_dimensions(&second.path).unwrap();
         assert_eq!(size, (320, 180));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cover_to_writes_exactly_the_size_asked_for() {
+        let dir = std::env::temp_dir().join(format!("art-window-cover-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("painting.png");
+        framed().save(&src).unwrap();
+        let out = dir.join("covered.png");
+        cover_to(&src, (160, 90), &out).unwrap();
+        assert_eq!(image::image_dimensions(&out).unwrap(), (160, 90));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A picture of pseudo-random noise, which no encoder can make small.
+    fn noisy() -> RgbaImage {
+        RgbaImage::from_fn(400, 300, |x, y| {
+            let h = x.wrapping_mul(2_654_435_761) ^ y.wrapping_mul(40_503).rotate_left(13);
+            let h = h.wrapping_mul(2_246_822_519);
+            Rgba([(h >> 8) as u8, (h >> 16) as u8, (h >> 24) as u8, 255])
+        })
+    }
+
+    fn fit_source(name: &str) -> (PathBuf, PathBuf) {
+        let dir =
+            std::env::temp_dir().join(format!("art-window-fit-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("painting.png");
+        noisy().save(&src).unwrap();
+        (dir, src)
+    }
+
+    #[test]
+    fn cover_to_fit_takes_the_first_size_that_fits() {
+        let (dir, src) = fit_source("first");
+        let jpeg = cover_to_fit(&src, &[(320, 180), (160, 90)], usize::MAX).unwrap();
+        assert_eq!(image::load_from_memory(&jpeg).unwrap().width(), 320);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cover_to_fit_falls_to_a_smaller_size_within_the_budget() {
+        let (dir, src) = fit_source("fall");
+        let small = cover_to_fit(&src, &[(160, 90)], usize::MAX).unwrap();
+        let jpeg = cover_to_fit(&src, &[(320, 180), (160, 90)], small.len()).unwrap();
+        assert!(jpeg.len() <= small.len());
+        assert_eq!(image::load_from_memory(&jpeg).unwrap().width(), 160);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cover_to_fit_errors_when_nothing_fits() {
+        let (dir, src) = fit_source("none");
+        assert!(cover_to_fit(&src, &[(320, 180), (160, 90)], 10).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

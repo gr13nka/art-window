@@ -310,6 +310,35 @@ it before touching `src/desktop/macos/wallpaper.rs`.
   for a sibling `art-window` first, and every path it reads is resolved from its
   own directory rather than from the repository root. Reaching for `$root/linux/…`
   again breaks installing from a tarball, and nothing in the repo would notice.
+- **A meeting app's slot always holds a painting no meeting has shown, and one
+  meeting shows one painting.** `backdrop` overwrites the custom background a
+  meeting app already knows — the Zoom client's, and Google Meet's in Firefox. A
+  painting is *shown* once it has been read since it was written (access time
+  later than modification time, which hanging arms by setting them that way
+  round) while a meeting is live, and it is replaced when that meeting ends —
+  never while it runs. Zoom reads the file twice per meeting, for the preview and
+  again on joining, and a swap between the two opens the meeting with a different
+  painting from the one previewed; that was the first version. All of this was
+  observed rather than documented. Read **`docs/meeting-backdrops.md`** before
+  touching it.
+- **A Meet background must be exactly as long as the file it replaces.** Firefox
+  records each blob's length in a database that cannot be edited while it runs,
+  so the painting is a JPEG fitted under that length and padded to it with `COM`
+  segments straight after SOI. The length of whatever the user uploaded is the
+  budget for every painting after it.
+- **Reading a slot file to look at it trips the wire.** `cp`, `file` or an image
+  viewer moves the access time exactly as the meeting app does. `stat` does not.
+- **A meeting background takes neither the desktop nor the day, and has a cache
+  of its own.** `backdrop` hands the sources `cache/backdrop/<app>/` rather than
+  the cache, so its downloads are never the wallpaper sweep's to delete and its
+  own sweep can never reach today's painting. Each app runs on one thread with
+  its own wall-clock cooling-off; the tray starts and stops them and schedules
+  nothing for them. `state.backdrops` holds one slot per enabled app and is also
+  the on/off switch — there is no second flag.
+- **A meeting app owns everything about itself; the worker branches on nothing.**
+  Where the background lives, what form it takes and what "live" means are a
+  `Stage`, one per submodule of `backdrop`. `App::all` and `App::label` are all
+  the tray knows, so a third app should touch `backdrop/` and nothing else.
 
 ## Deliberate omissions
 

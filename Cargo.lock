@@ -27,6 +27,7 @@ dependencies = [
  "glib",
  "gtk",
  "image",
+ "libc",
  "libloading",
  "objc2",
  "objc2-app-kit",

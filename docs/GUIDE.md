@@ -245,6 +245,41 @@ mkdir -p ~/.local/bin
 ln -s "/Applications/Art Window.app/Contents/MacOS/art-window" ~/.local/bin/
 ```
 
+### A painting behind you in meetings
+
+On macOS, Art Window can keep a painting as your virtual background in Zoom and
+in Google Meet in Firefox, and change it for every meeting. It can only replace
+a background the app already knows, so each needs one picture added by hand
+first, and that picture is overwritten.
+
+**Zoom**
+
+1. In Zoom, open *Settings → Background & effects*, add any picture with **+**
+   and select it.
+2. Tick *Paintings in Zoom meetings* in the Art Window menu.
+
+**Google Meet in Firefox**
+
+1. In a Meet call in Firefox, open *Backgrounds and effects*, upload a picture
+   as a custom background and select it. Upload a large one, a photo of a few
+   megabytes: the paintings have to fit in the space it takes, and a small
+   upload means coarser paintings.
+2. Tick *Paintings in Google Meet (Firefox)* in the Art Window menu.
+
+A painting goes in within a few seconds. It stays for the whole of the meeting
+that shows it, and the moment that meeting ends the next one takes its place, so
+a meeting started straight after another still gets a new painting. The
+paintings follow the filters in the settings tab and are chosen to suit a 16:9
+camera frame. The wallpaper and the day's picture are not affected, and the two
+apps show different paintings.
+
+Unticking a row stops the changes and leaves the last painting in the app. If
+you remove or replace that background in the app, add a picture again and tick
+the row again.
+
+How it works, and what has not been verified:
+[`meeting-backdrops.md`](meeting-backdrops.md).
+
 ## Settings
 
 `config.toml` lives at the location `--where` reports. It is read and never

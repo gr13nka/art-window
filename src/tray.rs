@@ -26,6 +26,7 @@
 //! between the two; the worker gets copies and returns a value.
 
 use crate::art::{Artwork, Selection, SourceSpec};
+use crate::backdrop::{App, Backdrop, Slot};
 use crate::config::{now_secs, Config, Paths, State};
 use crate::desktop::{self, Pinned};
 use crate::favourites::Favourites;
@@ -39,7 +40,7 @@ use std::time::{Duration, Instant};
 use tao::event::{Event, StartCause, WindowEvent};
 use tao::event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy, EventLoopWindowTarget};
 use tao::window::WindowId;
-use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem};
+use tray_icon::menu::{CheckMenuItem, IsMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 
 #[cfg(target_os = "macos")]
@@ -134,6 +135,9 @@ enum Wanted {
     Browse,
     Reapply,
     Login(bool),
+    /// Keep a painting ready as the background of the next meeting in this app,
+    /// or stop.
+    Backdrop(App, bool),
     Quit,
 }
 
@@ -386,7 +390,27 @@ pub fn run(paths: Paths, config: Config, mut settings: Settings, mut state: Stat
         move |control| {
             let _ = control_proxy.send_event(Wake::Chose(control.into()));
         },
+        &state.backdrops,
     )?;
+
+    // Meeting backgrounds keep their own clock on their own thread — see
+    // [`backdrop`] — so nothing below schedules them. The loop holds the handle
+    // only because dropping it is what stops them.
+    let mut backdrops: Vec<(App, Backdrop)> = state
+        .backdrops
+        .iter()
+        .filter(|slot| App::all().contains(&slot.app()))
+        .map(|slot| {
+            let running = Backdrop::begin(
+                slot.clone(),
+                false,
+                &config,
+                &paths.cache,
+                &settings.filters,
+            );
+            (slot.app(), running)
+        })
+        .collect();
     // Only the museum catalogue knows a painting's region, subject, artist or
     // size; the window says so rather than offering filters that do nothing.
     let filters_apply = matches!(config.source, SourceSpec::Museums);
@@ -650,6 +674,9 @@ pub fn run(paths: Paths, config: Config, mut settings: Settings, mut state: Stat
                     settings = chosen;
                     ui.gallery
                         .set_settings(&settings, filters_apply, &favourites);
+                    for (_, backdrop) in &backdrops {
+                        backdrop.set_filters(&settings.filters);
+                    }
                     if let Some(art) = state.shown.as_ref().filter(|_| restyled) {
                         match desktop::pin(&art.path, &settings.style, &paths.cache) {
                             Ok(pinned) => owed.took(pinned, &art.path),
@@ -705,6 +732,38 @@ pub fn run(paths: Paths, config: Config, mut settings: Settings, mut state: Stat
                     ui.set_login(!enabled);
                 } else {
                     ui.set_login(enabled);
+                }
+            }
+
+            // Adopting comes first and can fail in the ordinary way — nobody has
+            // added a background in that app yet — so the box is unticked again and
+            // the reason, which says what to do about it, goes where it is read.
+            Wanted::Backdrop(app, true) => {
+                let adopted = Slot::adopt(app).and_then(|slot| {
+                    state.record_backdrop(app, Some(slot.clone()), &paths.state)?;
+                    Ok(slot)
+                });
+                match adopted {
+                    Ok(slot) => {
+                        let running =
+                            Backdrop::begin(slot, true, &config, &paths.cache, &settings.filters);
+                        backdrops.retain(|(kept, _)| *kept != app);
+                        backdrops.push((app, running));
+                    }
+                    Err(error) => {
+                        report(&error);
+                        ui.set_backdrop(app, false);
+                        ui.set_status(&error.to_string());
+                    }
+                }
+            }
+
+            // The painting already in the slot stays there: it is the user's
+            // background now, and taking it away would leave the app with nothing.
+            Wanted::Backdrop(app, false) => {
+                backdrops.retain(|(kept, _)| *kept != app);
+                if let Err(error) = state.record_backdrop(app, None, &paths.state) {
+                    report(&error);
                 }
             }
 
@@ -880,6 +939,9 @@ struct Ui {
     today: MenuItem,
     reapply: MenuItem,
     login: CheckMenuItem,
+    /// Whether each meeting gets a painting behind the user, one row for every
+    /// meeting app [`App::all`] says can be reached here.
+    backdrops: Vec<(App, CheckMenuItem)>,
     quit: MenuItem,
 }
 
@@ -887,6 +949,7 @@ impl Ui {
     fn new(
         on_pick: impl Fn(Pick) + 'static,
         on_control: impl Fn(Control) + 'static,
+        backdrops: &[Slot],
     ) -> Result<Self> {
         let ui = Self {
             menu: Menu::new(),
@@ -901,25 +964,38 @@ impl Ui {
             today: MenuItem::new(NO_WAY_BACK, false, None),
             reapply: MenuItem::new("Re-apply wallpaper", false, None),
             login: CheckMenuItem::new("Start at login", true, desktop::starts_at_login(), None),
+            backdrops: App::all()
+                .iter()
+                .map(|&app| {
+                    let on = backdrops.iter().any(|slot| slot.app() == app);
+                    (app, CheckMenuItem::new(app.label(), true, on, None))
+                })
+                .collect(),
             quit: MenuItem::new("Quit Art Window", true, None),
         };
+        let (rule_a, rule_b, rule_c) = (
+            PredefinedMenuItem::separator(),
+            PredefinedMenuItem::separator(),
+            PredefinedMenuItem::separator(),
+        );
+        let mut rows: Vec<&dyn IsMenuItem> = vec![
+            &ui.title,
+            &ui.byline,
+            &ui.open,
+            &rule_a,
+            &ui.next,
+            &ui.keep,
+            &ui.favourites,
+            &ui.today,
+            &rule_b,
+            &ui.settings,
+            &ui.reapply,
+            &ui.login,
+        ];
+        rows.extend(ui.backdrops.iter().map(|(_, row)| row as &dyn IsMenuItem));
+        rows.extend([&rule_c as &dyn IsMenuItem, &ui.quit]);
         ui.menu
-            .append_items(&[
-                &ui.title,
-                &ui.byline,
-                &ui.open,
-                &PredefinedMenuItem::separator(),
-                &ui.next,
-                &ui.keep,
-                &ui.favourites,
-                &ui.today,
-                &PredefinedMenuItem::separator(),
-                &ui.settings,
-                &ui.reapply,
-                &ui.login,
-                &PredefinedMenuItem::separator(),
-                &ui.quit,
-            ])
+            .append_items(&rows)
             .map_err(|e| anyhow!("building the menu: {e}"))?;
         Ok(ui)
     }
@@ -1016,6 +1092,12 @@ impl Ui {
         self.gallery.set_login(enabled);
     }
 
+    fn set_backdrop(&mut self, app: App, enabled: bool) {
+        if let Some((_, row)) = self.backdrops.iter().find(|(kept, _)| *kept == app) {
+            row.set_checked(enabled);
+        }
+    }
+
     /// Says whether a download is in the air.
     ///
     /// Greying the row is the half that matters: a second worker started on top of
@@ -1052,6 +1134,9 @@ impl Ui {
             Wanted::Reapply
         } else if click.id == self.login.id() {
             Wanted::Login(self.login.is_checked())
+        } else if let Some((app, row)) = self.backdrops.iter().find(|(_, row)| click.id == row.id())
+        {
+            Wanted::Backdrop(*app, row.is_checked())
         } else if click.id == self.quit.id() {
             Wanted::Quit
         } else {

@@ -29,6 +29,9 @@ libloading = "0.7"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 rusqlite = "0.37"
+# Already in the tree by way of rusqlite and tao; named here for `proc_listallpids`,
+# which `backdrop` uses to see whether a meeting is live.
+libc = "0.2"
 # Already in the tree by way of tao and tray-icon, so naming it here adds no code —
 # only the right to build the block the wake notification is delivered through.
 block2 = "0.6"

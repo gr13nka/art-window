@@ -6,6 +6,7 @@
 //! freely and nobody is expected to read it.
 
 use crate::art::{Artwork, SourceSpec};
+use crate::backdrop::{App, Slot};
 use crate::day;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -55,6 +56,11 @@ pub struct State {
     /// this is the one the menu offers a way back to, and the one file in the cache
     /// that must survive the sweep.
     pub fetched: Option<Artwork>,
+    /// Where each meeting app keeps the background that paintings are written
+    /// into, and so also which apps they are wanted in at all: there is no
+    /// separate switch that could come to disagree with it. At most one per app.
+    /// See [`crate::backdrop`].
+    pub backdrops: Vec<Slot>,
 }
 
 pub struct Paths {
@@ -174,6 +180,17 @@ impl State {
             self.last_success = Some(now_secs());
         }
         self.shown = Some(artwork.clone());
+        self.save(path)
+    }
+
+    /// Records where `app`'s meeting backgrounds go, or with `None` that they
+    /// have been switched off there.
+    ///
+    /// The clock and both pictures are left alone: a meeting background takes
+    /// neither the desktop nor the day.
+    pub fn record_backdrop(&mut self, app: App, slot: Option<Slot>, path: &Path) -> Result<()> {
+        self.backdrops.retain(|kept| kept.app() != app);
+        self.backdrops.extend(slot);
         self.save(path)
     }
 
