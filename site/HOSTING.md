@@ -1,4 +1,4 @@
-# Hosting the Art Window waitlist
+# Hosting the Art Window sign-up
 
 **Address:** `https://artwindow.alps-project.online`
 
@@ -7,11 +7,13 @@ database and no dependency to install.
 
 | File | What it is |
 |---|---|
-| `index.html`, `style.css`, `img/` | the landing page, including the iPhone & iPad waitlist form |
-| `subscribe.php` | receives the form and appends the address to a CSV |
+| `index.html`, `style.css`, `img/` | the landing page, including the sign-up form every Download control opens |
+| `artpip-alternative.html`, `muzei-alternative.html`, `artpaper-alternative.html` | the three comparison pages, linked from the footer of `index.html` |
+| `sitemap.xml`, `robots.txt` | for search engines; list the pages above |
+| `subscribe.php` | receives the form and appends the address, date and platform to a CSV |
 
 **A static host cannot run this.** GitHub Pages (or any static host) serves
-`index.html` fine but cannot execute PHP, so the waitlist form needs a PHP host.
+`index.html` fine but cannot execute PHP, so the sign-up form needs a PHP host.
 On a static host the form will show "Didn’t go through".
 
 ## Requirements
@@ -29,6 +31,11 @@ On a static host the form will show "Didn’t go through".
    ```
    /var/www/art-window/            ← web root
      index.html
+     artpip-alternative.html
+     muzei-alternative.html
+     artpaper-alternative.html
+     sitemap.xml
+     robots.txt
      style.css
      img/
      subscribe.php
@@ -75,7 +82,7 @@ On a static host the form will show "Didn’t go through".
 
 5. **Test it** from any machine:
    ```sh
-   curl -i -X POST -F email=test@example.com https://artwindow.alps-project.online/subscribe.php
+   curl -i -X POST -F email=test@example.com -F platform=macos https://artwindow.alps-project.online/subscribe.php
    # → HTTP 200 {"ok":true}
    curl -i -X POST -F email=nope https://artwindow.alps-project.online/subscribe.php
    # → HTTP 422 {"ok":false,"error":"email"}
@@ -93,11 +100,15 @@ On a static host the form will show "Didn’t go through".
 
 `waitlist.csv` looks like this:
 ```
-email,signed_up_utc
-someone@example.com,2026-09-28T14:03:11Z
+email,signed_up_utc,platform
+someone@example.com,2026-10-02T14:03:11Z,macos
 ```
-It holds only the address and the date, which is exactly what the form says it keeps.
-Keep it that way:
+It holds only the address, the date and the platform asked for, which is exactly what
+the form says it keeps. Keep it that way:
+
+- **An older `waitlist.csv` has two columns.** Add `,platform` to its header line by
+  hand. Its existing rows have no platform and are all iPhone & iPad waitlist sign-ups.
+- **Nothing sends the install links automatically.** They go out by hand, from the CSV.
 
 - **Don't add analytics, cookies, tracking pixels or third-party scripts** to the
   page. Don't move the list to Mailchimp, Google Sheets or any other outside service.

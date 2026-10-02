@@ -6,6 +6,12 @@
 <title>Art Window</title>
 <meta name="description" content="A new public-domain painting on your desktop, phone and TV every day.">
 <meta name="color-scheme" content="light">
+<link rel="canonical" href="https://artwindow.alps-project.online/">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Art Window">
+<meta property="og:description" content="A new public-domain painting on your desktop, phone and TV every day.">
+<meta property="og:url" content="https://artwindow.alps-project.online/">
+<meta property="og:image" content="https://artwindow.alps-project.online/img/mac.jpg">
 <link rel="icon" href="img/icon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="style.css">
 </head>
@@ -20,8 +26,8 @@
 
   <header class="hero" id="top">
     <h1>A new painting every day.</h1>
-    <a class="btn" href="https://github.com/gr13nka/art-window/releases/latest/download/art-window-macos.dmg">Download for macOS</a>
-    <p class="quiet"><a href="https://github.com/gr13nka/art-window/releases/latest/download/art-window-windows-x64-setup.exe">Windows</a> &middot; <a href="https://github.com/gr13nka/art-window/releases/latest/download/art-window-linux-x86_64.tar.gz">GNOME</a> &middot; <a href="https://github.com/gr13nka/art-window/releases/latest/download/art-window-android.apk">Android</a> &middot; <a href="#ios">iPhone &amp; iPad</a></p>
+    <a class="btn" href="#get" data-platform="macos">Download for macOS</a>
+    <p class="quiet"><a href="#get" data-platform="windows">Windows</a> &middot; <a href="#get" data-platform="gnome">GNOME</a> &middot; <a href="#get" data-platform="android">Android</a> &middot; <a href="#get" data-platform="ios">iPhone &amp; iPad</a></p>
 
     <div class="cluster" aria-hidden="true">
       <div class="tv"><div class="panel"><img src="img/lowtide.jpg" alt=""></div></div>
@@ -114,25 +120,12 @@
       <p>Licences go on sale soon.</p>
     </div>
     <div class="cards">
-      <a class="card" href="https://github.com/gr13nka/art-window/releases/latest/download/art-window-macos.dmg"><span class="dev"><svg viewBox="0 0 64 48" aria-hidden="true"><rect x="12" y="8" width="40" height="27" rx="3" fill="#dfe2e7" stroke="currentColor" stroke-width="3.2"/><path d="M5 38.5h54" stroke="currentColor" stroke-width="4" stroke-linecap="round"/></svg></span><h3>macOS</h3><p>A universal DMG. Lives in the menu bar.</p><span>Download</span></a>
-      <a class="card" href="https://github.com/gr13nka/art-window/releases/latest/download/art-window-windows-x64-setup.exe"><span class="dev"><svg viewBox="0 0 64 48" aria-hidden="true"><rect x="8" y="5" width="48" height="31" rx="3" fill="#dfe2e7" stroke="currentColor" stroke-width="3.2"/><path d="M32 36v7M20 43.500h24" stroke="currentColor" stroke-width="3.2" stroke-linecap="round"/></svg></span><h3>Windows</h3><p>An installer. Lives in the notification area.</p><span>Download</span></a>
-      <a class="card" href="https://github.com/gr13nka/art-window/releases/latest/download/art-window-linux-x86_64.tar.gz"><span class="dev"><svg viewBox="0 0 64 48" aria-hidden="true"><rect x="8" y="6" width="48" height="32" rx="4" fill="#dfe2e7" stroke="currentColor" stroke-width="3.2"/><path d="M8 13h48" stroke="currentColor" stroke-width="3.2"/><path d="M24 44h16" stroke="currentColor" stroke-width="3.2" stroke-linecap="round"/></svg></span><h3>GNOME</h3><p>A tarball with a prebuilt binary and installer.</p><span>Download</span></a>
-      <a class="card" href="https://github.com/gr13nka/art-window/releases/latest/download/art-window-android.apk"><span class="dev"><svg viewBox="0 0 64 48" aria-hidden="true"><rect x="10" y="4" width="20" height="40" rx="4.5" fill="#dfe2e7" stroke="currentColor" stroke-width="3.2"/><rect x="34" y="12" width="26" height="17" rx="2.5" fill="#dfe2e7" stroke="currentColor" stroke-width="3.2"/><path d="M42 34h10" stroke="currentColor" stroke-width="3.2" stroke-linecap="round"/></svg></span><h3>Android</h3><p>Phone and tablet, and Android TV or Google TV.</p><span>Download</span></a>
+      <a class="card" href="#get" data-platform="macos"><span class="dev"><svg viewBox="0 0 64 48" aria-hidden="true"><rect x="12" y="8" width="40" height="27" rx="3" fill="#dfe2e7" stroke="currentColor" stroke-width="3.2"/><path d="M5 38.5h54" stroke="currentColor" stroke-width="4" stroke-linecap="round"/></svg></span><h3>macOS</h3><p>A universal DMG. Lives in the menu bar.</p><span>Download</span></a>
+      <a class="card" href="#get" data-platform="windows"><span class="dev"><svg viewBox="0 0 64 48" aria-hidden="true"><rect x="8" y="5" width="48" height="31" rx="3" fill="#dfe2e7" stroke="currentColor" stroke-width="3.2"/><path d="M32 36v7M20 43.500h24" stroke="currentColor" stroke-width="3.2" stroke-linecap="round"/></svg></span><h3>Windows</h3><p>An installer. Lives in the notification area.</p><span>Download</span></a>
+      <a class="card" href="#get" data-platform="gnome"><span class="dev"><svg viewBox="0 0 64 48" aria-hidden="true"><rect x="8" y="6" width="48" height="32" rx="4" fill="#dfe2e7" stroke="currentColor" stroke-width="3.2"/><path d="M8 13h48" stroke="currentColor" stroke-width="3.2"/><path d="M24 44h16" stroke="currentColor" stroke-width="3.2" stroke-linecap="round"/></svg></span><h3>GNOME</h3><p>A tarball with a prebuilt binary and installer.</p><span>Download</span></a>
+      <a class="card" href="#get" data-platform="android"><span class="dev"><svg viewBox="0 0 64 48" aria-hidden="true"><rect x="10" y="4" width="20" height="40" rx="4.5" fill="#dfe2e7" stroke="currentColor" stroke-width="3.2"/><rect x="34" y="12" width="26" height="17" rx="2.5" fill="#dfe2e7" stroke="currentColor" stroke-width="3.2"/><path d="M42 34h10" stroke="currentColor" stroke-width="3.2" stroke-linecap="round"/></svg></span><h3>Android</h3><p>Phone and tablet, and Android TV or Google TV.</p><span>Download</span></a>
     </div>
-    <div class="card waitlist" id="ios">
-      <span class="dev"><svg viewBox="0 0 64 48" aria-hidden="true"><rect x="22" y="5" width="38" height="28" rx="3.5" fill="#dfe2e7" stroke="currentColor" stroke-width="3.2"/><rect x="4" y="12" width="18" height="33" rx="4" fill="#dfe2e7" stroke="currentColor" stroke-width="3.2"/><path d="M10 40h6" stroke="currentColor" stroke-width="3.2" stroke-linecap="round"/></svg></span>
-      <h3>iPhone &amp; iPad</h3>
-      <p>We&rsquo;re working on the iOS version. Join the waitlist so we know you want it.</p>
-      <form id="waitlist-form">
-        <div class="row">
-          <input type="email" name="email" id="waitlist-email" autocomplete="email" required placeholder="you@example.com" aria-label="Email address">
-          <input class="hp" type="text" name="website" tabindex="-1" autocomplete="off" aria-hidden="true">
-          <button type="submit">Join waitlist</button>
-        </div>
-        <p class="note" id="waitlist-note" aria-live="polite" hidden></p>
-        <p class="fine">We keep only your address and the date. <a href="#privacy">Privacy policy</a></p>
-      </form>
-    </div>
+    <a class="card wide" href="#get" data-platform="ios"><span class="dev"><svg viewBox="0 0 64 48" aria-hidden="true"><rect x="22" y="5" width="38" height="28" rx="3.5" fill="#dfe2e7" stroke="currentColor" stroke-width="3.2"/><rect x="4" y="12" width="18" height="33" rx="4" fill="#dfe2e7" stroke="currentColor" stroke-width="3.2"/><path d="M10 40h6" stroke="currentColor" stroke-width="3.2" stroke-linecap="round"/></svg></span><h3>iPhone &amp; iPad</h3><p>We&rsquo;re working on the iOS version. Leave your email and we&rsquo;ll write when it&rsquo;s ready.</p><span>Notify me</span></a>
   </section>
 </div>
 
@@ -146,7 +139,7 @@
       <li><em>Two Poplars in the Alpilles near Saint-R&eacute;my</em>, Vincent van Gogh, 1889. Cleveland Museum of Art.</li>
       <li><em>Low Tide at Pourville, near Dieppe</em>, Claude Monet, 1882. Cleveland Museum of Art.</li>
     </ul>
-    <p>All public domain. Device frames: MacBook and iMac from <a href="https://github.com/bunlongheng/frames">frames</a> (MIT), Pixel from Google&rsquo;s <a href="https://developer.android.com/distribute/marketing-tools/device-art-generator">device art</a>.<br><a href="#privacy">Privacy</a></p>
+    <p>All public domain. Device frames: MacBook and iMac from <a href="https://github.com/bunlongheng/frames">frames</a> (MIT), Pixel from Google&rsquo;s <a href="https://developer.android.com/distribute/marketing-tools/device-art-generator">device art</a>.<br><a href="#privacy">Privacy</a><br><a href="artpip-alternative.html">Artpip alternative</a> &middot; <a href="muzei-alternative.html">Muzei alternative</a> &middot; <a href="artpaper-alternative.html">Artpaper for Windows and Android</a></p>
   </div>
 </footer>
 
@@ -155,26 +148,26 @@
      It promises no cookies, analytics, third-party scripts or third-party
      storage, and says what the apps send: keep this page, subscribe.php and
      the apps that way, or change the policy with them. -->
-<section class="privacy" id="privacy" role="dialog" aria-modal="true" aria-labelledby="privacy-title">
+<section class="sheet privacy" id="privacy" role="dialog" aria-modal="true" aria-labelledby="privacy-title">
   <div class="pv-sheet">
     <a class="pv-close" href="#" aria-label="Close the privacy policy">Close &times;</a>
     <h1 id="privacy-title">Privacy Policy</h1>
-    <p class="date">Last updated October 1, 2026</p>
+    <p class="date">Last updated October 2, 2026</p>
 
-    <p class="lede">Art Window is an independent project within the Alps project R&amp;D hub, available at <a href="https://artwindow.alps-project.online">artwindow.alps-project.online</a>. It is operated by Horis International Limited (&ldquo;we&rdquo;, &ldquo;us&rdquo;, or &ldquo;our&rdquo;). This policy covers this website, its iPhone &amp; iPad waitlist and the Art Window apps. The main Alps project site has its own Privacy Policy.</p>
+    <p class="lede">Art Window is an independent project within the Alps project R&amp;D hub, available at <a href="https://artwindow.alps-project.online">artwindow.alps-project.online</a>. It is operated by Horis International Limited (&ldquo;we&rdquo;, &ldquo;us&rdquo;, or &ldquo;our&rdquo;). This policy covers this website, its sign-up form and the Art Window apps. The main Alps project site has its own Privacy Policy.</p>
 
     <h2><span>1</span>What We Collect</h2>
-    <p>When you join the iPhone &amp; iPad waitlist, we collect your email address and the date you signed up. We collect nothing else.</p>
+    <p>When you ask for an install link or join the iPhone &amp; iPad waitlist, we collect your email address, the platform you chose and the date you signed up. We collect nothing else.</p>
 
     <h2><span>2</span>How We Use It</h2>
-    <p>We use your email address only to tell you when Art Window comes to iPhone and iPad, and to send occasional updates about that release. Every email says how to unsubscribe. We never sell, rent, or share your address.</p>
+    <p>We use your email address only to send you the link to install Art Window on the platform you chose &mdash; or, for iPhone and iPad, to tell you when the app is out &mdash; and to send occasional updates about that release. Every email says how to unsubscribe. We never sell, rent, or share your address.</p>
     <p>Our legal basis is your consent, which you give by submitting the form. You can withdraw it at any time.</p>
 
     <h2><span>3</span>Where It Is Stored</h2>
     <p>Your email address is stored on a server we operate. We do not use any third-party email or storage service, and no one outside our team has access to it.</p>
 
     <h2><span>4</span>How Long We Keep It</h2>
-    <p>We keep your address until you unsubscribe or ask us to delete it. If the iPhone &amp; iPad app does not launch, we delete the entire list.</p>
+    <p>We keep your address until you unsubscribe or ask us to delete it. If the iPhone &amp; iPad app does not launch, we delete the addresses that asked for it.</p>
 
     <h2><span>5</span>The Apps</h2>
     <p>The Art Window apps for macOS, Windows, GNOME, Android and iOS need no account and contain no analytics, advertising, tracking or crash reporting. They send us nothing.</p>
@@ -182,13 +175,13 @@
     <p>On Android the app asks for internet access, permission to see whether the device is online, permission to set the wallpaper, and permission to start after the device restarts so the painting still changes. It asks for nothing else.</p>
 
     <h2><span>6</span>Cookies and Analytics</h2>
-    <p>This site sets no cookies and runs no analytics or third-party scripts. Our servers keep standard logs (such as IP addresses and browser types) solely for security and stable operation. App downloads are served by GitHub Releases, which has its own privacy policy.</p>
+    <p>This site sets no cookies and runs no analytics or third-party scripts. Our servers keep standard logs (such as IP addresses and browser types) solely for security and stable operation. The install link we send points to GitHub Releases, which has its own privacy policy.</p>
 
     <h2><span>7</span>Your Rights</h2>
     <p>You can ask to access, correct, delete, or receive a copy of your data, or object to how we use it. Email us at the address below and we will respond within one month. You may also complain to the data-protection authority in your country.</p>
 
     <h2><span>8</span>Children&rsquo;s Privacy</h2>
-    <p>The waitlist is not intended for children under 13 (or the applicable age in your jurisdiction). If you believe a child has signed up, contact us and we will delete the address.</p>
+    <p>The sign-up is not intended for children under 13 (or the applicable age in your jurisdiction). If you believe a child has signed up, contact us and we will delete the address.</p>
 
     <h2><span>9</span>Changes</h2>
     <p>If this policy changes, we will update the date above. If a change affects how we use your email address, we will notify you by email first.</p>
@@ -202,9 +195,36 @@
   </div>
 </section>
 
+<!-- The sign-up sheet every Download control opens: a :target sheet like the
+     privacy one. It stores the address, the date and the platform asked for
+     (subscribe.php), and the privacy policy says so. -->
+<section class="sheet get" id="get" role="dialog" aria-modal="true" aria-labelledby="get-title">
+  <div class="get-sheet">
+    <a class="pv-close" href="#" aria-label="Close">Close &times;</a>
+    <h1 id="get-title">Get Art Window</h1>
+    <p class="get-lede" id="get-lede">Leave your email and we&rsquo;ll send you a link to install the app.</p>
+    <form id="get-form" method="post" action="subscribe.php">
+      <div class="row">
+        <input type="email" name="email" id="get-email" autocomplete="email" required placeholder="you@example.com" aria-label="Email address">
+        <input class="hp" type="text" name="website" tabindex="-1" autocomplete="off" aria-hidden="true">
+        <select name="platform" id="get-platform" aria-label="Platform">
+          <option value="macos">macOS</option>
+          <option value="windows">Windows</option>
+          <option value="gnome">GNOME</option>
+          <option value="android">Android</option>
+          <option value="ios">iPhone &amp; iPad</option>
+        </select>
+        <button type="submit">Send me the link</button>
+      </div>
+      <p class="note" id="get-note" aria-live="polite" hidden></p>
+      <p class="fine">We keep only your address, the date and the platform. <a href="#privacy">Privacy policy</a></p>
+    </form>
+  </div>
+</section>
+
 <script>
 document.addEventListener("keydown", function (e) {
-  if (e.key === "Escape" && location.hash === "#privacy") location.hash = "";
+  if (e.key === "Escape" && (location.hash === "#privacy" || location.hash === "#get")) location.hash = "";
 });
 </script>
 
@@ -221,16 +241,31 @@ document.addEventListener("keydown", function (e) {
 <script>
 (function () {
   // Our own server (see HOSTING.md); a static host cannot run it.
-  var WAITLIST_ENDPOINT = 'subscribe.php';
+  var SIGNUP_ENDPOINT = 'subscribe.php';
   // A local copy plays success without sending anything.
   var DEMO_JOIN = /[?&]demo\b/.test(location.search) || location.protocol === 'file:' || /^(localhost|127\.0\.0\.1)$/.test(location.hostname);
-  var form = document.getElementById('waitlist-form');
+  var form = document.getElementById('get-form');
   if (!form) return;
-  var input = document.getElementById('waitlist-email');
-  var note = document.getElementById('waitlist-note');
+  var input = document.getElementById('get-email');
+  var select = document.getElementById('get-platform');
+  var lede = document.getElementById('get-lede');
+  var note = document.getElementById('get-note');
   var row = form.querySelector('.row');
   var button = form.querySelector('button');
 
+  function setPlatform(p) {
+    for (var i = 0; i < select.options.length; i++) {
+      if (select.options[i].value === p) { select.value = p; wording(); return; }
+    }
+  }
+  // iPhone & iPad has no app yet, so it promises a message rather than a link
+  function wording() {
+    var ios = select.value === 'ios';
+    lede.innerHTML = ios
+      ? 'The iPhone &amp; iPad app isn&rsquo;t out yet. Leave your email and we&rsquo;ll write when it&rsquo;s ready.'
+      : 'Leave your email and we&rsquo;ll send you a link to install the app.';
+    button.textContent = ios ? 'Notify me' : 'Send me the link';
+  }
   function say(text, ok) {
     note.textContent = text;
     note.className = ok ? 'note ok' : 'note';
@@ -238,19 +273,36 @@ document.addEventListener("keydown", function (e) {
   }
   function joined() {
     row.hidden = true;
-    say('You\u2019re on the list. Thank you!', true);
+    say(select.value === 'ios' ? 'Thanks \u2014 we\u2019ll write when it\u2019s ready.' : 'Thanks \u2014 we\u2019ll email you the link.', true);
   }
   function failed(text) {
     say(text, false);
     button.disabled = false;
   }
+  // the sheet just opened: offer the form again, whatever the last visit did
+  function opened() {
+    if (location.hash !== '#get') return;
+    if (row.hidden) { row.hidden = false; note.hidden = true; button.disabled = false; }
+    input.focus();
+  }
+
+  var m = /[?&]platform=([a-z]+)/.exec(location.search);
+  if (m) setPlatform(m[1]);
+  wording();
+  opened();
+
+  Array.prototype.forEach.call(document.querySelectorAll('a[data-platform]'), function (a) {
+    a.addEventListener('click', function () { setPlatform(a.getAttribute('data-platform')); });
+  });
+  window.addEventListener('hashchange', opened);
+  select.addEventListener('change', wording);
 
   form.addEventListener('submit', function (e) {
     e.preventDefault();
     if (!input.checkValidity()) { input.reportValidity(); return; }
     if (DEMO_JOIN) { joined(); return; }
     button.disabled = true;
-    fetch(WAITLIST_ENDPOINT, { method: 'POST', body: new FormData(form), headers: { Accept: 'application/json' } })
+    fetch(SIGNUP_ENDPOINT, { method: 'POST', body: new FormData(form), headers: { Accept: 'application/json' } })
       .then(function (r) {
         if (r.ok) joined();
         else if (r.status === 422) failed('That address doesn\u2019t look right.');

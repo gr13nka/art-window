@@ -550,9 +550,14 @@ never touch a derived file by hand. The menu-bar glyph is separate: ASCII art in
 
 ## The website
 
-`site/` is the landing page at artwindow.alps-project.online, plus the iPhone &
-iPad waitlist: `subscribe.php` appends the address and date to a CSV outside the
-web root, and nothing else is stored. It needs a PHP host; see `site/HOSTING.md`.
+`site/` is the landing page at artwindow.alps-project.online. **Its Download
+buttons download nothing.** Every one of them, on the comparison pages too, opens
+the `#get` sheet, which asks for an email and promises a link to install the app;
+iPhone & iPad is one more platform in the same form. `subscribe.php` appends the
+address, the date and the platform asked for to a CSV outside the web root, and
+nothing else is stored. Nothing sends the links: they go out by hand from that
+file. No page links to a release file, and putting one back ends the test the
+sheet exists for. It needs a PHP host; see `site/HOSTING.md`.
 The privacy policy is the `#privacy` sheet at the bottom of `index.html`, and it
 promises no cookies, analytics, third-party scripts or services, and apps that
 send nothing but the painting download. Adding any of those means changing the

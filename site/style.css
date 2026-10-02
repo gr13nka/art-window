@@ -224,8 +224,8 @@ footer li { margin-bottom: 6px; break-inside: avoid; }
 footer em { font-style: italic; color: var(--text); }
 footer a { color: var(--grey); text-decoration: underline; }
 
-/* ---------- the privacy sheet: hidden until #privacy is the target ---------- */
-.privacy {
+/* ---------- the sheets: hidden until #privacy or #get is the target ---------- */
+.sheet {
   display: none;
   position: fixed;
   inset: 0;
@@ -234,8 +234,8 @@ footer a { color: var(--grey); text-decoration: underline; }
   background: rgba(0, 0, 0, .4);
   -webkit-overflow-scrolling: touch;
 }
-.privacy:target { display: block; }
-body:has(.privacy:target) { overflow: hidden; }
+.sheet:target { display: block; }
+body:has(.sheet:target) { overflow: hidden; }
 .pv-sheet {
   position: relative;
   max-width: 620px;
@@ -326,24 +326,49 @@ body:has(.privacy:target) { overflow: hidden; }
 .pixel > .scr { left: 5.18%; top: 2.73%; width: 88.57%; height: 93.64%; border-radius: 4%/2%; }
 .visual .pixel.solo { width: min(62vw, 250px); }
 
-/* ---------- iPhone & iPad waitlist (not a link, so no hover) ---------- */
-.card.waitlist { margin-top: 20px; }
-.card.waitlist:hover { background: #eef0f3; }
-.waitlist p { max-width: 34em; flex: none; }
-.waitlist form { position: relative; width: 100%; }
-.waitlist .row { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; }
-.waitlist .row[hidden] { display: none; }
-.waitlist input[type="email"] {
-  flex: 1 1 220px; min-width: 0; max-width: 320px; font: inherit; font-size: 16px; padding: 10px 14px;
+/* ---------- iPhone & iPad: a fifth card, full width under the grid of four ---------- */
+.card.wide { margin-top: 20px; }
+.card.wide p { max-width: 34em; flex: none; }
+
+/* ---------- the #get sheet: a small card, not the full-height reading sheet ---------- */
+.get-sheet {
+  position: relative; max-width: 440px; margin: 12vh auto 0; padding: 40px 32px 32px;
+  background: #fff; border-radius: 18px; box-shadow: var(--shadow); text-align: center;
+}
+.get-sheet h1 { font-size: 30px; line-height: 1.15; letter-spacing: -.02em; font-weight: 600; margin: 0 0 10px; }
+.get-lede { margin: 0 0 22px; color: var(--grey); font-size: 16px; }
+.get form { position: relative; width: 100%; }
+.get .row { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; }
+.get .row[hidden] { display: none; }
+.get input[type="email"], .get select {
+  flex: 1 1 100%; min-width: 0; font: inherit; font-size: 16px; padding: 10px 14px;
   border: 1px solid var(--line); border-radius: 10px; background: #fff; color: var(--text);
 }
-.waitlist input[type="email"]:focus { outline: 2px solid var(--blue); outline-offset: 0; }
-.waitlist button {
-  background: #1d1d1f; color: #fff; border: 0; border-radius: 10px; padding: 10px 20px;
+.get input[type="email"]:focus, .get select:focus { outline: 2px solid var(--blue); outline-offset: 0; }
+.get button {
+  flex: 1 1 100%; background: #1d1d1f; color: #fff; border: 0; border-radius: 10px; padding: 11px 20px;
   font: inherit; font-size: 15px; font-weight: 600; cursor: pointer;
 }
-.waitlist button:disabled { opacity: .5; cursor: default; }
+.get button:disabled { opacity: .5; cursor: default; }
 .hp { position: absolute; left: -9999px; width: 1px; height: 1px; opacity: 0; }
-.waitlist .note { margin: 14px auto 0; font-size: 15px; color: var(--grey); }
-.waitlist .note.ok { color: var(--text); font-weight: 600; }
-.waitlist .fine { margin: 12px auto 0; font-size: 13px; color: var(--grey); }
+.get .note { margin: 14px auto 0; font-size: 15px; color: var(--grey); }
+.get .note.ok { color: var(--text); font-weight: 600; }
+.get .fine { margin: 14px auto 0; font-size: 13px; color: var(--grey); }
+@media (max-width: 480px) { .get-sheet { margin: 64px 16px 0; padding: 40px 20px 24px; } }
+
+/* ---------- comparison pages: text first, left-aligned ---------- */
+.alt { max-width: 40rem; margin: 0 auto; padding: 40px 0 0; }
+.alt h1 { font-size: clamp(32px, 6vw, 48px); margin: 0 0 16px; max-width: none; }
+.alt h2 { font-size: 22px; letter-spacing: -0.015em; margin: 40px 0 10px; }
+.alt p { margin: 0 0 16px; color: var(--grey); font-size: 18px; }
+.alt .intro { font-size: 20px; color: var(--text); }
+.alt .get { margin: 32px 0 0; color: var(--text); }
+.alt .quiet { margin: 14px 0 0; font-size: 16px; }
+.alt .checked { margin: 48px 0 0; padding-bottom: 56px; font-size: 13px; }
+.tablewrap { overflow-x: auto; margin: 32px 0 0; }
+.compare { width: 100%; border-collapse: collapse; font-size: 16px; text-align: left; }
+.compare th, .compare td { padding: 12px 12px 12px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+.compare thead th { font-size: 13px; color: var(--grey); font-weight: 600; }
+.compare tbody th { font-weight: 600; color: var(--text); width: 26%; }
+.compare td { color: var(--text); }
+@media (max-width: 720px) { .compare { font-size: 15px; } .compare th, .compare td { padding-right: 8px; } }
