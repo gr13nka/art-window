@@ -233,14 +233,14 @@ function frame(inner) {
 }
 
 var FRAMES = [
-  { l: 'A', t: '0.0 – 3.0 s', cap: 'One painting a day.',
+  { l: 'A', t: '0.0 – 3.0 s', cap: 'New picture every day.',
     pic: 'A white wall with three unframed canvases in three shapes (a wide Monet, a Vermeer, a narrow Hokusai), each carrying only its own soft shadow.',
     mot: 'A slow dolly right, like walking past. The paintings drift by at slightly different speeds, which gives a touch of parallax.',
     snd: 'Soft footsteps and a light room tone. A quiet low note as each painting passes the centre.',
     svg: function () {
       return frame(canvas('lilies', -200, 560, 300) + canvas('vermeer', 400, 470, 480) + canvas('hokusai', 900, 420, 600) +
         arrow('M 360 300 L 720 300') + note(540, 270, 'camera walks →', 'middle') +
-        caption('One painting a day.'));
+        caption('New picture every day.'));
     } },
   { l: 'B', t: '3.0 – 5.5 s', cap: 'On your desktop.',
     pic: 'The walk stops on van Gogh’s Wheat Field. A MacBook forms around it, so the painting is now its wallpaper: whole, with black either side.',
@@ -252,19 +252,19 @@ var FRAMES = [
         note(540, 460, 'canvas (dashed) becomes the wallpaper', 'middle') +
         caption('On your desktop.'));
     } },
-  { l: 'C', t: '5.5 – 8.0 s', cap: 'Never cropped.',
-    pic: 'The same laptop. The pixel glyph opens the light system menu and Next picture is highlighted. The pointer is the small 1984 arrow, the one Mac hint in this frame. A square Botticelli arrives and the black margins widen to fit it.',
-    mot: 'The pointer glides to the row, the menu closes, and the new painting arrives. For a split second it shows in 1-bit dither before settling into colour, like a picture loading on an old Mac. The margins slide wider in one easing.',
-    snd: 'A soft click on the press, a faint crackle during the dither beat, then a felt thud as the picture settles. The motif’s second note.',
+  { l: 'C', t: '5.5 – 8.0 s', cap: 'Adjust and filter as you like.',
+    pic: 'The same laptop, now with the app\u2019s Settings window open: chips for subject, artist and shape, and four placement cards. Still life and then Blur are clicked. Irises arrives whole, with blurred margins instead of black.',
+    mot: 'The camera pushes in on the window. The pointer glides to Still life, which turns blue, then to the Blur card. The window fades, the camera backs out and the new painting crossfades in.',
+    snd: 'A soft click on each press, then a felt thud as the picture settles. The motif’s second note.',
     svg: function () {
       var L = laptop(90, 520, 900, { art: 'botticelli' }), mx = L.sx + L.sw - 300, my = L.sy + L.mb + 4;
       return frame(L.svg + menu(mx, my, [['Wheat Field with Cypresses', 'dim'], ['—'], ['Next picture', 'hi'], ['Favourites…']]) +
         pointer(mx + 170, my + 62, 2.2) +
-        note(540, 460, 'margins slide wider — fit, never fill', 'middle') +
-        note(90, L.sy + L.sh + 150, 'arrives with one blink of 1-bit dither', 'start') +
-        caption('Never cropped.'));
+        note(540, 460, 'Still life, then Blur — the margins turn soft', 'middle') +
+        note(90, L.sy + L.sh + 150, 'the window fades; Irises arrives whole', 'start') +
+        caption('Adjust and filter as you like.'));
     } },
-  { l: 'D', t: '8.0 – 10.0 s', cap: 'On your phone.',
+  { l: 'D', t: '8.0 – 10.0 s', cap: 'On all your devices.',
     pic: 'A phone holding Segantini’s tall Pine Tree across its whole screen. The catalogue chose it because it is shaped like the screen. The laptop has slid back and sits out of focus behind.',
     mot: 'The phone rises on a damped spring with a slight tilt that settles, and the painting fades up from black.',
     snd: 'A low air swipe as it rises, a felt thud on landing, and the motif’s third note.',
@@ -272,26 +272,26 @@ var FRAMES = [
       var L = laptop(-160, 360, 760, { art: 'botticelli' });
       return frame('<g opacity=".5">' + L.svg + '</g>' + phone(430, 360, 400, 'segantini') +
         arrow('M 900 1100 L 900 900') + note(900, 1150, 'springs\nup', 'middle') +
-        caption('On your phone.'));
+        caption('On all your devices.'));
     } },
-  { l: 'E', t: '10.0 – 12.0 s', cap: 'And on your TV.',
+  { l: 'E', t: '10.0 – 12.0 s', cap: 'On all your devices.',
     pic: 'The family shot: a TV in art mode showing Turner’s Whalers, a GNOME laptop with Irises, the Mac and the phone, overlapping on white with soft shadows and no labels.',
     mot: 'A continuous pull back from D, with each device settling in on its own small spring, left to right.',
     snd: 'The motif loops as a quiet bass pulse, with one soft tick per device.',
     svg: function () {
       var G = laptop(40, 900, 460, { art: 'irises', os: 'gnome' }), M = laptop(520, 950, 460, { art: 'botticelli' });
       return frame(tv(120, 300, 840, 'whalers') + G.svg + M.svg + phone(430, 780, 190, 'segantini') +
-        caption('And on your TV.'));
+        caption('On all your devices.'));
     } },
   { l: 'F', t: '12.0 – 15.0 s', cap: '(end card)',
-    pic: 'White. The app’s pixel glyph in black, with a thin six-colour stripe beneath it, a nod to the 1984 poster. Then “Art Window.”, “A painting a day. Never cropped.”, a black “Download” pill, and one grey line naming the platforms.',
+    pic: 'White. The app’s pixel glyph in black, with a thin six-colour stripe beneath it, a nod to the 1984 poster. Then “Art Window.”, “A new museum painting every day.”, a black “Download” pill, and one grey line naming the platforms.',
     mot: 'The devices lift away. The glyph draws on pixel by pixel, with its sun last, landing on the final note. The stripe wipes in left to right, the words fade up and the pill presses like a key. Long hold.',
     snd: 'The motif resolves on one low chord as the sun lands, then a room-tone tail.',
     svg: function () {
       var cta = 'Download', pw = measure(cta, 34, 600) + 96;
       return frame(glyph(540 - 9 * 12, 440, 12, P.ink) + stripe(540 - 60, 640, 120, 6) +
         txt(540, 770, 'Art Window.', 84, P.ink, ' text-anchor="middle" font-weight="700" letter-spacing="-2"') +
-        txt(540, 840, 'A painting a day. Never cropped.', 36, P.soft, ' text-anchor="middle"') +
+        txt(540, 840, 'A new museum painting every day.', 36, P.soft, ' text-anchor="middle"') +
         rr(540 - pw / 2, 920, pw, 88, 44, P.ink) +
         txt(540, 964, cta, 34, '#fff', ' text-anchor="middle" dominant-baseline="central" font-weight="600"') +
         txt(540, 1070, 'macOS · Windows · GNOME · Android · TV', 26, P.soft, ' text-anchor="middle"') +

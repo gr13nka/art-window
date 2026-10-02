@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Art Window Reel</title>
-<meta name="description" content="A 14-second vertical reel for Art Window: a walk past paintings becomes a wallpaper on every screen, never cropped.">
+<meta name="description" content="A 16-second vertical reel for Art Window: a museum painting becomes the wallpaper; in Settings, Still life and the Blur style are chosen and applied, and the next painting arrives that way, on every screen.">
 <!-- THE FILM, in the landing page's world (site/): a white ground with a
      warm edge, real device frames under deep soft shadows, the dark
      translucent macOS menu and its outline menu-bar icon, and the app's own
@@ -16,9 +16,11 @@
      ONE CAMERA. The laptop is never faded in or scaled on its own: the walk
      ends on the wheat field, and the camera keeps pulling back until that
      wall is a screen with the laptop round it, the rest of the wall
-     shrinking away in the same move. For Next picture the camera moves in
-     to the menu bar first, the click happens up close, and the camera backs
-     out to show the new painting whole. A laptop pose is a focus — a point
+     shrinking away in the same move. For the settings the camera moves in
+     on the Settings window first; Still life, the Blur style and Apply changes
+     are clicked up close, each left to be seen. Only when the window has
+     closed and the camera has backed out to the old wallpaper does Irises
+     arrive, whole, its margins blurred. A laptop pose is a focus — a point
      on the laptop, where on the stage it sits, and how big — so every move
      of it is one interpolation of the same three things.
      The picture is a pure function of time — render(T) rebuilds one SVG from
@@ -73,6 +75,8 @@
         <feComponentTransfer in="o" result="s"><feFuncA type="linear" slope=".45"/></feComponentTransfer>
         <feMerge><feMergeNode in="s"/><feMergeNode in="SourceGraphic"/></feMerge>
       </filter>
+      <filter id="softenCard" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="4"/><feColorMatrix type="saturate" values="1.7"/></filter>
+      <filter id="soften" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="7"/><feColorMatrix type="saturate" values="1.7"/></filter>
       <radialGradient id="ground" cx="50%" cy="40%" r="85%">
         <stop offset=".45" stop-color="#FFFFFF"/><stop offset="1" stop-color="#F3F0E8"/>
       </radialGradient>
@@ -86,7 +90,7 @@
 </div>
 <div class="ctl">
   <button id="play" aria-label="play">▶</button>
-  <input id="scrub" type="range" min="0" max="14.52" step="0.01" value="0" aria-label="time">
+  <input id="scrub" type="range" min="0" max="16.5" step="0.01" value="0" aria-label="time">
   <span id="tc">0.00</span>
 </div>
 
@@ -199,29 +203,101 @@ function menubar(S, open) {
   s.push(txt(S.x + S.w - mb * .8, y, 'Tue 29 Sep 9:41', fs, '#fff', ' text-anchor="end" font-weight="500"'));
   return s.join('');
 }
-/* the dropdown, as on the site: dark glass, white type, the chosen row blue */
-var MENU = { w: 250, rh: 20, fs: 12.5 };
-MENU.x = ICON_AT.x + MBAR * 1.6 - MENU.w;
-MENU.y = MB.S.y + MBAR + 3;
-var ROWS = [['Wheat Field with Cypresses', 'dis'], ['Vincent van Gogh, 1889', 'small'], ['—'],
-            ['Next picture', 'next'], ['Add to favourites'], ['Favourites…'], ['—'], ['Quit Art Window']];
-var NEXT_AT = (function () {
-  var y = MENU.y + 5;
-  for (var i = 0; i < ROWS.length; i++) { if (ROWS[i][1] === 'next') break; y += ROWS[i][0] === '—' ? 9 : MENU.rh; }
-  return { x: MENU.x + MENU.w * .42, y: y + MENU.rh * .55 };
-})();
-function menu(hi) {
-  var x = MENU.x, y = MENU.y + 5, s = [], h = 10;
-  ROWS.forEach(function (r) { h += r[0] === '—' ? 9 : MENU.rh; });
-  s.push(rr(x, MENU.y, MENU.w, h, 9, '#2E2E34', ' opacity=".92" stroke="#ffffff2e" stroke-width=".8"'));
-  ROWS.forEach(function (r) {
-    if (r[0] === '—') { s.push(rr(x + 10, y + 4, MENU.w - 20, .8, 0, '#ffffff2e')); y += 9; return; }
-    if (hi && r[1] === 'next') s.push(rr(x + 5, y, MENU.w - 10, MENU.rh, 5, SELECT));
-    var fs = r[1] === 'small' ? MENU.fs * .88 : MENU.fs;
-    s.push(txt(x + 14, y + MENU.rh * .7, r[0], fs, r[1] === 'dis' || r[1] === 'small' ? '#ffffff80' : '#fff'));
-    y += MENU.rh;
+/* The Settings tab, as the macOS app draws it: the window at its minimum
+   size, 900 x 600 pt, light. Everything inside is written in points with the
+   constants of src/gallery/macos.rs and placed in the laptop's local units by
+   one scale, WIN.k. pane() is the column's layout: the blocks run top to
+   bottom, each adding the gap above itself, and it hands back the drawing and
+   the places the pointer lands, so the two can never disagree. */
+var WIN = { w: 900, h: 600, k: .72, tabX: 438, tabY: 72 };
+WIN.x = MB.S.x + (MB.S.w - WIN.w * WIN.k) / 2;
+WIN.y = MB.S.y + MBAR + (MB.S.h - MBAR - WIN.h * WIN.k) / 2;
+var HAIR = '#0000001a', WASH = '#0000000f', TRACK = '#E1E1E3', FS = 13;
+function chip(x, y, name, on, held) {
+  var w = measure(name, FS, 400) + 24, cx = x + w / 2, cy = y + 12;
+  return { w: w, svg: g((on ? rr(x, y, w, 24, 6, SELECT) : rr(x + .5, y + .5, w - 1, 23, 5.5, WASH, ' stroke="' + HAIR + '"')) +
+    txt(cx, y + 16.7, name, FS, on ? '#fff' : INK, ' text-anchor="middle"'),
+    held ? ' transform="translate(' + cx + ' ' + cy + ') scale(.96) translate(' + -cx + ' ' + -cy + ')"' : '') };
+}
+/* the segmented control (macOS 12): a grey track, the chosen segment a white pill */
+function segmented(x, y, w, names, sel, held, at) {
+  var n = names.length, sw = w / n, o = [rr(x, y, w, 24, 6, TRACK)];
+  names.forEach(function (nm, i) {
+    var sx = x + i * sw, cx = sx + sw / 2;
+    at[nm] = { x: cx, y: y + 12 };
+    if (i === sel) {
+      var pill = rr(sx + 1.5, y + 1.5, sw - 3, 21, 5, '#fff', ' stroke="#0000001f" stroke-width=".7"');
+      o.push(g(rr(sx + 1.5, y + 2.3, sw - 3, 21, 5, '#0000001a') + pill,
+        held === nm ? ' transform="translate(' + cx + ' ' + (y + 12) + ') scale(.96) translate(' + -cx + ' ' + -(y + 12) + ')"' : ''));
+    } else if (i > 0 && i - 1 !== sel) o.push(rr(sx - .4, y + 6, .8, 12, 0, '#0000002e'));
+    o.push(txt(cx, y + 16.7, nm, FS, INK, ' text-anchor="middle"'));
   });
-  return g(s.join(''), ' filter="url(#menuShadow)"');
+  return o.join('');
+}
+/* st: still (Still life chosen), blur (the Blur style staged), held (the id being pressed) */
+function pane(st) {
+  var o = [], at = {}, y = 24, n = 0, X = WIN.tabX, T = WIN.tabY, vx = X + 24 + 72 + 12, vw = 330;
+  function label(s, top, h) { o.push(txt(X + 24, T + top + h / 2 + 4.6, s, FS, GREY)); }
+  function section(s) {
+    if (n++ > 0) y += 24;
+    y -= 4; o.push(txt(X + 24, T + y + 15, s, 15, INK, ' font-weight="600"')); y += 20;
+  }
+  function divider() { y += 24; o.push(rr(X + 24, T + y, 414, 1, 0, HAIR)); y += 1; n++; }
+  function chips(name, names, chosen, wraps) {
+    y += 12; var top = y, x = 0, row = 0;
+    names.forEach(function (nm) {
+      var c = chip(0, 0, nm, chosen.indexOf(nm) >= 0, st.held === nm);
+      if (wraps && x > 0 && x + c.w > vw) { x = 0; y += row + 8; row = 0; }
+      var ch = chip(vx + x, T + y, nm, chosen.indexOf(nm) >= 0, st.held === nm);
+      at[nm] = { x: vx + x + ch.w / 2, y: T + y + 12 };
+      o.push(ch.svg); x += ch.w + 8; row = 24;
+    });
+    y += row; label(name, top, 24);
+  }
+  function custom(name, h, draw) { y += 12; var top = y; draw(T + y); y += h; label(name, top, h); }
+  section('Wallpaper');
+  custom('Placement', 24, function (yy) { o.push(segmented(vx, yy, 280, ['Borders', 'Zoom', 'Stretch', 'Blur'], st.blur ? 3 : 0, st.held, at)); });
+  if (st.blur) {
+    chips('Mode', ['Behind the picture', 'Whole picture'], ['Behind the picture']);
+    custom('Strength', 20, function (yy) {
+      o.push(rr(vx, yy + 8.5, 200, 3, 1.5, '#0000001f'), rr(vx, yy + 8.5, 112, 3, 1.5, SELECT),
+        '<circle cx="' + (vx + 112) + '" cy="' + (yy + 10) + '" r="8" fill="#fff" stroke="#00000026" stroke-width=".7"/>');
+    });
+  } else chips('Borders', ['Black', 'Automatic', 'Custom'], ['Black']);
+  divider();
+  section('Painting filters');
+  chips('Shape', ['Screen-shaped', 'Near square', 'Any shape'], ['Any shape']);
+  chips('Origin', ['Europe', 'Asia', 'Africa', 'North America', 'South America', 'Oceania'], [], true);
+  chips('Subject', ['Landscape', 'Seascape', 'Still life'], st.still ? ['Landscape', 'Still life'] : ['Landscape']);
+  chips('Artist', ['Any artist'], []);
+  custom('Content', 18, function (yy) {
+    o.push(rr(vx + .5, yy + 2.5, 13, 13, 3, '#fff', ' stroke="#0000003a"'), txt(vx + 22, yy + 14, 'Hide religious scenes', FS, INK));
+  });
+  return { svg: o.join(''), at: at, bottom: T + y };
+}
+var STILL_AT = (function () { var a = pane({ blur: false }).at['Still life']; return { x: WIN.x + WIN.k * a.x, y: WIN.y + WIN.k * a.y }; })();
+var BLUR_AT = (function () { var a = pane({ blur: false }).at['Blur']; return { x: WIN.x + WIN.k * a.x, y: WIN.y + WIN.k * a.y }; })();
+/* the Apply changes button, in window points, and where the pointer lands on it */
+var APPLY_AT = { wx: WIN.w - 24 - 60, wy: WIN.h - 64 + 32 };
+APPLY_AT.x = WIN.x + WIN.k * APPLY_AT.wx; APPLY_AT.y = WIN.y + WIN.k * APPLY_AT.wy;
+/* the window; st: op (arrival, 0..1), still, blur, held */
+function panel(st) {
+  var s = [], R = { x: 24, y: WIN.tabY + 24, w: 414, h: 414 / 1.6 }, bar = WIN.h - 64, held = st.held;
+  s.push(rr(0, 0, WIN.w, WIN.h, 10, '#ECECEC', ' stroke="#0000002e" stroke-width=".8"'));
+  ['#FF5F57', '#FEBC2E', '#28C840'].forEach(function (c, i) { s.push('<circle cx="' + (20 + i * 20) + '" cy="14" r="6" fill="' + c + '"/>'); });
+  var seg = {}; s.push(segmented(WIN.w / 2 - 110, 38, 220, ['Favourites', 'Settings'], 1, null, seg));
+  /* the preview hangs the wheat field as the staged style would */
+  var art = st.blur ? blurArt('wheat', 'softenCard')(R) : rr(R.x, R.y, R.w, R.h, 0, '#000') + pic('wheat', fit('wheat', R));
+  s.push(clipTo(R, art, 10), rr(R.x + .5, R.y + .5, R.w - 1, R.h - 1, 9.5, 'none', ' stroke="#0000003a"'));
+  s.push(pane({ still: st.still, blur: st.blur, held: held }).svg);
+  s.push(rr(0, bar, WIN.w, 1, 0, HAIR));
+  /* the app's note beside the buttons is left out: up close the frame cuts it in half */
+  s.push(rr(WIN.w - 24 - 248 + .5, bar + 21.5, 119, 21, 5.5, '#fff', ' stroke="#0000002a"'), txt(WIN.w - 24 - 248 + 60, bar + 36.2, 'Next picture', FS, INK, ' text-anchor="middle"'),
+         g(rr(WIN.w - 24 - 120, bar + 21, 120, 22, 6, held === 'Apply' ? '#064FCC' : SELECT) + txt(WIN.w - 24 - 60, bar + 36.2, 'Apply changes', FS, '#fff', ' text-anchor="middle"'),
+           held === 'Apply' ? ' transform="translate(' + APPLY_AT.wx + ' ' + APPLY_AT.wy + ') scale(.96) translate(' + -APPLY_AT.wx + ' ' + -APPLY_AT.wy + ')"' : ''));
+  var cx = WIN.x + WIN.w * WIN.k / 2, cy = WIN.y + WIN.h * WIN.k / 2, k = lerp(.96, 1, st.op);
+  return g(g(g(s.join(''), ' transform="translate(' + WIN.x + ' ' + WIN.y + ') scale(' + WIN.k + ')"'), ' filter="url(#menuShadow)"'),
+    ' opacity="' + st.op + '" transform="translate(' + cx + ' ' + cy + ') scale(' + k + ') translate(' + -cx + ' ' + -cy + ')"');
 }
 /* today's arrow pointer, in the laptop's own units so it zooms with it */
 function pointer(x, y, op) {
@@ -231,7 +307,7 @@ function pointer(x, y, op) {
 
 /* The laptop. o.art: a painting name, or a function of the screen rect;
    o.shell: how far the laptop has arrived round its wallpaper (0..1);
-   o.bar: 'mac' | 'gnome'; o.menu: null | {hi}; o.pointer: {x, y, op}. */
+   o.bar: 'mac' | 'gnome'; o.panel: null | the panel's state; o.pointer: {x, y, op}. */
 function laptop(p, o) {
   var S = MB.S, sh = o.shell == null ? 1 : o.shell, s = [];
   var wall = typeof o.art === 'function' ? o.art(S) : pic(o.art, fit(o.art, S));
@@ -243,9 +319,9 @@ function laptop(p, o) {
   s.push(rr(S.x, S.y, S.w, S.h, 0, '#000', ' opacity="' + sh + '"'), clipTo(S, wall));
   var bar = o.bar === 'gnome'
     ? rr(S.x, S.y, S.w, MBAR, 0, '#000') + txt(S.x + S.w / 2, S.y + MBAR * .7, 'Tue 09:41', MBAR * .56, '#fff', ' text-anchor="middle" font-weight="600"')
-    : menubar(S, !!o.menu);
+    : menubar(S, !!o.panel);
   s.push(g(bar + frameOf(MB), ' opacity="' + sh + '"'));
-  if (o.menu) s.push(menu(o.menu.hi));
+  if (o.panel) s.push(panel(o.panel));
   if (o.pointer && o.pointer.op > 0) s.push(pointer(o.pointer.x, o.pointer.y, o.pointer.op));
   return g(s.join(''), poseT(p) + (o.opacity != null ? ' opacity="' + o.opacity + '"' : ''));
 }
@@ -259,17 +335,22 @@ function tvUnit(name) {
   return rr(-8, -8, 1016, 578.5, 7, 'url(#rim)') + rr(0, 0, 1000, 562.5, 1, '#000') + pic(name, fit(name, S));
 }
 
-/* --- captions: one bold line, words rising in -------------------------- */
-var CAPS = C.captions;
+/* --- captions: one bold line, words rising in; a line too long for the
+   safe width breaks in two and starts a line higher ---------------------- */
+var CAPS = C.captions, CAP_W = 854, CAP_LEAD = 80;
 function caption(T, a, b, line) {
   if (T < a || T > b) return '';
-  var out = ph(T, b - .25, b), x = 96, o = [];
-  line.split(' ').forEach(function (w, i) {
-    var k = eo(ph(T, a + i * .07, a + i * .07 + .38));
-    o.push(txt(x, 1420 + Math.round((1 - k) * 26), w, 68, INK, ' font-weight="700" letter-spacing="-1.5" opacity="' + (k * (1 - out)) + '"'));
+  var out = ph(T, b - .25, b), x = 0, row = 0, at = [];
+  line.split(' ').forEach(function (w) {
+    var ww = measure(w, 68, 700, -1.5);
+    if (x > 0 && x + ww > CAP_W) { x = 0; row++; }
+    at.push({ w: w, x: x, row: row });
     x += measure(w + ' ', 68, 700, -1.5);
   });
-  return o.join('');
+  return at.map(function (p, i) {
+    var k = eo(ph(T, a + i * .07, a + i * .07 + .38)), y = 1420 - (row - p.row) * CAP_LEAD;
+    return txt(96 + p.x, y + Math.round((1 - k) * 26), p.w, 68, INK, ' font-weight="700" letter-spacing="-1.5" opacity="' + (k * (1 - out)) + '"');
+  }).join('');
 }
 
 /* --- the camera on the laptop ------------------------------------------ */
@@ -277,8 +358,9 @@ var HOME = { f: { x: MB.S.x + MB.S.w / 2, y: MB.S.y + MB.S.h / 2 }, P: { x: 540,
 /* on the wall the wheat field is as tall as the paintings before it, so
    the pull-back starts that much closer */
 var WALL_H = C.walk[0].h, FAR = HOME.s * WALL_H / fit('wheat', MB.S).h;
-/* up close for the menu: the icon and the dropdown across the frame */
-var MENUF = { f: { x: MENU.x + MENU.w * .5, y: MB.S.y + 62 }, P: { x: 560, y: 820 }, s: 2.3 };
+/* up close for the settings: the right-hand column fills the frame's width and
+   the preview goes off to the left */
+var PANELF = { f: { x: WIN.x + WIN.k * 669, y: WIN.y + WIN.k * 330 }, P: { x: 540, y: 960 }, s: 2.9 };
 function between(a, b, k) {
   return focusPose({ x: lerp(a.f.x, b.f.x, k), y: lerp(a.f.y, b.f.y, k) },
                    { x: lerp(a.P.x, b.P.x, k), y: lerp(a.P.y, b.P.y, k) }, lerpScale(a.s, b.s, k));
@@ -326,14 +408,24 @@ function lapCam(T) {
     return { x: p.x + walkOff(T) * z, y: p.y, s: p.s };
   }
   var k = eio(ph(T, C.pushIn[0], C.pushIn[1])) * (1 - eio(ph(T, C.pullOut[0], C.pullOut[1])));
-  return between(HOME, MENUF, k);
+  return between(HOME, PANELF, k);
 }
 
 /* --- C: what is on the screen -------------------------------------------- */
+/* the app's Blur style: the painting enlarged to fill the screen and softened,
+   the whole painting on top. The fill is overscanned so the blur never
+   thins out at the screen's edge. */
+function blurArt(name, filter) {
+  return function (S) {
+    var f = fill(name, S), m = 1.1;
+    f = { x: f.x - f.w * (m - 1) / 2, y: f.y - f.h * (m - 1) / 2, w: f.w * m, h: f.h * m };
+    return g(pic(name, f), ' filter="url(#' + (filter || 'soften') + ')"') + pic(name, fit(name, S));
+  };
+}
 function swapArt(T) {
   return function (S) {
     var k = eio(ph(T, C.swap[0], C.swap[1]));
-    return pic('wheat', fit('wheat', S), ' opacity="' + (1 - k) + '"') + pic('arlesienne', fit('arlesienne', S), ' opacity="' + k + '"');
+    return pic('wheat', fit('wheat', S), ' opacity="' + (1 - k) + '"') + g(blurArt('irises')(S), ' opacity="' + k + '"');
   };
 }
 
@@ -356,16 +448,21 @@ function render(T) {
   /* B and C: the laptop, under the one camera */
   else if (T < C.laptopBack[0]) {
     if (T < C.pull[1]) o.push(wall(T, false));
-    var open = T >= C.menuOpen && T < C.menuClose, blink = T >= C.press + .04 && T < C.press + .1;
-    var p1 = eio(ph(T, C.pointerIn[0], C.pointerIn[1])), p2 = eio(ph(T, C.toRow[0], C.toRow[1]));
-    var start = { x: ICON_AT.x + 60, y: MB.S.y + 150 };
-    var px = lerp(lerp(start.x, ICON_AT.x, p1), NEXT_AT.x, p2), py = lerp(lerp(start.y, ICON_AT.y, p1), NEXT_AT.y, p2);
-    var away = eo(ph(T, C.menuClose, C.menuClose + .3));
+    var shown = T >= C.panelIn && T < C.panelOut + .25;
+    var click = function (c) { return T >= c + .04 && T < c + .1; };
+    var held = click(C.chip) ? 'Still life' : click(C.style) ? 'Blur' : click(C.apply) ? 'Apply' : null;
+    var p1 = eio(ph(T, C.toChip[0], C.toChip[1])), p2 = eio(ph(T, C.toStyle[0], C.toStyle[1])), p3 = eio(ph(T, C.toApply[0], C.toApply[1]));
+    var start = { x: WIN.x + WIN.k * 800, y: WIN.y + WIN.k * 470 };
+    /* the pointer rests on what it clicked until the next glide begins */
+    var px = lerp(lerp(lerp(start.x, STILL_AT.x, p1), BLUR_AT.x, p2), APPLY_AT.x, p3);
+    var py = lerp(lerp(lerp(start.y, STILL_AT.y, p1), BLUR_AT.y, p2), APPLY_AT.y, p3);
+    var away = eo(ph(T, C.panelOut, C.panelOut + .3));
     o.push(laptop(lapCam(T), {
       art: T < C.swap[0] ? 'wheat' : swapArt(T),
       shell: eo(ph(T, C.shell[0], C.shell[1])),
-      menu: open ? { hi: T >= C.toRow[1] - .05 && !blink } : null,
-      pointer: T >= C.pointerIn[0] ? { x: px + away * 8, y: py + away * 10, op: (1 - away) * ph(T, C.pointerIn[0], C.pointerIn[0] + .1) } : null
+      panel: shown ? { op: eo(ph(T, C.panelIn, C.panelIn + .25)) * (1 - eo(ph(T, C.panelOut, C.panelOut + .25))),
+                    still: T >= C.chip, blur: T >= C.style, held: held } : null,
+      pointer: T >= C.toChip[0] ? { x: px + away * 8, y: py + away * 10, op: (1 - away) * ph(T, C.toChip[0], C.toChip[0] + .1) } : null
     }));
   }
 
@@ -380,12 +477,12 @@ function render(T) {
     /* devices slide in solid; a half-faded dark screen reads as a ghost */
     if (kt > 0) { var a = up({ x: TVP.x, y: lerp(-700, TVP.y, kt), s: TVP.s }, 0); o.push(device(a.p, tvUnit('harvesters'), ' opacity="' + a.o + '"')); }
     var kg = eo(ph(T, f.gnome - .35, f.gnome + .158));
-    if (kg > 0) { var b = up({ x: lerp(-560, LG.x, kg), y: LG.y, s: LG.s }, 1); o.push(laptop(b.p, { art: 'irises', bar: 'gnome', opacity: b.o })); }
+    if (kg > 0) { var b = up({ x: lerp(-560, LG.x, kg), y: LG.y, s: LG.s }, 1); o.push(laptop(b.p, { art: 'arlesienne', bar: 'gnome', opacity: b.o })); }
 
     /* the Mac: out to the left in D, back from the right in E */
     var km = eo(ph(T, f.mac - .45, f.mac + .158));
-    if (kd < 1) o.push(laptop(lp(lapCam(C.pullOut[1]), LOUT, kd), { art: 'arlesienne', opacity: 1 - kd }));
-    if (km > 0) { var c = up(lp(LIN, LM, km), 3); o.push(laptop(c.p, { art: 'arlesienne', opacity: c.o })); }
+    if (kd < 1) o.push(laptop(lp(lapCam(C.pullOut[1]), LOUT, kd), { art: blurArt('irises'), opacity: 1 - kd }));
+    if (km > 0) { var c = up(lp(LIN, LM, km), 3); o.push(laptop(c.p, { art: blurArt('irises'), opacity: c.o })); }
 
     /* the phone: straight up from below, a small settle, no rotation;
        later it steps back into the family */
@@ -404,7 +501,7 @@ function render(T) {
     var rise2 = function (a) { var k = eo(ph(T, a, a + .45)); return { y: Math.round((1 - k) * 22), o: k }; };
     var w1 = rise2(C.word), w2 = rise2(C.sub), w3 = rise2(C.platforms), kq = eo(ph(T, C.pill, C.pill + .4));
     o.push(txt(540, 790 + w1.y, 'Art Window', 88, INK, ' text-anchor="middle" font-weight="700" letter-spacing="-2.5" opacity="' + w1.o + '"'));
-    o.push(txt(540, 856 + w2.y, 'A new painting every day.', 38, GREY, ' text-anchor="middle" opacity="' + w2.o + '"'));
+    o.push(txt(540, 856 + w2.y, 'A new museum painting every day.', 38, GREY, ' text-anchor="middle" opacity="' + w2.o + '"'));
     var cta = 'Download', pw = measure(cta, 34, 600) + 100;
     var press = T >= C.pillPress ? Math.sin(Math.PI * ph(T, C.pillPress, C.pillPress + .2)) : 0, pc = lerp(.92, 1, kq) - .05 * press;
     o.push(g(rr(540 - pw / 2, 930, pw, 88, 44, BLUE) +

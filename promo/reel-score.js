@@ -1,6 +1,6 @@
 "use strict";
 /* =============================================================================
-   SCORE — the Art Window reel's soundtrack (14.5 s).
+   SCORE — the Art Window reel's soundtrack (16.5 s).
 
    Sound design, not music: the language of a rendered product demo. No
    melody at all. Under everything, an ambient bed — a low A drone, a band
@@ -10,7 +10,7 @@
        wall, every push-in and pull-out, panned the way things travel;
      - a riser builds under every reveal and resolves into a soft sub impact
        as the thing lands: the laptop, the phone, the icon;
-     - one quiet shimmer, and only one: as the icon lands;
+     - one soft, low bloom of tone, and only one: as the icon lands;
      - small, precise clicks for the menu, and a soft thock for each device
        taking its place in the family;
      - under it all a soft pulse at about 91 bpm, a muted clock the cuts land on,
@@ -127,21 +127,23 @@ function impact(ctx, dry, room, t, size) {
   ng.gain.exponentialRampToValueAtTime(0.0001, t + 1.2);
   s.connect(lp); lp.connect(ng); ng.connect(room); s.start(t); s.stop(t + 1.4);
 }
-/* A picture materialising: a scatter of quiet, high, clean tones from the
-   A-major overtone set, each a soft ping, spread across the stereo field.
-   Used once, for the icon: more than that reads as a jingle. */
-var SHIMMER = [880, 1108.7, 1318.5, 1760, 2217.5, 2637];
-function shimmer(ctx, out, t, dur, amp, seed) {
-  var rnd = mulberry32(seed), n = Math.round(8 + dur * 8);
-  for (var i = 0; i < n; i++) {
-    var at = t + Math.pow(rnd(), 1.6) * dur * 0.6, f = SHIMMER[Math.floor(rnd() * SHIMMER.length)];
-    var len = 0.5 + rnd() * 1.1, o = ctx.createOscillator(), g = ctx.createGain(), p = panner(ctx, rnd() * 1.4 - 0.7);
-    o.type = 'sine'; o.frequency.value = f * (1 + (rnd() - 0.5) * 0.004);
+/* The icon settling: a few low, round tones from the A-major set that swell
+   in slowly rather than ping, and ring out through the room. Nothing above
+   the A below middle C's octave — high, fast pings here read as a jingle.
+   Used once. */
+var BLOOM = [220, 277.2, 329.6, 440];
+function bloom(ctx, out, t, dur, amp, seed) {
+  var rnd = mulberry32(seed), lp = biq(ctx, 'lowpass', 1200, 0.5);
+  lp.connect(out);
+  BLOOM.forEach(function (f, i) {
+    var at = t + i * 0.09, rise = 0.28 + rnd() * 0.2, o = ctx.createOscillator(), g = ctx.createGain();
+    var p = panner(ctx, (i / (BLOOM.length - 1) - 0.5) * 0.8);
+    o.type = 'sine'; o.frequency.value = f * (1 + (rnd() - 0.5) * 0.003);
     g.gain.setValueAtTime(0.0001, at);
-    g.gain.linearRampToValueAtTime(amp * (0.4 + rnd() * 0.6) / Math.sqrt(n), at + 0.008);
-    g.gain.exponentialRampToValueAtTime(0.0001, at + len);
-    o.connect(g); g.connect(p); p.connect(out); o.start(at); o.stop(at + len + 0.05);
-  }
+    g.gain.exponentialRampToValueAtTime(amp / (i + 2), at + rise);
+    g.gain.exponentialRampToValueAtTime(0.0001, at + dur);
+    o.connect(g); g.connect(p); p.connect(lp); o.start(at); o.stop(at + dur + 0.05);
+  });
 }
 /* A precise interface click: a very short band of noise and a tiny blip. */
 function uiClick(ctx, out, t, f, amp, seed) {
@@ -273,7 +275,7 @@ function buildMaster(ctx, dest, t0) {
     sub: bus(0.55, 0.08),      /* impacts' low end: almost dry */
     room: bus(0.2, 0.9),       /* what the room carries on */
     ui: bus(0.28, 0.12),       /* clicks and thocks: close and dry */
-    shine: bus(0.35, 0.9),     /* shimmers: mostly reverb */
+    shine: bus(0.35, 0.9),     /* the bloom: mostly reverb */
     bed: bus(0.16, 0.5),
     beat: bus(0.5, 0.06)       /* the pulse: dry, up front */
   };
@@ -301,10 +303,11 @@ function build(ctx, dest, t0, from) {
   });
   at(C.formThud, function (tt) { impact(ctx, M.sub, M.room, tt, 1); });
 
-  /* C: in, click, click, out — the new picture settles on the way out */
+  /* C: in, click, click, click, out — the new picture settles on the way out */
   at(C.pushIn[0], function (tt) { whoosh(ctx, M.fx, tt, C.pushIn[1] - C.pushIn[0], 0.3, -0.15, 0.2, 250, 1600, 40); });
-  at(C.menuOpen - 0.01, function (tt) { uiClick(ctx, M.ui, tt, 1150, 0.5, 41); });
-  at(C.press, function (tt) { uiClick(ctx, M.ui, tt, 950, 0.55, 42); });
+  at(C.chip - 0.01, function (tt) { uiClick(ctx, M.ui, tt, 1150, 0.5, 41); });
+  at(C.style, function (tt) { uiClick(ctx, M.ui, tt, 950, 0.55, 42); });
+  at(C.apply, function (tt) { uiClick(ctx, M.ui, tt, 1050, 0.55, 44); });
   at(C.pullOut[0], function (tt) { whoosh(ctx, M.fx, tt, C.pullOut[1] - C.pullOut[0], 0.3, 0.2, -0.1, 220, 1200, 43); });
   at(C.swap[1], function (tt) { impact(ctx, M.sub, M.room, tt, 0.35); });
 
@@ -322,8 +325,8 @@ function build(ctx, dest, t0, from) {
 
   /* F: everything lifts away, and the icon lands */
   at(C.lift[0], function (tt) { whoosh(ctx, M.fx, tt, 0.54, 0.3, 0, 0, 300, 2000, 70); });
-  at(C.iconIn[0] - 0.2, function (tt) { riser(ctx, M.fx, tt, C.sun - C.iconIn[0] + 0.2, 0.45, 71); });
-  at(C.sun, function (tt) { impact(ctx, M.sub, M.room, tt, 1.15); shimmer(ctx, M.shine, tt, 2, 0.7, 72); });
+  at(C.iconIn[0] - 0.2, function (tt) { riser(ctx, M.fx, tt, C.sun - C.iconIn[0] + 0.2, 0.3, 71); });
+  at(C.sun, function (tt) { impact(ctx, M.sub, M.room, tt, 1.15); bloom(ctx, M.shine, tt, 2.8, 0.5, 72); });
   at(C.pillPress, function (tt) { uiClick(ctx, M.ui, tt, 1000, 0.45, 73); });
   return M;
 }
