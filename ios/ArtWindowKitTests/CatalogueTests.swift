@@ -131,11 +131,20 @@ final class CatalogueTests: XCTestCase {
         XCTAssertEqual(Set(c.matching(filters(), screen: screen, style: borders).map(\.objectId)), ["tall", "wide"])
     }
 
+    /// `n` unremarkable Landscape paintings from one region, by one artist when named.
+    private func bulk(_ n: Int, _ region: String, artist: String? = nil, title: String = "Landscape", tags: String = "") -> [String] {
+        (0..<n).map { row("wmc", "\(region)-\(artist ?? "x")-\(title)-\($0)", region, title: title, tags: tags, artist: artist) }
+    }
+
+    private func bulkCatalogue(_ rows: [String]...) -> Catalogue {
+        Catalogue(tsv: rows.flatMap { $0 }.joined(separator: "\n"))
+    }
+
     func testAvailabilityHoldsOtherSectionsFixed() {
-        let c = catalogue(
-            row("met", "1", "EUROPE", title: "Landscape", artist: nil),
-            row("wmc", "2", "ASIA", title: "Seascape", artist: "Hokusai"),
-            row("wmc", "3", "AFRICA", title: "Still Life", artist: "Anon")
+        let c = bulkCatalogue(
+            bulk(Catalogue.minPool, "EUROPE", title: "Landscape"),
+            bulk(Catalogue.minPool, "ASIA", artist: "Hokusai", title: "Seascape"),
+            bulk(Catalogue.minPool, "AFRICA", artist: "Anon", title: "Still Life")
         )
         let f = filters(regions: [.europe], subjects: [.landscape])
         // Region chips are asked with Origins lifted, Subjects held at Landscape.
@@ -143,10 +152,45 @@ final class CatalogueTests: XCTestCase {
         XCTAssertEqual(c.availableRegions(filters(subjects: [.seascape]), screen: screen, style: style), [.asia])
         XCTAssertEqual(c.availableSubjects(filters(regions: [.asia]), screen: screen, style: style), [.seascape])
         XCTAssertEqual(c.availableSubjects(filters(), screen: screen, style: style), Set(ArtworkSubject.allCases))
-        XCTAssertEqual(c.availableArtists(filters(regions: [.asia]), screen: screen, style: style), ["Hokusai"])
+        XCTAssertEqual(c.availableArtists(filters(regions: [.asia]), screen: screen, style: style), ["Hokusai", "Anon"])
         XCTAssertEqual(c.artists(), ["Anon", "Hokusai"])
-        XCTAssertTrue(c.anyMatch(f, screen: screen, style: style))
-        XCTAssertFalse(c.anyMatch(filters(regions: [.oceania]), screen: screen, style: style))
+        XCTAssertTrue(c.hasEnough(f, screen: screen, style: style))
+        XCTAssertFalse(c.hasEnough(filters(regions: [.oceania]), screen: screen, style: style))
+        XCTAssertEqual(c.matchCount(f, screen: screen, style: style), Catalogue.minPool)
+    }
+
+    func testARegionNeedsTheFloorButAPainterOnlyOnePainting() {
+        for (n, available) in [(Catalogue.minPool - 1, false), (Catalogue.minPool, true)] {
+            let c = bulkCatalogue(
+                bulk(Catalogue.minPool, "EUROPE", artist: "Turner"),
+                bulk(n, "ASIA", artist: "Hokusai")
+            )
+            XCTAssertEqual(c.availableRegions(filters(), screen: screen, style: style).contains(.asia), available)
+            // A painter needs one painting, not the floor: choosing them lifts the floor.
+            XCTAssertTrue(c.availableArtists(filters(), screen: screen, style: style).contains("Hokusai"))
+            XCTAssertEqual(c.hasEnough(filters(regions: [.asia]), screen: screen, style: style), available)
+        }
+    }
+
+    func testWideningRelaxesOnlyWhatItMust() {
+        let c = bulkCatalogue(
+            bulk(Catalogue.minPool, "EUROPE"),
+            bulk(Catalogue.minPool - 1, "ASIA", artist: "Hokusai")
+        )
+        // Adequate filters are left alone.
+        let adequate = filters(regions: [.europe], subjects: [.landscape])
+        XCTAssertEqual(c.widened(adequate, screen: screen, style: style), adequate)
+        // Asia alone is thin and Origins is the one section that cures it; the subject stays.
+        let thin = filters(regions: [.asia], subjects: [.landscape])
+        let wide = c.widened(thin, screen: screen, style: style)
+        XCTAssertTrue(wide.regions.isEmpty)
+        XCTAssertEqual(wide.subjects, [.landscape])
+    }
+
+    func testWideningGivesUpWhenNothingCures() {
+        let c = bulkCatalogue(bulk(Catalogue.minPool - 1, "EUROPE"))
+        let f = filters(regions: [.asia], subjects: [.landscape])
+        XCTAssertEqual(c.widened(f, screen: screen, style: style), f)
     }
 
     func testArtistsFilterAndFreshInstallDefaults() {

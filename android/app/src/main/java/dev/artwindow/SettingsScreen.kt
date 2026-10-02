@@ -40,15 +40,18 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -81,6 +84,7 @@ fun SettingsScreen(
     artwork: Artwork?,
     screen: Screen,
     preferences: WallpaperPreferences,
+    savedPreferences: WallpaperPreferences,
     onPreferencesChange: (WallpaperPreferences) -> Unit,
     onChoicesAvailable: (Boolean) -> Unit = {},
 ) {
@@ -90,6 +94,21 @@ fun SettingsScreen(
     val path = artwork?.path?.takeIf(File::isFile)
     val previewScreen = remember(screen) {
         Screen(PREVIEW_WIDTH, (PREVIEW_WIDTH / screen.aspectRatio).roundToInt())
+    }
+
+    // On a phone the sharp painting is framed — pinched and dragged — in a preview made of two
+    // layers: what lies under it (Blur's backdrop, the border colour), rendered through the
+    // renderer and redone only when a style option changes, and the painting itself, decoded
+    // once and placed by Compose. A gesture then changes numbers and nothing is re-rendered.
+    val framed = preferences.framesSharpPicture() && !screen.isLandscape && !context.isTelevision()
+    var sharp by remember { mutableStateOf<Bitmap?>(null) }
+    val currentPreferences by rememberUpdatedState(preferences)
+    val configuration = LocalConfiguration.current
+    // Tall enough to have something to pinch, within the width there is; a TV keeps a small one.
+    val previewWidth = if (screen.isLandscape) {
+        150.dp
+    } else {
+        minOf((configuration.screenHeightDp * PREVIEW_HEIGHT_SHARE * screen.aspectRatio.toFloat()).dp, (configuration.screenWidthDp - 40).dp)
     }
 
     // Which options each section can actually offer, computed off the main thread
@@ -105,12 +124,23 @@ fun SettingsScreen(
     var allArtists by remember { mutableStateOf<List<String>>(emptyList()) }
     var availableRegions by remember { mutableStateOf(ArtworkRegion.entries.toSet()) }
     var availableSubjects by remember { mutableStateOf(ArtworkSubject.entries.toSet()) }
-    var availableArtists by remember { mutableStateOf<Set<String>>(emptySet()) }
-    var nothingMatches by remember { mutableStateOf(false) }
+    var artistBlocks by remember { mutableStateOf<Map<String, ArtistBlock>>(emptyMap()) }
+    // What the artist browser shows: who it can show, and how many paintings each has.
+    var painters by remember { mutableStateOf<List<Artists.Painter>>(emptyList()) }
+    var paintingCounts by remember { mutableStateOf<Map<String, Int>>(emptyMap()) }
+    var browsing by rememberSaveable { mutableStateOf(false) }
+    // Null while the staged filters leave a pool worth rotating through; otherwise how
+    // many paintings they do leave.
+    var tooFew by remember { mutableStateOf<Int?>(null) }
     LaunchedEffect(Unit) {
         val loaded = withContext(Dispatchers.Default) { Catalogue.load(context) }
         catalogue = loaded
         allArtists = withContext(Dispatchers.Default) { loaded.artists() }
+        withContext(Dispatchers.Default) {
+            // A missing or unreadable index leaves the browser empty, never Settings broken.
+            painters = runCatching { Artists.load(context).among(allArtists) }.getOrDefault(emptyList())
+            paintingCounts = allArtists.associateWith { loaded.paintingsBy(it) }
+        }
     }
     LaunchedEffect(
         catalogue,
@@ -119,19 +149,25 @@ fun SettingsScreen(
         preferences.artworkArtists,
         preferences.artworkShape,
         preferences.hideReligious,
+        preferences.rotateWide,
+        preferences.style,
+        preferences.blurVariant,
+        savedPreferences,
         screen,
     ) {
         val loaded = catalogue ?: return@LaunchedEffect
         availableRegions = withContext(Dispatchers.Default) { loaded.availableRegions(preferences, screen) }
         availableSubjects = withContext(Dispatchers.Default) { loaded.availableSubjects(preferences, screen) }
-        availableArtists = withContext(Dispatchers.Default) { loaded.availableArtists(preferences, screen) }
-        nothingMatches = withContext(Dispatchers.Default) { !loaded.anyMatch(preferences, screen) }
-    }
-    LaunchedEffect(nothingMatches) {
-        onChoicesAvailable(!nothingMatches)
+        artistBlocks = withContext(Dispatchers.Default) { loaded.artistBlocks(preferences, screen) }
+        tooFew = withContext(Dispatchers.Default) {
+            if (loaded.hasEnough(preferences, screen)) null else loaded.matchCount(preferences, screen)
+        }
+        onChoicesAvailable(withContext(Dispatchers.Default) { loaded.canApply(preferences, savedPreferences, screen) })
     }
 
-    LaunchedEffect(path, preferences) {
+    // Framing is deliberately not a key: it moves with the fingers and must not re-render.
+    val renderedFor = preferences.copy(frameZoom = 1f, panX = Screen.CENTRED, panY = Screen.CENTRED, panPainting = null)
+    LaunchedEffect(path, renderedFor, framed) {
         if (path == null) {
             preview?.recycle()
             preview = null
@@ -140,12 +176,27 @@ fun SettingsScreen(
         }
         val next = withContext(Dispatchers.Default) {
             runCatching {
-                WallpaperRenderer.render(path, previewScreen, preferences, enforceEnlargementLimit = false)
+                if (framed) {
+                    WallpaperRenderer.renderBase(path, previewScreen, preferences)
+                } else {
+                    WallpaperRenderer.render(path, previewScreen, preferences, enforceEnlargementLimit = false)
+                }
             }.getOrNull()
         }
         preview?.recycle()
         preview = next
-        previewError = next == null
+        previewError = next == null && !framed
+    }
+    LaunchedEffect(path, preferences.rotateWide, framed) {
+        val next = if (path == null || !framed) {
+            null
+        } else {
+            withContext(Dispatchers.Default) {
+                runCatching { WallpaperRenderer.hungPainting(path, screen, preferences, SHARP_EDGE) }.getOrNull()
+            }
+        }
+        sharp?.recycle()
+        sharp = next
     }
     LaunchedEffect(path) {
         commonColors = if (path == null) {
@@ -157,7 +208,10 @@ fun SettingsScreen(
         }
     }
     DisposableEffect(Unit) {
-        onDispose { preview?.recycle() }
+        onDispose {
+            preview?.recycle()
+            sharp?.recycle()
+        }
     }
 
     // Fold state per section, kept across rotation and process death. All four start
@@ -174,9 +228,28 @@ fun SettingsScreen(
     val subjectsSummary = preferences.artworkSubjects.takeIf { it.isNotEmpty() }
         ?.sortedBy { it.ordinal }?.joinToString(", ") { subjectLabel(it) }
         ?: "Any subject"
+    // A chosen painter wins over Shape and Origins (see Catalogue.matching); they stay on
+    // show, dimmed and inert, rather than vanishing from under the user.
+    val byArtist = preferences.artworkArtists.isNotEmpty()
     val artistsSummary = preferences.artworkArtists.takeIf { it.isNotEmpty() }
         ?.sorted()?.joinToString(", ")
         ?: "Any artist"
+
+    // Choosing a painter happens in the browser, which takes over the whole screen and
+    // hands back to Settings with the staged choice intact.
+    if (browsing) {
+        ArtistBrowserScreen(
+            painters = painters,
+            paintings = paintingCounts,
+            chosen = preferences.artworkArtists,
+            blocks = artistBlocks,
+            onToggle = { artist ->
+                onPreferencesChange(preferences.copy(artworkArtists = toggled(preferences.artworkArtists, artist)))
+            },
+            onClose = { browsing = false },
+        )
+        return
+    }
 
     Column(
         modifier = Modifier
@@ -184,32 +257,57 @@ fun SettingsScreen(
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 20.dp, vertical = 16.dp),
     ) {
-        Text(
-            "Wallpaper studio",
-            style = MaterialTheme.typography.headlineSmall,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        Text(
-            "Frame each work for this screen.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.58f),
-            textAlign = TextAlign.Center,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(top = 3.dp, bottom = 14.dp),
-        )
         Surface(
             modifier = Modifier
                 .align(Alignment.CenterHorizontally)
-                .width(150.dp)
-                .aspectRatio(screen.aspectRatio.toFloat()),
+                .width(previewWidth)
+                .aspectRatio(screen.aspectRatio.toFloat())
+                .then(
+                    sharp?.let { picture ->
+                        Modifier.frameGestures(
+                            key = path,
+                            paintingWidth = picture.width,
+                            paintingHeight = picture.height,
+                            base = preferences.frameBase(),
+                            framing = { path?.let { currentPreferences.framingFor(it, screen) } ?: Framing() },
+                            onFraming = { framing ->
+                                val now = currentPreferences
+                                if (path != null) {
+                                    onPreferencesChange(
+                                        now.copy(
+                                            frameZoom = framing.zoom,
+                                            panX = framing.panX,
+                                            panY = framing.panY,
+                                            panPainting = path.name,
+                                        ),
+                                    )
+                                }
+                            },
+                        )
+                    } ?: Modifier,
+                ),
             shape = RoundedCornerShape(14.dp),
-            color = Color(0xff242129),
+            color = MaterialTheme.colorScheme.surface,
             shadowElevation = 3.dp,
         ) {
             when {
-                preview != null -> Image(
+                framed && sharp != null -> Box(Modifier.fillMaxSize()) {
+                    preview?.let {
+                        Image(
+                            bitmap = it.asImageBitmap(),
+                            contentDescription = null,
+                            contentScale = ContentScale.FillBounds,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    }
+                    FramedPicture(
+                        picture = sharp!!,
+                        base = preferences.frameBase(),
+                        framing = path?.let { preferences.framingFor(it, screen) } ?: Framing(),
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+                preview != null && !framed -> Image(
                     bitmap = preview!!.asImageBitmap(),
                     contentDescription = "Wallpaper preview",
                     contentScale = ContentScale.FillBounds,
@@ -222,6 +320,15 @@ fun SettingsScreen(
                     Text("Your painting", style = MaterialTheme.typography.bodySmall)
                 }
             }
+        }
+        if (framed && sharp != null) {
+            Text(
+                "Pinch and drag to frame it",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.muted,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+            )
         }
 
         SectionTitle("Wallpaper style")
@@ -310,7 +417,7 @@ fun SettingsScreen(
                     Text(
                         "Matches the colors around the edge of each painting.",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f),
+                        color = MaterialTheme.colorScheme.muted,
                         modifier = Modifier.padding(top = 10.dp),
                     )
                 }
@@ -331,6 +438,17 @@ fun SettingsScreen(
             }
         }
 
+        // Only a tall screen has a wide painting to turn; a TV's wide ones already fit.
+        if (!screen.isLandscape && !context.isTelevision()) {
+            Spacer(Modifier.height(12.dp))
+            ToggleRow(
+                title = "Turn wide paintings",
+                detail = "Wide paintings fill the screen, viewed with the phone on its side",
+                checked = preferences.rotateWide,
+                onCheckedChange = { onPreferencesChange(preferences.copy(rotateWide = it)) },
+            )
+        }
+
         // A painting must pass every section below — Shape, Origins, Subjects and
         // Artists — to be offered; within a section, checking more than one option
         // widens it. An empty section means Any: it filters nothing. Any and every checked
@@ -342,11 +460,12 @@ fun SettingsScreen(
             summary = shapeLabel(preferences.artworkShape, screen),
             expanded = shapeExpanded,
             onToggle = { shapeExpanded = !shapeExpanded },
+            inert = byArtist,
         ) {
             Text(
-                "This changes future downloads. It does not fetch a new painting when you apply.",
+                if (byArtist) NOT_USED_FOR_ARTIST else "This changes future downloads. It does not fetch a new painting when you apply.",
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f),
+                color = MaterialTheme.colorScheme.muted,
                 modifier = Modifier.padding(bottom = 8.dp),
             )
             ArtworkShape.entries.forEach { shape ->
@@ -354,7 +473,7 @@ fun SettingsScreen(
                     title = shapeLabel(shape, screen),
                     detail = shapeDetail(shape, screen),
                     selected = preferences.artworkShape == shape,
-                    onClick = { onPreferencesChange(preferences.copy(artworkShape = shape)) },
+                    onClick = { if (!byArtist) onPreferencesChange(preferences.copy(artworkShape = shape)) },
                 )
             }
         }
@@ -364,26 +483,29 @@ fun SettingsScreen(
             summary = originsSummary,
             expanded = originsExpanded,
             onToggle = { originsExpanded = !originsExpanded },
+            inert = byArtist,
         ) {
             Text(
-                "Matches any region you check. Any allows every region.",
+                if (byArtist) NOT_USED_FOR_ARTIST else "Matches any region you check. Any allows every region.",
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f),
+                color = MaterialTheme.colorScheme.muted,
                 modifier = Modifier.padding(bottom = 8.dp),
             )
             SelectionRow(
                 title = "Any",
                 selected = preferences.artworkRegions.isEmpty(),
-                onClick = { onPreferencesChange(preferences.copy(artworkRegions = emptySet())) },
+                onClick = { if (!byArtist) onPreferencesChange(preferences.copy(artworkRegions = emptySet())) },
             )
             ArtworkRegion.entries.filter { it in availableRegions || it in preferences.artworkRegions }.forEach { region ->
                 SelectionRow(
                     title = regionLabel(region),
                     selected = region in preferences.artworkRegions,
                     onClick = {
-                        onPreferencesChange(
-                            preferences.copy(artworkRegions = toggled(preferences.artworkRegions, region)),
-                        )
+                        if (!byArtist) {
+                            onPreferencesChange(
+                                preferences.copy(artworkRegions = toggled(preferences.artworkRegions, region)),
+                            )
+                        }
                     },
                 )
             }
@@ -398,7 +520,7 @@ fun SettingsScreen(
             Text(
                 "Matches any subject you check. Any allows every subject.",
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f),
+                color = MaterialTheme.colorScheme.muted,
                 modifier = Modifier.padding(bottom = 8.dp),
             )
             SelectionRow(
@@ -427,21 +549,12 @@ fun SettingsScreen(
                 expanded = artistsExpanded,
                 onToggle = { artistsExpanded = !artistsExpanded },
             ) {
-                Text(
-                    "Matches any artist you check. Any allows every artist.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f),
-                    modifier = Modifier.padding(bottom = 8.dp),
-                )
-                SelectionRow(
-                    title = "Any",
-                    selected = preferences.artworkArtists.isEmpty(),
-                    onClick = { onPreferencesChange(preferences.copy(artworkArtists = emptySet())) },
-                )
-                allArtists.filter { it in availableArtists || it in preferences.artworkArtists }.forEach { artist ->
+                // Every chosen name is listed, even one a newer catalogue no longer names,
+                // so that nothing staged is ever out of reach. Mirrors `Pending::artist_row`.
+                preferences.artworkArtists.sorted().forEach { artist ->
                     SelectionRow(
                         title = artist,
-                        selected = artist in preferences.artworkArtists,
+                        selected = true,
                         onClick = {
                             onPreferencesChange(
                                 preferences.copy(artworkArtists = toggled(preferences.artworkArtists, artist)),
@@ -449,12 +562,44 @@ fun SettingsScreen(
                         },
                     )
                 }
+                if (painters.isNotEmpty()) {
+                    val shape = RoundedCornerShape(9.dp)
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 4.dp)
+                            .border(BorderStroke(1.dp, chipLine(false)), shape)
+                            .focusRing(shape)
+                            .clickable { browsing = true },
+                        color = chipFill(false),
+                        contentColor = chipInk(false),
+                        shape = shape,
+                    ) {
+                        Text(
+                            if (preferences.artworkArtists.isEmpty()) "Any artist" else "Add",
+                            style = MaterialTheme.typography.labelLarge,
+                            modifier = Modifier.padding(horizontal = 11.dp, vertical = 9.dp),
+                        )
+                    }
+                }
             }
         }
 
-        if (nothingMatches) {
+        tooFew?.let { matching ->
             Text(
-                "Nothing matches these filters — set one section to Any",
+                when (matching) {
+                    0 -> "No painting matches these filters — set one section to Any"
+                    else -> {
+                        val few = if (matching == 1) "Only 1 painting matches" else "Only $matching paintings match"
+                        // Thin filters that are already applied block nothing, so the
+                        // sentence must not say they do; fetch widens them instead.
+                        if (preferences.sameFiltersAs(savedPreferences)) {
+                            "$few these filters, so pictures come from a wider selection"
+                        } else {
+                            "$few these filters — at least ${Catalogue.MIN_POOL} are needed"
+                        }
+                    }
+                },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.error,
                 modifier = Modifier.padding(top = 14.dp),
@@ -491,6 +636,7 @@ private fun FoldableSection(
     summary: String,
     expanded: Boolean,
     onToggle: () -> Unit,
+    inert: Boolean = false,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     Column(modifier = Modifier.padding(top = 19.dp)) {
@@ -508,14 +654,14 @@ private fun FoldableSection(
                 Text(
                     summary,
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f),
+                    color = MaterialTheme.colorScheme.muted,
                     modifier = Modifier.padding(top = 1.dp),
                 )
             }
             Chevron(expanded)
         }
         if (expanded) {
-            Column(modifier = Modifier.padding(top = 6.dp), content = content)
+            Column(modifier = Modifier.padding(top = 6.dp).alpha(if (inert) 0.4f else 1f), content = content)
         }
     }
 }
@@ -523,8 +669,8 @@ private fun FoldableSection(
 /** A small hand-drawn chevron — ∨ folded, ∧ unfolded — rather than pulling in an icon library for one glyph. */
 @Composable
 private fun Chevron(expanded: Boolean) {
+    val color = MaterialTheme.colorScheme.muted
     Canvas(modifier = Modifier.size(18.dp)) {
-        val color = Color(0xff8f79ee)
         val halfWidth = size.width * 0.3f
         val apexY = if (expanded) size.height * 0.35f else size.height * 0.65f
         val baseY = if (expanded) size.height * 0.65f else size.height * 0.35f
@@ -550,7 +696,7 @@ private fun shapeDetail(shape: ArtworkShape, screen: Screen): String = when (sha
         if (screen.isLandscape) "Also allow fully vertical paintings" else "Also allow fully horizontal paintings"
 }
 
-private fun regionLabel(region: ArtworkRegion): String = when (region) {
+internal fun regionLabel(region: ArtworkRegion): String = when (region) {
     ArtworkRegion.EUROPE -> "Europe"
     ArtworkRegion.ASIA -> "Asia"
     ArtworkRegion.AFRICA -> "Africa"
@@ -583,19 +729,20 @@ private fun StyleCard(
         modifier = modifier
             .height(76.dp)
             .border(
-                BorderStroke(1.dp, if (selected) Color(0xffa990ff) else Color(0xff34303a)),
+                BorderStroke(1.dp, chipLine(selected)),
                 shape,
             )
             .focusRing(shape)
             .clickable(onClick = onClick),
-        color = if (selected) Color(0xff282238) else Color(0xff19171d),
+        color = chipFill(selected),
+        contentColor = chipInk(selected),
         shape = shape,
     ) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
         ) {
-            StyleIllustration(style)
+            StyleIllustration(style, ink = chipInk(selected), backing = MaterialTheme.colorScheme.background)
             Text(
                 when (style) {
                     WallpaperStyle.ZOOM -> "Zoom"
@@ -611,16 +758,16 @@ private fun StyleCard(
 }
 
 @Composable
-private fun StyleIllustration(style: WallpaperStyle) {
+private fun StyleIllustration(style: WallpaperStyle, ink: Color, backing: Color) {
     Canvas(modifier = Modifier.size(width = 25.dp, height = 30.dp)) {
-        val outline = Color(0xffaa96ff)
-        val image = Color(0xff7965c8)
-        val mist = Color(0xff494256)
+        val outline = ink
+        val image = ink.copy(alpha = 0.55f)
+        val mist = ink.copy(alpha = 0.2f)
         drawRoundRect(outline, style = Stroke(1.dp.toPx()), cornerRadius = androidx.compose.ui.geometry.CornerRadius(2.dp.toPx()))
         when (style) {
             WallpaperStyle.ZOOM -> {
                 drawRect(image, topLeft = Offset(size.width * 0.18f, 0f), size = Size(size.width * 0.64f, size.height))
-                drawLine(Color(0xfff1ecff), Offset(size.width * 0.24f, size.height * 0.72f), Offset(size.width * 0.52f, size.height * 0.44f), 1.2.dp.toPx())
+                drawLine(ink, Offset(size.width * 0.24f, size.height * 0.72f), Offset(size.width * 0.52f, size.height * 0.44f), 1.2.dp.toPx())
             }
             WallpaperStyle.STRETCH -> drawRect(image, size = size)
             WallpaperStyle.BLUR -> {
@@ -628,7 +775,7 @@ private fun StyleIllustration(style: WallpaperStyle) {
                 drawRect(image, topLeft = Offset(size.width * 0.12f, size.height * 0.29f), size = Size(size.width * 0.76f, size.height * 0.42f))
             }
             WallpaperStyle.BORDERS -> {
-                drawRect(Color(0xff08070a), size = size)
+                drawRect(backing, size = size)
                 drawRect(image, topLeft = Offset(0f, size.height * 0.29f), size = Size(size.width, size.height * 0.42f))
             }
         }
@@ -641,7 +788,7 @@ private fun ConditionalPanel(content: @Composable ColumnScope.() -> Unit) {
         modifier = Modifier
             .fillMaxWidth()
             .padding(top = 2.dp),
-        color = Color(0xff1a181f),
+        color = MaterialTheme.colorScheme.surface,
         shape = RoundedCornerShape(11.dp),
     ) {
         Column(modifier = Modifier.padding(13.dp), content = content)
@@ -657,8 +804,9 @@ private fun SmallChoice(
 ) {
     Surface(
         modifier = modifier.focusRing(RoundedCornerShape(8.dp)).clickable(onClick = onClick),
-        color = if (selected) Color(0xff7258e8) else Color(0xff2a2730),
-        contentColor = if (selected) Color(0xfff7f3ff) else Color(0xffc8c1d0),
+        color = chipFill(selected),
+        contentColor = chipInk(selected),
+        border = BorderStroke(1.dp, chipLine(selected)),
         shape = RoundedCornerShape(8.dp),
     ) {
         Box(
@@ -683,21 +831,23 @@ private fun SelectionRow(
             .fillMaxWidth()
             .padding(bottom = 4.dp)
             .border(
-                BorderStroke(1.dp, if (selected) Color(0xff8f79ee) else Color(0xff2e2b33)),
+                BorderStroke(1.dp, chipLine(selected)),
                 shape,
             )
             .focusRing(shape)
             .clickable(onClick = onClick),
-        color = if (selected) Color(0xff252031) else Color(0xff17161b),
+        color = chipFill(selected),
+        contentColor = chipInk(selected),
         shape = shape,
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 11.dp, vertical = 9.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            val mark = chipInk(selected)
             Canvas(modifier = Modifier.size(16.dp)) {
-                drawCircle(if (selected) Color(0xffa990ff) else Color(0xff77717e), style = Stroke(1.4.dp.toPx()))
-                if (selected) drawCircle(Color(0xffa990ff), radius = 3.5.dp.toPx())
+                drawCircle(mark, style = Stroke(1.4.dp.toPx()))
+                if (selected) drawCircle(mark, radius = 3.5.dp.toPx())
             }
             Column(modifier = Modifier.padding(start = 12.dp)) {
                 Text(title, style = MaterialTheme.typography.labelLarge)
@@ -705,7 +855,7 @@ private fun SelectionRow(
                     Text(
                         detail,
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f),
+                        color = chipInk(selected).copy(alpha = 0.7f),
                     )
                 }
             }
@@ -727,12 +877,13 @@ private fun ToggleRow(
             .fillMaxWidth()
             .padding(bottom = 4.dp)
             .border(
-                BorderStroke(1.dp, if (checked) Color(0xff8f79ee) else Color(0xff2e2b33)),
+                BorderStroke(1.dp, chipLine(checked)),
                 shape,
             )
             .focusRing(shape)
             .clickable { onCheckedChange(!checked) },
-        color = if (checked) Color(0xff252031) else Color(0xff17161b),
+        color = chipFill(checked),
+        contentColor = chipInk(checked),
         shape = shape,
     ) {
         Row(
@@ -744,7 +895,7 @@ private fun ToggleRow(
                 Text(
                     detail,
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f),
+                    color = chipInk(checked).copy(alpha = 0.7f),
                 )
             }
             Switch(
@@ -752,8 +903,8 @@ private fun ToggleRow(
                 // The row is the one D-pad stop; a focusable switch inside it would be a second.
                 onCheckedChange = null,
                 colors = SwitchDefaults.colors(
-                    checkedThumbColor = Color(0xfff5f1ff),
-                    checkedTrackColor = Color(0xffa990ff),
+                    checkedThumbColor = MaterialTheme.colorScheme.onSurface,
+                    checkedTrackColor = MaterialTheme.colorScheme.primary,
                 ),
             )
         }
@@ -771,7 +922,7 @@ private fun CustomColorControls(
         Text(
             palette.first,
             style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f),
+            color = MaterialTheme.colorScheme.muted,
             modifier = Modifier.padding(top = 8.dp),
         )
         Swatches(palette.second, color, onColor)
@@ -780,7 +931,7 @@ private fun CustomColorControls(
         Text(
             "From this painting",
             style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f),
+            color = MaterialTheme.colorScheme.muted,
             modifier = Modifier.padding(top = 10.dp),
         )
         Swatches(currentPictureColors, color, onColor)
@@ -810,7 +961,7 @@ private fun Swatches(colors: List<Int>, selectedColor: Int, onColor: (Int) -> Un
                     .focusRing(CircleShape)
                     .border(
                         if (selected) 3.dp else 1.dp,
-                        if (selected) Color(0xffa990ff) else Color(0xff57515e),
+                        if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.hairline,
                         CircleShape,
                     )
                     .padding(4.dp)
@@ -893,7 +1044,7 @@ private fun HsvColorWheel(color: Int, onColor: (Int) -> Unit) {
             modifier = Modifier
                 .size(28.dp)
                 .background(Color(color), CircleShape)
-                .border(1.dp, Color(0xffc8c5cf), CircleShape),
+                .border(1.dp, MaterialTheme.colorScheme.onSurface, CircleShape),
         )
         Text(
             "#%06X".format(color and 0xffffff),
@@ -909,7 +1060,12 @@ private val CURATED_PALETTES = listOf(
     "Cool" to listOf(0xff1d3557, 0xff3434c8, 0xff2a6f6b, 0xff738b6f, 0xffa9a0e8).map(Long::toInt),
 )
 
-private const val PREVIEW_WIDTH = 300
+private const val PREVIEW_WIDTH = 400
+private const val PREVIEW_HEIGHT_SHARE = 0.47f
+
+// Long enough to stay crisp at the largest zoom in the preview, short enough to cost about 12 MB.
+private const val SHARP_EDGE = 2400
+private const val NOT_USED_FOR_ARTIST = "Not used while an artist is chosen."
 
 /**
  * A light 2 dp outline while the element holds D-pad focus, so a remote has a visible
@@ -918,6 +1074,22 @@ private const val PREVIEW_WIDTH = 300
  */
 internal fun Modifier.focusRing(shape: Shape): Modifier = composed {
     var focused by remember { mutableStateOf(false) }
+    val ink = MaterialTheme.colorScheme.onSurface
     onFocusChanged { focused = it.isFocused }
-        .then(if (focused) Modifier.border(2.dp, Color(0xfff1ecff), shape) else Modifier)
+        .then(if (focused) Modifier.border(2.dp, ink, shape) else Modifier)
 }
+
+// The two looks every choosable thing has, as on the desktop's pills: chosen is the accent
+// with white on it, plain is a wash with a hairline and the ink. Both draw the same
+// 1 dp border, so choosing never changes a size.
+@Composable
+private fun chipFill(selected: Boolean): Color =
+    if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.wash
+
+@Composable
+private fun chipInk(selected: Boolean): Color =
+    if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
+
+@Composable
+private fun chipLine(selected: Boolean): Color =
+    if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.hairline

@@ -24,13 +24,18 @@ the painting it reproduces. Every rejection, from either check, is logged to
 
 Several Commons scans of one painting are common (a full view, a museum's
 own reproduction, a Google Art Project upload) and are collapsed to the
-largest by `_dedupe_by_painting`, grouping by whichever of two signals two
+largest by `_dedupe_by_painting`, grouping by whichever of three signals two
 files share: a Wikidata item (from structured data, batch-fetched by
-`_wikidata_depicted_work` after the walk) or a category specific to that one
-painting. No title-based tier: unlike a shared Wikidata item or a genuinely
-painting-specific category, two different paintings sharing a title text
-happens often enough (translations, "Untitled") that it isn't safe evidence
-either.
+`_wikidata_depicted_work` after the walk), a category specific to that one
+painting, or the same title at the same proportions. A title alone is no
+evidence: two different paintings sharing a title happens often enough
+(translations, "Untitled") that it isn't safe.
+
+The walk also keeps out of places: a subcategory named for a museum, street,
+monument, tomb, garden or the like (`PLACE_WORDS`, `PLACE_PHRASES`) is not
+entered, since it holds visitors' photographs rather than the painter's
+work; and a byline year later than the painter's `died` year in
+`artists.json` is dropped, being the date of a photograph.
 
 Sizing is the one place this differs from the museums. `iiurlwidth` bounds
 only a thumbnail's *width*, so a single batch request asking for
@@ -111,11 +116,51 @@ NON_PAINTING_WORDS = (
     "installation", "installations", "sculpture", "sculptures",
     "poster", "posters", "grave", "graves",
     "sketch", "sketches", "fragment", "fragments", "detail", "details",
+    "placa", "legenda", "label", "labels", "signature", "mausoléu", "mausoleum",
+    "estudo", "estudos", "esboço", "lithograph", "lithographs", "litho",
+    "lithography", "engraving", "engravings", "etching", "etchings", "woodcut",
+    "woodcuts", "atelier", "firma", "portón", "composicion", "charivari",
+    "herrick", "print", "prints",
     "study", "studies", "эскиз", "эскизы", "фрагмент", "фрагменты",
 )
 # Multi-word phrases doing the same job as `NON_PAINTING_WORDS`, checked as
 # a plain substring since "\b...\b" can't span a space-separated phrase.
-NON_PAINTING_PHRASES = ("set design", "set designs")
+NON_PAINTING_PHRASES = (
+    "set design", "set designs",
+    # Engravings lifted out of a scanned book or periodical (Thomas Baines's
+    # Zambezi plates in "Le Tour du monde"; "Extracted images" is too broad,
+    # it also tags real paintings), not paintings.
+    "périodique", "of le tour du monde", "book cover", "title page",
+    "titlepage", "table of contents", "(book)", "century copy", "(page ",
+    "paris studio", "portret van kunstenaar", "emerald hours",
+    "botanical illustrations", "manuscript pages", "international mission photography",
+    "day & son", "portrait of the painter", "and family",
+)
+
+# Words that mark a *subcategory* as about a place, an institution or a thing
+# named after the painter rather than his paintings — the museum, a street,
+# his tomb, a monument, a garden — and so as full of visitors' photographs.
+# Only the subcategory's name is tested, never a file's own categories: a
+# genuine painting is routinely tagged with the museum that holds it. A name
+# containing "paintings" or "works" is exempt ("Paintings in the Museu X"
+# holds paintings).
+PLACE_WORDS = (
+    "museum", "museums", "museu", "museo", "monument", "monuments", "monumento",
+    "statue", "statues", "estatua", "calle", "street", "rua", "praça", "plaza",
+    "mausoleum", "mausoléu", "tomb", "tombs", "school", "schools", "escola",
+    "garden", "gardens", "jardín", "jardim", "banknote", "banknotes", "plaque",
+    "plaques", "teatro", "theatre", "prefeitura", "mayors", "salão", "espaço",
+    "fundação", "pinacoteca", "quinta", "feira", "audio", "catalogs", "catalogues",
+    "diccionario", "restauration", "restoration", "symbols", "municipality",
+    "secretaries", "correios", "paço", "casa", "heritage",
+)
+# Phrases doing the same job: portraits *of* the painter by others, replicas
+# and copies after him, tiled crops of one painting, books about or by him.
+PLACE_PHRASES = (
+    "things named after", "works after", "portraits of", "portrait of ",
+    "in art", "tile set", "life and work", "narrative of", "shifts and expedients",
+    "freundschaftsgalerie", "replicas of", "by laurindo",
+)
 
 SKIP_SUBCATEGORY_WORDS = NON_PAINTING_WORDS
 
@@ -167,6 +212,8 @@ def _load_artists() -> list[dict]:
     with open(ARTISTS_PATH, encoding="utf-8") as f:
         artists = json.load(f)
     for artist in artists:
+        if not isinstance(artist.get("died"), int):
+            raise ValueError(f"{ARTISTS_PATH}: {artist.get('name')!r} needs an integer \"died\" year")
         if artist.get("region") not in regions.REGIONS:
             raise ValueError(
                 f"{ARTISTS_PATH}: {artist.get('name')!r} has region "
@@ -197,18 +244,41 @@ def _meta(extmetadata: dict, key: str) -> str:
 _QS_LABEL_JUNK_RE = re.compile(r"(?:label|title) QS:\S*?,")
 
 
+# A leading language label ("Portuguese: Porto de Santos") and, in the
+# "Title, by Painter, 1885, oil on canvas - Gallery - City - DSC08793"
+# file-name pattern, everything after the title.
+_LANGUAGE_LABEL_RE = re.compile(r"^(?:English|Portuguese|Spanish|French|German|Italian|Dutch|Latin|Russian)\s*:\s*")
+# A Russian title glued to its English one: "«Демон (сидящий)»Demon (sitting)".
+_RUSSIAN_QUOTED_RE = re.compile(r"^«[^»]*»")
+_BY_PAINTER_RE = re.compile(r",\s+by\s+.*$", re.IGNORECASE)
+
+
 def _clean_object_name(text: str) -> str:
-    return _QS_LABEL_JUNK_RE.split(text, maxsplit=1)[0].strip()
+    text = _QS_LABEL_JUNK_RE.split(text, maxsplit=1)[0].strip()
+    text = _RUSSIAN_QUOTED_RE.sub("", _LANGUAGE_LABEL_RE.sub("", text)).strip() or text
+    return _BY_PAINTER_RE.sub("", text).strip() or text
 
 
 def _looks_unwanted(category_title: str) -> bool:
     name = category_title.split(":", 1)[-1].lower()
+    if not re.search(r"\b(?:paintings|works)\b", name):
+        if any(re.search(r"\b" + re.escape(word) + r"\b", name) for word in PLACE_WORDS):
+            return True
+        if any(phrase in name for phrase in PLACE_PHRASES):
+            return True
     if any(re.search(r"\b" + re.escape(word) + r"\b", name) for word in SKIP_SUBCATEGORY_WORDS):
         return True
     return any(phrase in name for phrase in NON_PAINTING_PHRASES)
 
 
-def _non_painting_reason(file_title: str, tags: list[str]) -> str | None:
+# A camera's own file name or a photograph's date stamp standing in for a
+# title ("IMG 20211130 140351", "... 20221021 133627", "(2024-10-26)"): the
+# file is somebody's photograph of a place or a gallery wall, and a
+# painting's year never looks like this.
+_PHOTO_NAME_RE = re.compile(r"\bimg[ _]?\d{6,}|\b(?:19|20)\d{6}\b|\(\d{4}-\d{2}-\d{2}\)", re.IGNORECASE)
+
+
+def _non_painting_reason(file_title: str, tags: list[str], title: str = "") -> str | None:
     """Why this file itself — as opposed to the category it was found in —
     is something other than a finished painting: a photo of a building,
     mosaic or ceramic object Vrubel decorated, a museum installation shot, a
@@ -219,7 +289,17 @@ def _non_painting_reason(file_title: str, tags: list[str]) -> str | None:
     ..." categories — see `NON_PAINTING_WORDS`'s doc for why that signal
     doesn't actually distinguish a photo of a painting from a photo of
     anything else."""
-    for text in (file_title, *tags):
+    for text in (file_title, title):
+        if _PHOTO_NAME_RE.search(text):
+            return "photo-name"
+    # The uploader's own photograph (CC0, "Self-published work") with nothing
+    # marking it as a reproduction of an artwork.
+    lowered_tags = [tag.lower() for tag in tags]
+    if "self-published work" in lowered_tags and not any(
+        tag.startswith(("artworks", "pd-art")) or "paintings" in tag for tag in lowered_tags
+    ):
+        return "self-published photo"
+    for text in (file_title, title, *tags):
         lowered = text.lower()
         for word in NON_PAINTING_WORDS:
             if re.search(r"\b" + re.escape(word) + r"\b", lowered):
@@ -403,11 +483,10 @@ def _dedupe_by_painting(
 ) -> tuple[list[dict], dict[str, str]]:
     """Collapses several Commons scans of one painting into the largest.
     Two rows are unioned into the same group only if they share a Wikidata
-    item (`qid_by_id`) or a category naming that one work specifically
-    (`_is_specific_work_category`). Deliberately no title-based tier: two
-    different paintings sharing a Wikidata item or a genuinely work-specific
-    category is vanishingly unlikely, but two different paintings sharing a
-    title text is not, so that would risk merging real, distinct works.
+    item (`qid_by_id`), a category naming that one work specifically
+    (`_is_specific_work_category`), or a title *and* an aspect ratio (to
+    5%). A title alone is not evidence — different paintings share titles —
+    but a title plus proportions, within one artist, is.
 
     Returns the kept rows plus a `{dropped_id: kept_id}` map, so the caller
     can log exactly which id each dropped row was folded into."""
@@ -432,6 +511,11 @@ def _dedupe_by_painting(
         keys.extend(
             ("cat", tag) for tag in row["tags"] if _is_specific_work_category(tag, artist_name)
         )
+        # Same title and nearly the same proportions: another scan of one
+        # painting (with and without frame is not caught; that is a different
+        # ratio). Ratio is part of the key so two paintings sharing a bare
+        # title such as "Paisaje" are not merged.
+        keys.append(("title", " ".join(row["title"].lower().split()), round(20 * row["width"] / row["height"])))
         for key in keys:
             if key in first_seen:
                 union(row["id"], first_seen[key])
@@ -468,9 +552,12 @@ def _fallback_title(file_title: str, artist_name: str) -> str:
     return name.strip()
 
 
-def _byline(artist_name: str, meta: dict) -> str:
+def _byline(artist_name: str, meta: dict, died: int) -> str:
+    """The painter and the year of the work. A year after the painter's death
+    is the date of a photograph of it, not of the painting, so it is dropped
+    rather than printed."""
     match = _YEAR_RE.search(_strip_html(_meta(meta, "DateTimeOriginal")))
-    return f"{artist_name}, {match.group(1)}" if match else artist_name
+    return f"{artist_name}, {match.group(1)}" if match and int(match.group(1)) <= died else artist_name
 
 
 def _tags(page: dict) -> list[str]:
@@ -507,7 +594,8 @@ def _fetch_one(
         return None, f"licence:{_strip_html(_meta(meta, 'LicenseShortName')) or '(none)'}"
 
     tags = _tags(page)
-    reason = _non_painting_reason(file_title, tags)
+    title = _clean_object_name(_strip_html(_meta(meta, "ObjectName"))) or _fallback_title(file_title, artist["name"])
+    reason = _non_painting_reason(file_title, tags, title)
     if reason is not None:
         return None, reason
 
@@ -532,9 +620,8 @@ def _fetch_one(
         "height": final_h,
         "image_url": image_url,
         "details_url": info.get("descriptionurl") or "",
-        "title": _clean_object_name(_strip_html(_meta(meta, "ObjectName")))
-        or _fallback_title(file_title, artist["name"]),
-        "byline": _byline(artist["name"], meta),
+        "title": title,
+        "byline": _byline(artist["name"], meta, artist["died"]),
         "origin": "",
         "tags": tags,
         "artist": artist["name"],
@@ -561,8 +648,11 @@ def fetch(
 ) -> Iterator[dict]:
     cache = http.JsonCache(os.path.join(cache_dir, "api"))
     rejections: list[tuple[str, str, str]] = []
+    # Across artists, not per artist: a file reachable from two painters'
+    # category trees (a portrait of one by the other) must become one row, or
+    # the TSV carries the same (source, id) twice. The first artist listed wins.
+    seen: set[int] = set()
     for artist in _load_artists():
-        seen: set[int] = set()
         candidates: list[dict] = []
         for root in artist["categories"]:
             for category in _walk_all_categories(client, cache, refresh, root):

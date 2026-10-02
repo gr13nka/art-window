@@ -2,6 +2,238 @@
   {
     "name": "Mikhail Vrubel",
     "region": "EUROPE",
+    "died": 1910,
+    "about": "https://en.wikipedia.org/wiki/Mikhail_Vrubel",
+    "showcase": "13507795",
     "categories": ["Paintings by Mikhail Vrubel", "Works by Mikhail Vrubel"]
+  },
+  {
+    "name": "Arthur Streeton",
+    "region": "OCEANIA",
+    "died": 1943,
+    "about": "https://en.wikipedia.org/wiki/Arthur_Streeton",
+    "showcase": "23282518",
+    "categories": ["Paintings by Arthur Streeton", "Arthur Streeton"]
+  },
+  {
+    "name": "Tom Roberts",
+    "region": "OCEANIA",
+    "died": 1931,
+    "about": "https://en.wikipedia.org/wiki/Tom_Roberts",
+    "showcase": "22142609",
+    "categories": ["Works by Tom Roberts", "Tom Roberts"]
+  },
+  {
+    "name": "Frederick McCubbin",
+    "region": "OCEANIA",
+    "died": 1917,
+    "about": "https://en.wikipedia.org/wiki/Frederick_McCubbin",
+    "showcase": "22143303",
+    "categories": ["Paintings by Frederick McCubbin", "Frederick McCubbin"]
+  },
+  {
+    "name": "Eugene von Guérard",
+    "region": "OCEANIA",
+    "died": 1901,
+    "about": "https://en.wikipedia.org/wiki/Eugene_von_Guerard",
+    "categories": ["Eugene von Guerard"]
+  },
+  {
+    "name": "Charles Conder",
+    "region": "OCEANIA",
+    "died": 1909,
+    "about": "https://en.wikipedia.org/wiki/Charles_Conder",
+    "categories": ["Charles Conder"]
+  },
+  {
+    "name": "John Glover",
+    "region": "OCEANIA",
+    "died": 1849,
+    "about": "https://en.wikipedia.org/wiki/John_Glover_(artist)",
+    "categories": ["Paintings by John Glover", "John Glover"]
+  },
+  {
+    "name": "William Charles Piguenit",
+    "region": "OCEANIA",
+    "died": 1914,
+    "about": "https://en.wikipedia.org/wiki/William_Piguenit",
+    "categories": ["William Charles Piguenit"]
+  },
+  {
+    "name": "Petrus van der Velden",
+    "region": "OCEANIA",
+    "died": 1913,
+    "about": "https://en.wikipedia.org/wiki/Petrus_Van_der_Velden",
+    "categories": ["Petrus van der Velden"]
+  },
+  {
+    "name": "Conrad Martens",
+    "region": "OCEANIA",
+    "died": 1878,
+    "about": "https://en.wikipedia.org/wiki/Conrad_Martens",
+    "showcase": "21998448",
+    "categories": ["Conrad Martens"]
+  },
+  {
+    "name": "Augustus Earle",
+    "region": "OCEANIA",
+    "died": 1838,
+    "about": "https://en.wikipedia.org/wiki/Augustus_Earle",
+    "categories": ["Augustus Earle"]
+  },
+  {
+    "name": "Gottfried Lindauer",
+    "region": "OCEANIA",
+    "died": 1926,
+    "about": "https://en.wikipedia.org/wiki/Gottfried_Lindauer",
+    "categories": ["Paintings by Gottfried Lindauer", "Gottfried Lindauer"]
+  },
+  {
+    "name": "Charles Goldie",
+    "region": "OCEANIA",
+    "died": 1947,
+    "about": "https://en.wikipedia.org/wiki/Charles_Frederick_Goldie",
+    "categories": ["Charles Goldie"]
+  },
+  {
+    "name": "Juan Manuel Blanes",
+    "region": "SOUTH_AMERICA",
+    "died": 1901,
+    "about": "https://en.wikipedia.org/wiki/Juan_Manuel_Blanes",
+    "categories": ["Paintings by Juan Manuel Blanes", "Juan Manuel Blanes"]
+  },
+  {
+    "name": "Pedro Américo",
+    "region": "SOUTH_AMERICA",
+    "died": 1905,
+    "about": "https://en.wikipedia.org/wiki/Pedro_Am%C3%A9rico",
+    "showcase": "68846699",
+    "categories": ["Paintings by Pedro Américo", "Pedro Américo"]
+  },
+  {
+    "name": "Almeida Júnior",
+    "region": "SOUTH_AMERICA",
+    "died": 1899,
+    "about": "https://en.wikipedia.org/wiki/Almeida_J%C3%BAnior",
+    "showcase": "68444303",
+    "categories": ["Paintings by Almeida Júnior", "Almeida Júnior"]
+  },
+  {
+    "name": "Victor Meirelles",
+    "region": "SOUTH_AMERICA",
+    "died": 1903,
+    "about": "https://en.wikipedia.org/wiki/Victor_Meirelles",
+    "showcase": "86504335",
+    "categories": ["Paintings by Victor Meirelles", "Works by Victor Meirelles", "Victor Meirelles"]
+  },
+  {
+    "name": "Benedito Calixto",
+    "region": "SOUTH_AMERICA",
+    "died": 1927,
+    "about": "https://en.wikipedia.org/wiki/Benedito_Calixto",
+    "showcase": "123890337",
+    "categories": ["Paintings by Benedito Calixto", "Benedito Calixto"]
+  },
+  {
+    "name": "Giovanni Battista Castagneto",
+    "region": "SOUTH_AMERICA",
+    "died": 1900,
+    "about": "https://en.wikipedia.org/wiki/Giovanni_Battista_Castagneto",
+    "categories": ["Giovanni Battista Castagneto"]
+  },
+  {
+    "name": "Antônio Parreiras",
+    "region": "SOUTH_AMERICA",
+    "died": 1937,
+    "about": "https://en.wikipedia.org/wiki/Ant%C3%B4nio_Parreiras",
+    "showcase": "21939095",
+    "categories": ["Paintings by Antônio Parreiras", "Antônio Parreiras"]
+  },
+  {
+    "name": "Prilidiano Pueyrredón",
+    "region": "SOUTH_AMERICA",
+    "died": 1870,
+    "about": "https://en.wikipedia.org/wiki/Prilidiano_Pueyrred%C3%B3n",
+    "showcase": "21881019",
+    "categories": ["Prilidiano Pueyrredón"]
+  },
+  {
+    "name": "Cándido López",
+    "region": "SOUTH_AMERICA",
+    "died": 1902,
+    "about": "https://en.wikipedia.org/wiki/C%C3%A1ndido_L%C3%B3pez",
+    "showcase": "21977865",
+    "categories": ["Cándido López"]
+  },
+  {
+    "name": "Arturo Michelena",
+    "region": "SOUTH_AMERICA",
+    "died": 1898,
+    "about": "https://en.wikipedia.org/wiki/Arturo_Michelena",
+    "categories": ["Paintings by Arturo Michelena", "Arturo Michelena"]
+  },
+  {
+    "name": "Martín Tovar y Tovar",
+    "region": "SOUTH_AMERICA",
+    "died": 1902,
+    "about": "https://en.wikipedia.org/wiki/Mart%C3%ADn_Tovar_y_Tovar",
+    "categories": ["Paintings by Martín Tovar y Tovar", "Martín Tovar y Tovar"]
+  },
+  {
+    "name": "Pedro Lira",
+    "region": "SOUTH_AMERICA",
+    "died": 1912,
+    "about": "https://en.wikipedia.org/wiki/Pedro_Lira",
+    "categories": ["Pedro Lira"]
+  },
+  {
+    "name": "Juan Francisco González",
+    "region": "SOUTH_AMERICA",
+    "died": 1933,
+    "about": "https://en.wikipedia.org/wiki/Juan_Francisco_Gonz%C3%A1lez",
+    "showcase": "42029477",
+    "categories": ["Juan Francisco González"]
+  },
+  {
+    "name": "Thomas Baines",
+    "region": "AFRICA",
+    "died": 1875,
+    "about": "https://en.wikipedia.org/wiki/Thomas_Baines",
+    "showcase": "80054999",
+    "categories": ["Thomas Baines"]
+  },
+  {
+    "name": "Thomas Bowler",
+    "region": "AFRICA",
+    "died": 1869,
+    "about": "https://en.wikipedia.org/wiki/Thomas_William_Bowler",
+    "categories": ["Thomas William Bowler"]
+  },
+  {
+    "name": "Frederick I'Ons",
+    "region": "AFRICA",
+    "died": 1887,
+    "about": "https://en.wikipedia.org/wiki/Frederick_Timpson_I%27Ons",
+    "categories": ["Frederick Timpson I'Ons"]
+  },
+  {
+    "name": "Jan Ernst Abraham Volschenk",
+    "region": "AFRICA",
+    "died": 1936,
+    "about": "https://en.wikipedia.org/wiki/Jan_Ernst_Abraham_Volschenk",
+    "categories": ["Jan Ernst Abraham Volschenk"]
+  },
+  {
+    "name": "Pieter Wenning",
+    "region": "AFRICA",
+    "died": 1921,
+    "about": "https://en.wikipedia.org/wiki/Pieter_Wenning",
+    "categories": ["Pieter Wenning"]
+  },
+  {
+    "name": "Robert Gwelo Goodman",
+    "region": "AFRICA",
+    "died": 1939,
+    "categories": ["Robert Gwelo Goodman"]
   }
 ]

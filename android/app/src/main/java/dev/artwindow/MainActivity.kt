@@ -9,6 +9,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
+import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
@@ -33,7 +34,6 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -56,6 +56,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import java.io.File
@@ -73,7 +74,10 @@ class MainActivity : ComponentActivity() {
             finish()
             return
         }
-        enableEdgeToEdge()
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.dark(BACKGROUND_ARGB),
+            navigationBarStyle = SystemBarStyle.dark(BACKGROUND_ARGB),
+        )
 
         RotationJob.scheduleDaily(applicationContext)
         if (State(applicationContext).isDue(Day.today())) {
@@ -85,14 +89,6 @@ class MainActivity : ComponentActivity() {
 }
 
 private enum class Destination { ARTWORK, FAVOURITES, SETTINGS }
-
-internal val settingsColors = darkColorScheme(
-    primary = Color(0xffa990ff),
-    onPrimary = Color(0xff17121f),
-    background = Color(0xff111015),
-    surface = Color(0xff1a181f),
-    onSurface = Color(0xffeeeaf3),
-)
 
 @Composable
 private fun MainActivity.ArtWindowApp(context: Context) {
@@ -132,8 +128,7 @@ private fun MainActivity.ArtWindowApp(context: Context) {
         }
     }
 
-    val scheme = if (destination == Destination.SETTINGS) settingsColors else darkColorScheme()
-    MaterialTheme(colorScheme = scheme) {
+    ArtWindowTheme {
         Surface(color = MaterialTheme.colorScheme.background) {
             Column(
                 modifier = Modifier
@@ -145,6 +140,7 @@ private fun MainActivity.ArtWindowApp(context: Context) {
                         Destination.ARTWORK -> ArtworkScreen(
                             context = context,
                             artwork = artwork,
+                            preferences = savedPreferences,
                             isFavourite = artwork?.let { shown ->
                                 favourites.any { saved -> sameArtwork(saved.artwork, shown) }
                             } == true,
@@ -187,6 +183,7 @@ private fun MainActivity.ArtWindowApp(context: Context) {
                             artwork = artwork,
                             screen = physicalScreen,
                             preferences = draftPreferences,
+                            savedPreferences = savedPreferences,
                             onPreferencesChange = {
                                 draftPreferences = it
                                 applyMessage = null
@@ -260,7 +257,7 @@ private fun MainActivity.ArtWindowApp(context: Context) {
                         Text(
                             text = it,
                             style = MaterialTheme.typography.bodySmall,
-                            color = if (status is Status.Failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                            color = if (status is Status.Failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.muted,
                             modifier = Modifier
                                 .align(Alignment.CenterHorizontally)
                                 .padding(top = 6.dp),
@@ -284,6 +281,7 @@ private fun MainActivity.ArtWindowApp(context: Context) {
 private fun ArtworkScreen(
     context: Context,
     artwork: Artwork?,
+    preferences: WallpaperPreferences,
     isFavourite: Boolean,
     favouriteCount: Int,
     favouritesError: String?,
@@ -318,12 +316,21 @@ private fun ArtworkScreen(
                 .aspectRatio(screen.width.toFloat() / screen.height.toFloat()),
         ) {
             preview?.let {
-                Image(
-                    bitmap = it.asImageBitmap(),
-                    contentDescription = artwork?.title,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize(),
-                )
+                // Zoom frames the painting as the applied wallpaper does, by the same geometry.
+                // The other styles, and a painting turned on the wallpaper, show it cropped from
+                // the centre, as before.
+                val framed = artwork != null && preferences.style == WallpaperStyle.ZOOM &&
+                    !screen.isLandscape && !preferences.turns(it.width, it.height, screen)
+                if (framed) {
+                    FramedPicture(it, Base.COVER, preferences.framingFor(artwork!!.path, screen), Modifier.fillMaxSize())
+                } else {
+                    Image(
+                        bitmap = it.asImageBitmap(),
+                        contentDescription = artwork?.title,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
             }
             Surface(
                 modifier = Modifier
@@ -335,13 +342,13 @@ private fun ArtworkScreen(
                         role = Role.Button
                     }
                     .clickable(enabled = artwork != null && actionsEnabled, onClick = onToggleFavourite),
-                color = Color(0xcc17121f),
+                color = MaterialTheme.colorScheme.overArt,
                 shape = RoundedCornerShape(21.dp),
             ) {
                 Box(contentAlignment = Alignment.Center) {
                     Text(
                         if (isFavourite) "♥" else "♡",
-                        color = if (isFavourite) Color(0xffff8aa3) else Color.White,
+                        color = MaterialTheme.colorScheme.onSurface,
                         style = MaterialTheme.typography.titleLarge,
                     )
                 }
@@ -365,7 +372,8 @@ private fun ArtworkScreen(
                     val source = museumSourceOfKey(keyOf(shown.path)) ?: MuseumSource.MET
                     Text(
                         "See it at ${source.shortName}",
-                        color = MaterialTheme.colorScheme.primary,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        textDecoration = TextDecoration.Underline,
                         modifier = Modifier
                             .padding(top = 4.dp)
                             .clickable { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) },
@@ -375,14 +383,15 @@ private fun ArtworkScreen(
             artwork?.origin?.let {
                 Text(
                     "Origin: $it",
-                    color = MaterialTheme.colorScheme.primary,
+                    color = MaterialTheme.colorScheme.muted,
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.padding(top = 4.dp),
                 )
             }
             Text(
                 "View favourites ($favouriteCount)",
-                color = MaterialTheme.colorScheme.primary,
+                color = MaterialTheme.colorScheme.onSurface,
+                textDecoration = TextDecoration.Underline,
                 modifier = Modifier
                     .padding(top = 12.dp)
                     .clickable(onClick = onViewFavourites),
@@ -407,7 +416,7 @@ private fun NavigationPill(
 ) {
     Surface(
         modifier = modifier,
-        color = Color(0xff292532),
+        color = MaterialTheme.colorScheme.raised,
         shape = RoundedCornerShape(12.dp),
         shadowElevation = 4.dp,
     ) {
@@ -431,13 +440,13 @@ private fun NavigationPill(
                     if (isSelected) {
                         Surface(
                             modifier = Modifier.fillMaxSize(),
-                            color = Color(0xff7258e8),
+                            color = MaterialTheme.colorScheme.primary,
                             shape = RoundedCornerShape(8.dp),
                         ) {}
                     }
                     NavigationIcon(
                         destination = item,
-                        color = if (isSelected) Color(0xfff5f1ff) else Color(0xffa59caf),
+                        color = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.muted,
                     )
                 }
             }
@@ -473,7 +482,15 @@ internal fun decodeSampled(file: File, targetWidth: Int): Bitmap? {
     BitmapFactory.decodeFile(file.path, bounds)
     if (bounds.outWidth <= 0) return null
 
+    return BitmapFactory.decodeFile(
+        file.path,
+        BitmapFactory.Options().apply { inSampleSize = sampleSizeFor(bounds.outWidth, targetWidth) },
+    )
+}
+
+/** The largest power-of-two `inSampleSize` that still leaves a decode at least [targetWidth] wide. */
+internal fun sampleSizeFor(width: Int, targetWidth: Int): Int {
     var sampleSize = 1
-    while (bounds.outWidth / (sampleSize * 2) >= targetWidth) sampleSize *= 2
-    return BitmapFactory.decodeFile(file.path, BitmapFactory.Options().apply { inSampleSize = sampleSize })
+    while (width / (sampleSize * 2) >= targetWidth) sampleSize *= 2
+    return sampleSize
 }

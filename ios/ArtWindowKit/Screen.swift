@@ -90,6 +90,37 @@ public struct Screen: Equatable, Sendable {
     }
 }
 
+/// Where a painting's rectangle sits on the screen once the user has framed it. The one
+/// geometry: `Renderer` asks it at the screen's size and the Settings preview at its own,
+/// so they cannot disagree. Rectangles are in top-left coordinates and may extend past
+/// the screen; the screen crops them.
+public enum Framing {
+    /// The size the painting has at zoom 1: filling the screen, or fitted inside it.
+    public enum Base: Sendable { case cover, fit }
+
+    public static let maxZoom = 3.0
+
+    /// `painting` is the size as hung. `zoom` (1...`maxZoom`) multiplies the base scale; on
+    /// an axis where the result is larger than the screen, `pan` (0...1) places the
+    /// screen's window: 0 puts the painting's left (or top) edge at the screen's edge, 1 its
+    /// right (or bottom), 0.5 centres. On an axis that does not overflow the painting is
+    /// centred. Zoom 1 centred is exactly `Screen.cover` / `Screen.fit`.
+    public static func rect(
+        painting: CGSize, screen: CGSize, base: Base, zoom: Double = 1, panX: Double = 0.5, panY: Double = 0.5
+    ) -> CGRect {
+        guard painting.width > 0, painting.height > 0 else { return CGRect(origin: .zero, size: screen) }
+        let sx = screen.width / painting.width, sy = screen.height / painting.height
+        let scale = (base == .cover ? max(sx, sy) : min(sx, sy)) * CGFloat(min(max(zoom, 1), maxZoom))
+        let (w, h) = (painting.width * scale, painting.height * scale)
+        return CGRect(x: offset(w, in: screen.width, pan: panX), y: offset(h, in: screen.height, pan: panY), width: w, height: h)
+    }
+
+    private static func offset(_ extent: CGFloat, in screen: CGFloat, pan: Double) -> CGFloat {
+        let pan = CGFloat(min(max(pan.isFinite ? pan : 0.5, 0), 1))
+        return extent > screen + 0.001 ? -(extent - screen) * pan : (screen - extent) / 2
+    }
+}
+
 /// The wallpaper canvas of this device, in pixels.
 ///
 /// An iPhone's wallpaper is its native portrait pixels. An iPad has one wallpaper for

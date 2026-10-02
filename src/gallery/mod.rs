@@ -11,7 +11,7 @@
 //! What is in the window, how it is laid out and how a thumbnail is made are the
 //! platform half's business. What the settings tab *decides* is [`Pending`]'s, so
 //! the platforms only draw it. This half owns the window itself and the vocabulary
-//! a click comes back in, which is deliberately only three words wide: everything
+//! a click comes back in, which is deliberately only four words wide: everything
 //! else a person does in there — scrolling, selecting, looking, trying out a style
 //! before applying it — changes nothing outside the window and so never leaves it.
 
@@ -21,6 +21,7 @@ use crate::desktop;
 use crate::favourites::Favourites;
 use crate::settings::Settings;
 use anyhow::{anyhow, Result};
+use std::path::PathBuf;
 use std::rc::Rc;
 use tao::dpi::LogicalSize;
 use tao::event_loop::EventLoopWindowTarget;
@@ -28,7 +29,7 @@ use tao::window::{Window, WindowBuilder, WindowId};
 
 mod pending;
 #[allow(unused_imports)]
-pub use pending::{Chip, Pending, StyleKind};
+pub use pending::{ArtistCard, ArtistRow, Chip, Pending, StyleKind};
 
 #[cfg(target_os = "macos")]
 mod macos;
@@ -56,6 +57,10 @@ pub enum Pick {
     /// Use these settings from now on — what *Apply changes* says. Everything
     /// staged before it stays in the window.
     Apply(Settings),
+    /// Open this page in the browser — where to read about a painter. The window
+    /// could start a browser itself, but that is something happening outside it,
+    /// and those are the loop's.
+    Read(String),
 }
 
 /// Which half of the window to bring forward.
@@ -95,6 +100,8 @@ struct Snapshot {
     /// The main display's width ÷ height, read on the main thread by whoever
     /// fills this in, so the platform never has to ask.
     aspect: f64,
+    /// Where the painters' pictures are unpacked to — see [`Pending::artist_cards`].
+    pictures: PathBuf,
 }
 
 /// The window of kept pictures — shut most of the time, and then not there at all.
@@ -122,10 +129,14 @@ struct Open {
 
 const TITLE: &str = "Art Window";
 const OPENS_AT: LogicalSize<f64> = LogicalSize::new(1180.0, 780.0);
-const NO_SMALLER_THAN: LogicalSize<f64> = LogicalSize::new(560.0, 400.0);
+const NO_SMALLER_THAN: LogicalSize<f64> = LogicalSize::new(900.0, 600.0);
 
 impl Gallery {
-    pub fn new(on_pick: impl Fn(Pick) + 'static, on_control: impl Fn(Control) + 'static) -> Self {
+    pub fn new(
+        on_pick: impl Fn(Pick) + 'static,
+        on_control: impl Fn(Control) + 'static,
+        pictures: PathBuf,
+    ) -> Self {
         Self {
             on_pick: Rc::new(on_pick),
             on_control: Rc::new(on_control),
@@ -133,6 +144,7 @@ impl Gallery {
                 starts_at_login: desktop::starts_at_login(),
                 filters_apply: true,
                 aspect: desktop::primary_aspect(),
+                pictures,
                 ..Snapshot::default()
             },
             open: None,

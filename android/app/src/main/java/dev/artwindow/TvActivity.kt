@@ -24,7 +24,6 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -141,8 +140,12 @@ private fun TvApp(context: Context, openDreamSettings: () -> Boolean) {
         if (overlayOpen) firstButton.requestFocus() else root.requestFocus()
     }
 
-    MaterialTheme(colorScheme = if (destination == TvDestination.SETTINGS) settingsColors else darkColorScheme()) {
-        Surface(color = Color.Black, modifier = Modifier.fillMaxSize()) {
+    ArtWindowTheme {
+        // Black behind a painting; the other screens are ordinary ones.
+        Surface(
+            color = if (destination == TvDestination.ARTWORK) Color.Black else MaterialTheme.colorScheme.background,
+            modifier = Modifier.fillMaxSize(),
+        ) {
             when (destination) {
                 TvDestination.ARTWORK -> Box(
                     modifier = Modifier
@@ -222,6 +225,7 @@ private fun TvApp(context: Context, openDreamSettings: () -> Boolean) {
                             artwork = artwork,
                             screen = physicalScreen,
                             preferences = draftPreferences,
+                            savedPreferences = savedPreferences,
                             onPreferencesChange = {
                                 draftPreferences = it
                                 applyMessage = null
@@ -260,7 +264,7 @@ private fun TvApp(context: Context, openDreamSettings: () -> Boolean) {
                         Text(
                             text = it,
                             style = MaterialTheme.typography.bodySmall,
-                            color = if (status is Status.Failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                            color = if (status is Status.Failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.muted,
                             modifier = Modifier
                                 .align(Alignment.CenterHorizontally)
                                 .padding(vertical = 6.dp),
@@ -294,7 +298,7 @@ private fun Overlay(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xe6000000))))
+            .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.9f))))
             .padding(horizontal = 48.dp, vertical = 32.dp),
     ) {
         Text(artwork?.title ?: "No painting yet", style = MaterialTheme.typography.headlineSmall, color = Color.White)

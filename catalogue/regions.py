@@ -41,7 +41,10 @@ REGION_KEYWORDS: dict[str, list[str]] = {
     ],
     "AFRICA": [
         "egyptian", "egypt", "moroccan", "morocco", "ethiopian", "ethiopia",
-        "nigerian", "nigeria", "african", "africa",
+        "nigerian", "nigeria", "african", "africa", "south african",
+        "south africa", "algerian", "algeria", "tunisian", "tunisia",
+        "sudanese", "sudan", "ghanaian", "ghana", "congolese", "congo",
+        "kenyan", "kenya",
     ],
     "NORTH_AMERICA": [
         "american", "america", "united states", "usa", "canadian", "canada",
@@ -50,10 +53,14 @@ REGION_KEYWORDS: dict[str, list[str]] = {
     "SOUTH_AMERICA": [
         "brazilian", "brazil", "peruvian", "peru", "argentine", "argentina",
         "colombian", "colombia", "chilean", "chile", "south america",
+        "south american", "latin american", "uruguayan", "uruguay",
+        "venezuelan", "venezuela", "ecuadorian", "ecuador", "bolivian",
+        "bolivia", "paraguayan", "paraguay", "cuzco", "cusco", "quito",
     ],
     "OCEANIA": [
         "australian", "australia", "new zealand", "oceania", "polynesian",
-        "melanesian", "hawaiian",
+        "melanesian", "hawaiian", "aboriginal", "maori", "papua",
+        "new zealander",
     ],
 }
 

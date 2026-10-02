@@ -42,6 +42,21 @@ public final class Catalogue: @unchecked Sendable {
         return Catalogue(tsv: text)
     }()
 
+    /// The promise behind every filter Settings will apply: at least this many paintings
+    /// remain to pick from, so a day's picture is never one of a handful coming round
+    /// again. Mirrors `MIN_POOL` in src/art/museums.rs and `MIN_POOL` in Catalogue.kt,
+    /// on purpose, like the word lists.
+    public static let minPool = 20
+
+    /// How many paintings `filters` must leave to be enough. A chosen painter is a narrower
+    /// origin than any region and their paintings, however few, are what was asked for, so
+    /// one is enough; the floor exists for combinations nobody knew were thin. Used by
+    /// `hasEnough`, `widened` and Settings' Apply rule alike. Mirrors `needed` in
+    /// src/art/museums.rs and Catalogue.kt, on purpose.
+    public static func needed(for filters: Filters) -> Int {
+        filters.artists.isEmpty ? minPool : 1
+    }
+
     public let entries: [CatalogueEntry]
 
     private let lock = NSLock()
@@ -85,33 +100,102 @@ public final class Catalogue: @unchecked Sendable {
         matching(filters, screen: screen, style: style).shuffled()
     }
 
-    public func anyMatch(_ filters: Filters, screen: Screen, style: RenderStyle = Preferences.shared.style) -> Bool {
-        !indices(filters, screen: screen, style: style, ignoring: nil).isEmpty
+    /// How many paintings the filters admit, counted in full — for the message, not the gate.
+    public func matchCount(_ filters: Filters, screen: Screen, style: RenderStyle = Preferences.shared.style) -> Int {
+        indices(filters, screen: screen, style: style, ignoring: []).count
+    }
+
+    /// Whether the filters leave at least `needed(for:)` paintings. Counting stops at the floor:
+    /// the catalogue holds thousands and only "enough or not" is asked, once per chip per edit.
+    public func hasEnough(_ filters: Filters, screen: Screen, style: RenderStyle = Preferences.shared.style) -> Bool {
+        let traits = self.traits()
+        let needed = Catalogue.needed(for: filters)
+        return entries.indices.lazy
+            .filter { self.admits($0, filters, screen, style, [], traits) }
+            .prefix(needed).count == needed
     }
 
     public func matching(_ filters: Filters, screen: Screen, style: RenderStyle = Preferences.shared.style) -> [CatalogueEntry] {
-        indices(filters, screen: screen, style: style, ignoring: nil).map { entries[$0] }
+        indices(filters, screen: screen, style: style, ignoring: []).map { entries[$0] }
     }
 
-    /// Which regions have an entry when chosen alone within Origins, the other sections
-    /// held at `filters` — the chips Settings should offer. Equivalent to trying each
-    /// region as a singleton, but one pass instead of six.
+    /// Which regions leave at least `minPool` paintings when chosen alone within Origins, the
+    /// other sections held at `filters` — the chips Settings should offer. Equivalent to
+    /// trying each region as a singleton, but one pass instead of six. A chosen painter makes
+    /// Origins idle, so it is lifted here too: no region is hidden on the painter's account.
     public func availableRegions(_ filters: Filters, screen: Screen, style: RenderStyle = Preferences.shared.style) -> Set<Region> {
-        Set(indices(filters, screen: screen, style: style, ignoring: .region).compactMap { entries[$0].region })
+        var counts: [Region: Int] = [:]
+        for i in indices(filters, screen: screen, style: style, ignoring: [.region, .artist]) {
+            if let region = entries[i].region { counts[region, default: 0] += 1 }
+        }
+        return Set(counts.filter { $0.value >= Catalogue.minPool }.keys)
     }
 
     public func availableSubjects(_ filters: Filters, screen: Screen, style: RenderStyle = Preferences.shared.style) -> Set<ArtworkSubject> {
         let traits = self.traits()
-        var found = Set<ArtworkSubject>()
-        for i in indices(filters, screen: screen, style: style, ignoring: .subject) {
-            found.formUnion(traits[i].subjects)
-            if found.count == ArtworkSubject.allCases.count { break }
+        var counts: [ArtworkSubject: Int] = [:]
+        for i in indices(filters, screen: screen, style: style, ignoring: [.subject]) {
+            for subject in traits[i].subjects { counts[subject, default: 0] += 1 }
+        }
+        let needed = Catalogue.needed(for: filters)
+        return Set(counts.filter { $0.value >= needed }.keys)
+    }
+
+    /// Who can be chosen: anyone with a painting left once Subject and *Hide religious* have
+    /// had their say. Shape and Origins are lifted because choosing the painter would lift
+    /// them, and one painting is enough for the same reason.
+    public func availableArtists(_ filters: Filters, screen: Screen, style: RenderStyle = Preferences.shared.style) -> Set<String> {
+        var found: Set<String> = []
+        for i in indices(filters, screen: screen, style: style, ignoring: [.artist, .region, .shape]) {
+            if let artist = entries[i].artist { found.insert(artist) }
         }
         return found
     }
 
-    public func availableArtists(_ filters: Filters, screen: Screen, style: RenderStyle = Preferences.shared.style) -> Set<String> {
-        Set(indices(filters, screen: screen, style: style, ignoring: .artist).compactMap { entries[$0].artist })
+    /// Why a painter cannot be chosen under the staged filters, when Subject or *Hide
+    /// religious* is what leaves them nothing; `nil` when they have a painting to show.
+    public enum Emptied: Sendable { case subject, religious }
+
+    public func whatEmpties(
+        _ artist: String, _ filters: Filters, screen: Screen, style: RenderStyle = Preferences.shared.style
+    ) -> Emptied? {
+        var only = filters
+        only.artists = [artist]
+        if matchCount(only, screen: screen, style: style) > 0 { return nil }
+        only.hideReligious = false
+        return matchCount(only, screen: screen, style: style) > 0 ? .religious : .subject
+    }
+
+    /// `filters`, relaxed just far enough to leave `needed(for:)` paintings to pick from: the
+    /// smallest set of active sections that cures it, single sections first, then pairs,
+    /// and so on, ties broken in the order Shape, Origin, Subject, Artist, Content.
+    /// Settings saved before the floor existed, a catalogue that shrank, or a screen-shaped
+    /// filter on a device of another shape must not leave the rotation alternating between
+    /// a handful. Adequate filters come back untouched, and so do filters nothing can
+    /// rescue, so the caller's "nothing matches" still fires.
+    public func widened(_ filters: Filters, screen: Screen, style: RenderStyle = Preferences.shared.style) -> Filters {
+        if hasEnough(filters, screen: screen, style: style) { return filters }
+        // While a painter is chosen Shape and Origins are not asked (see `admits`), so
+        // relaxing them changes nothing and they are not candidates. Relaxing the Artist
+        // section brings the floor back to `minPool`, because the threshold belongs to
+        // the filters being tested.
+        let painter = !filters.artists.isEmpty
+        let relaxers: [(active: Bool, relax: (inout Filters) -> Void)] = [
+            (!painter && filters.shape != .any, { $0.shape = .any }),
+            (!painter && !filters.regions.isEmpty, { $0.regions = [] }),
+            (!filters.subjects.isEmpty, { $0.subjects = [] }),
+            (!filters.artists.isEmpty, { $0.artists = [] }),
+            (filters.hideReligious, { $0.hideReligious = false }),
+        ].filter { $0.active }
+        guard !relaxers.isEmpty else { return filters }
+        for count in 1...relaxers.count {
+            for mask in 1..<(1 << relaxers.count) where mask.nonzeroBitCount == count {
+                var relaxed = filters
+                for (i, r) in relaxers.enumerated() where mask & (1 << i) != 0 { r.relax(&relaxed) }
+                if hasEnough(relaxed, screen: screen, style: style) { return relaxed }
+            }
+        }
+        return filters
     }
 
     /// Every distinct artist name, sorted so the list is stable across loads.
@@ -119,31 +203,53 @@ public final class Catalogue: @unchecked Sendable {
         Array(Set(entries.compactMap(\.artist))).sorted()
     }
 
-    private enum Section { case region, subject, artist }
+    /// How many of `artist`'s paintings can ever be picked. Portraits are excluded whatever
+    /// the filters say, so they are left out of the count too. Mirrors `museums::paintings_by`.
+    public func paintings(by artist: String) -> Int {
+        let traits = self.traits()
+        return entries.indices.reduce(0) { $0 + (entries[$1].artist == artist && !traits[$1].portrait ? 1 : 0) }
+    }
+
+    private enum Section { case shape, region, subject, artist }
 
     /// An entry qualifies when it passes every section — shape, origins, subjects and
     /// artists — with an empty selection meaning Any. The portrait and religious
-    /// exclusions apply whatever qualified an entry. `ignoring` lifts one section, which
+    /// exclusions apply whatever qualified an entry. `ignoring` lifts sections, which
     /// is how the `available…` queries ask "what could this section still offer?".
-    private func indices(_ filters: Filters, screen: Screen, style: RenderStyle, ignoring: Section?) -> [Int] {
+    ///
+    /// A chosen painter wins over Shape and Origins: they are not asked at all, because
+    /// choosing a painter means "show me their work". Subject, *Hide religious* and the
+    /// enlargement check still apply. Mirrors `admits` in src/art/museums.rs and Catalogue.kt.
+    private func indices(_ filters: Filters, screen: Screen, style: RenderStyle, ignoring: Set<Section>) -> [Int] {
         let traits = self.traits()
-        return entries.indices.filter { i in
-            let entry = entries[i]
-            let trait = traits[i]
-            if ignoring != .region, !filters.regions.isEmpty {
-                guard let region = entry.region, filters.regions.contains(region) else { return false }
-            }
-            if ignoring != .subject, !filters.subjects.isEmpty,
-               filters.subjects.isDisjoint(with: trait.subjects) { return false }
-            if ignoring != .artist, !filters.artists.isEmpty {
-                guard let artist = entry.artist, filters.artists.contains(artist) else { return false }
-            }
-            if trait.portrait { return false }
-            if filters.hideReligious && trait.religious { return false }
-            guard filters.shape.accepts(aspect: Double(entry.width) / Double(entry.height), screen: screen)
-            else { return false }
-            return style.canRender(width: entry.width, height: entry.height, on: screen)
+        return entries.indices.filter { admits($0, filters, screen, style, ignoring, traits) }
+    }
+
+    private func admits(
+        _ i: Int, _ filters: Filters, _ screen: Screen, _ style: RenderStyle,
+        _ ignoring: Set<Section>, _ traits: [Traits]
+    ) -> Bool {
+        let entry = entries[i]
+        let trait = traits[i]
+        let byPainter = !ignoring.contains(.artist) && !filters.artists.isEmpty
+        if !byPainter, !ignoring.contains(.region), !filters.regions.isEmpty {
+            guard let region = entry.region, filters.regions.contains(region) else { return false }
         }
+        if !ignoring.contains(.subject), !filters.subjects.isEmpty,
+           filters.subjects.isDisjoint(with: trait.subjects) { return false }
+        if byPainter {
+            guard let artist = entry.artist, filters.artists.contains(artist) else { return false }
+        }
+        if trait.portrait { return false }
+        if filters.hideReligious && trait.religious { return false }
+        // The shape is judged as the painting will hang, so a turned wide painting counts
+        // as the tall one it becomes.
+        if !byPainter, !ignoring.contains(.shape) {
+            let hung = style.hung(width: entry.width, height: entry.height, on: screen)
+            guard filters.shape.accepts(aspect: Double(hung.width) / Double(hung.height), screen: screen)
+            else { return false }
+        }
+        return style.canRender(width: entry.width, height: entry.height, on: screen)
     }
 
     // MARK: Text judgements

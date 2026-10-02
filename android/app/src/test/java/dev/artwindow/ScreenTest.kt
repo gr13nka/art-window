@@ -116,4 +116,130 @@ class ScreenTest {
         assertTrue(Screen(1080, 2340).canStretch(1080, 2340))
         assertTrue(!Screen(1080, 2340).canStretch(200, 400))
     }
+
+    private val phone = Screen(1080, 2340)
+
+    @Test
+    fun `at zoom 1 and centred the frame is today's cover and fit`() {
+        val cover = phone.cover(4000, 2000)!!
+        val coverFrame = phone.frame(4000, 2000, Base.COVER, Framing())
+        assertEquals(cover.scaledWidth, coverFrame.width)
+        assertEquals(cover.scaledHeight, coverFrame.height)
+        assertEquals(-cover.crop.left, coverFrame.left)
+        assertEquals(-cover.crop.top, coverFrame.top)
+
+        val fit = phone.fit(4000, 2000)!!
+        val fitFrame = phone.frame(4000, 2000, Base.FIT, Framing())
+        assertEquals(fit.scaledWidth, fitFrame.width)
+        assertEquals(fit.scaledHeight, fitFrame.height)
+        assertEquals(fit.destination.left, fitFrame.left)
+        assertEquals(fit.destination.top, fitFrame.top)
+    }
+
+    @Test
+    fun `a zoomed fitted painting overflows along the axis it outgrows and pan puts it at each edge`() {
+        // Fitted, 4000x2000 is 1080x540 on the phone; zoom 3 makes it 3240x1620.
+        val left = phone.frame(4000, 2000, Base.FIT, Framing(3f, 0f, 0f))
+        val middle = phone.frame(4000, 2000, Base.FIT, Framing(3f))
+        val right = phone.frame(4000, 2000, Base.FIT, Framing(3f, 1f, 1f))
+
+        assertEquals(3240, left.width)
+        assertEquals(0, left.left)
+        assertEquals(-(3240 - 1080) / 2, middle.left)
+        assertEquals(1080 - 3240, right.left)
+        // 1620 is shorter than the screen's 2340, so vertically it stays centred whatever the pan.
+        assertEquals((2340 - 1620) / 2, left.top)
+        assertEquals((2340 - 1620) / 2, right.top)
+    }
+
+    @Test
+    fun `pan on an axis that does not overflow changes nothing`() {
+        // Fitted at zoom 1 the painting is centred and the pan is ignored.
+        assertEquals(
+            phone.frame(4000, 2000, Base.FIT, Framing(1f, 0f, 0f)),
+            phone.frame(4000, 2000, Base.FIT, Framing(1f, 1f, 1f)),
+        )
+        // Zoomed past the width but not the height: only the horizontal pan matters.
+        val a = phone.frame(4000, 2000, Base.FIT, Framing(2f, 0f, 0f))
+        val b = phone.frame(4000, 2000, Base.FIT, Framing(2f, 0f, 1f))
+        assertEquals(a, b)
+    }
+
+    @Test
+    fun `an overflowing axis always reaches both screen edges`() {
+        for (zoom in listOf(1f, 1.5f, 2f, 3f)) {
+            for (pan in listOf(0f, 0.3f, 0.5f, 1f)) {
+                val rect = phone.frame(4000, 2000, Base.COVER, Framing(zoom, pan, pan))
+                assertTrue(rect.left <= 0 && rect.left + rect.width >= phone.width)
+                assertTrue(rect.top <= 0 && rect.top + rect.height >= phone.height)
+            }
+        }
+    }
+
+    @Test
+    fun `a preview-scale frame is the screen-scale frame scaled down`() {
+        val preview = Screen(270, 585) // a quarter of the phone
+        val framing = Framing(2f, 0.25f, 0.75f)
+        val full = phone.frame(4000, 2000, Base.COVER, framing)
+        val small = preview.frame(4000, 2000, Base.COVER, framing)
+
+        assertEquals(full.width / 4.0, small.width.toDouble(), 1.0)
+        assertEquals(full.left / 4.0, small.left.toDouble(), 1.0)
+        assertEquals(full.top / 4.0, small.top.toDouble(), 1.0)
+    }
+
+    @Test
+    fun `dragging moves the painting by exactly the finger and stops at its edge`() {
+        val start = Framing(2f, 0.5f, 0.5f)
+        val before = phone.frame(4000, 2000, Base.COVER, start)
+        val moved = phone.reframe(4000, 2000, Base.COVER, start, 1f, 500f, 500f, dx = 100f, dy = 0f)
+        val after = phone.frame(4000, 2000, Base.COVER, moved)
+        assertEquals(before.left + 100.0, after.left.toDouble(), 1.0)
+
+        val past = phone.reframe(4000, 2000, Base.COVER, start, 1f, 500f, 500f, dx = 1e6f, dy = 1e6f)
+        assertEquals(0f, past.panX, 0f)
+        assertEquals(0f, past.panY, 0f)
+    }
+
+    @Test
+    fun `a slow drag adds up, whichever way it goes`() {
+        // A finger at 120 Hz sends well under a pixel per event. Both directions must
+        // accumulate: this once moved right and up eagerly and left and down not at all.
+        val preview = Screen(400, 880)
+        for (step in listOf(-0.4f, 0.4f)) {
+            var framing = Framing(2f, 0.5f, 0.5f)
+            val before = preview.frame(4000, 2000, Base.COVER, framing)
+            repeat(200) {
+                framing = preview.reframe(4000, 2000, Base.COVER, framing, 1f, 200f, 440f, dx = step, dy = step)
+            }
+            val after = preview.frame(4000, 2000, Base.COVER, framing)
+            assertEquals(before.left + step * 200.0, after.left.toDouble(), 1.5)
+            assertEquals(before.top + step * 200.0, after.top.toDouble(), 1.5)
+        }
+    }
+
+    @Test
+    fun `a gesture with no fingers left changes nothing`() {
+        // What lifting the last finger reports: an unspecified centroid, which is NaN.
+        val start = Framing(2f, 0.3f, 0.7f)
+        assertEquals(start, phone.reframe(4000, 2000, Base.COVER, start, 1f, Float.NaN, Float.NaN, 0f, 0f))
+    }
+
+    @Test
+    fun `pinching keeps the point under the fingers where it was and stays within the zoom limits`() {
+        val start = Framing()
+        val before = phone.frame(4000, 2000, Base.COVER, start)
+        val zoomed = phone.reframe(4000, 2000, Base.COVER, start, 2f, 800f, 1200f, 0f, 0f)
+        val after = phone.frame(4000, 2000, Base.COVER, zoomed)
+        // The painting point under (800, 1200) before is at (800 - left) / width of the painting.
+        assertEquals((800.0 - before.left) / before.width, (800.0 - after.left) / after.width, 0.002)
+
+        assertEquals(Screen.MAX_ZOOM, phone.reframe(4000, 2000, Base.COVER, start, 50f, 0f, 0f, 0f, 0f).zoom, 0f)
+        assertEquals(1f, phone.reframe(4000, 2000, Base.COVER, Framing(2f), 0.01f, 0f, 0f, 0f, 0f).zoom, 0f)
+    }
+
+    @Test
+    fun `a framing for a quarter-turned painting swaps the axes`() {
+        assertEquals(Framing(2f, 0.25f, 0.9f), Framing(2f, 0.1f, 0.25f).forQuarterTurn())
+    }
 }

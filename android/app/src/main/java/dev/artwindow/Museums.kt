@@ -86,7 +86,11 @@ class Museums(private val cacheDir: File, private val catalogue: Catalogue) {
         // (empty means Any within a section, so a section a person left untouched never
         // narrows anything) — Catalogue.candidates already shuffles every qualifying
         // entry, so there is no per-choice draw or fallback pass left to do here.
-        val ordered = catalogue.candidates(preferences, screen)
+        // Widened first: settings saved before the pool floor existed, a catalogue that
+        // shrank, or a screen-shaped filter on another screen can admit only a handful,
+        // and the rotation would alternate between them. Widening gives up as little as
+        // it must, and leaves adequate filters alone.
+        val ordered = catalogue.candidates(catalogue.widened(preferences, screen), screen)
             .filterNot { avoidKey != null && "${it.source.code}-${it.id}" == avoidKey }
         if (ordered.isEmpty()) {
             throw IOException("No paintings match these filters")

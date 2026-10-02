@@ -13,6 +13,7 @@ use anyhow::Result;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::path::{Path, PathBuf};
 
+pub mod artists;
 pub mod folder;
 pub(crate) mod http;
 pub mod met;

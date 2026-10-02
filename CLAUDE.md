@@ -251,13 +251,82 @@ it before touching `src/desktop/macos/wallpaper.rs`.
 - **A click in the window is answered by the loop, not where it lands.**
   `mouseDown:` and a button's action arrive mid-click on AppKit's thread, which owns
   nothing the loop does. They send a `Pick` through the same `EventLoopProxy` the
-  menu and the wake notification use. `Pick` has three variants — show, forget,
-  apply — because selecting a picture, and trying out settings before applying
-  them, change nothing outside the window and so have no business leaving it.
+  menu and the wake notification use. `Pick` has four variants — show, forget,
+  apply, read — because selecting a picture, and trying out settings before
+  applying them, change nothing outside the window and so have no business
+  leaving it. *Read more* about a painter does leave it: starting a browser is
+  something happening outside, so it is the loop's even though the window could
+  do it.
+- **No filter set may leave fewer than `museums::MIN_POOL` paintings.** Twenty. A
+  choice counted as available when it matched one painting, and Africa plus
+  Oceania matched two, which is the same two pictures in turn for ever. The
+  catalogue owns the number and the search for what is in the way (`blockers`);
+  `Pending` only words the answer, and *Apply* is refused below it. `Museums::fetch`
+  asks the same question of whatever it is handed and relaxes the fewest sections
+  that cure it, because the window is not the only way to arrive short: a
+  `settings.json` from before the floor, a catalogue that shrank, *Screen-shaped*
+  on a different display. `catalogue/build.py` keeps the same number as
+  `MIN_PER_CHOICE` and leaves the `artist` column empty for a painter with fewer
+  rows, so no app grows a chip with three paintings behind it. Android and iOS keep
+  their own copies — `Catalogue.MIN_POOL` and `widened` in `Catalogue.kt`,
+  `Catalogue.minPool` and `widened` in `Catalogue.swift` — duplicated on purpose
+  like the word lists. They hide a thin choice where the desktop greys it.
+- **A chosen painter wins over Shape and Origin, and over the floor.** Asking for
+  a painter is asking for their paintings as they are: with any artist chosen,
+  region and shape are not asked at all, and one painting is enough. Subject and
+  *Hide religious scenes* still narrow. The floor exists for the combination
+  nobody knew was thin; a painter's seventeen paintings in turn are what was
+  asked for. Before this a phone set to phone-shaped paintings from Europe could
+  choose nobody — six of the named painters' paintings are that shape, and twelve
+  of the fourteen painters are from elsewhere. The threshold belongs to the
+  filters being tested, so relaxing the Artist section brings twenty back, and
+  `widened` never widens a painter away while they have something to show. All
+  three copies of the rule say this; the windows show Shape and Origin as idle
+  ("Not used while an artist is chosen.") rather than hiding them.
+- **A phone may turn a wide painting; nothing else may.** *Turn wide paintings*
+  (`rotateWide`, Android and iPhone, off by default) turns a painting wider than
+  tall 90° clockwise before it is hung on a screen taller than wide, and every
+  style then works on the turned picture. One helper per platform answers "the
+  size as it will be hung", and the shape filter and the enlargement check both
+  ask it, so the pool is judged as the paintings will hang. The renderer gates on
+  a portrait screen itself, so a stale preference cannot turn a picture on a TV
+  or an iPad's square canvas. The in-app picture, thumbnails and the iOS widget
+  stay upright.
+- **Framing on a phone is numbers, and one geometry reads them.** Pinch and drag
+  on the Settings preview set a zoom (1 to 3, a style option that outlives the
+  painting) and a pan per axis (0 to 1, belonging to the one painting named
+  beside it, so the next painting is centred with nobody resetting anything).
+  `Screen.frame` on Android and `Framing.rect` on iOS place the painting for the
+  renderer at screen size and for the preview at its own, which is the only reason
+  the two agree. The preview is a static backdrop with the sharp painting drawn
+  over it, so a gesture redraws and never re-renders. Three things were learnt the
+  hard way on Android: re-rendering the preview per touch event lurches; starting
+  each event from the position rounded to a pixel loses a slow drag in one
+  direction; and the event that lifts the last finger has an unspecified centroid,
+  whose NaN, once in the pan, pins the painting to its left edge for good —
+  `coerceIn` passes a NaN straight through. Admission (`canRender`, the shape
+  filter) is always judged at zoom 1.
+- **Android's colours are roles in `Theme.kt`, and none of them has a hue.** The
+  app wore Material's default purple wherever a scheme was not given one. Every
+  role of the scheme is now set, to match the desktop's system-colour roles, and
+  screens name a role rather than a colour; what is left as a literal is data —
+  the border picker's swatches, colours measured from a painting.
 - **The settings tab decides nothing itself.** `gallery::Pending` owns what is
   staged, which chips show, what the preview looks like and whether *Apply* can
   be pressed; the three platform windows only draw it and forward clicks into it.
   A rule written into one platform file is a rule the other two will not have.
+- **A painter is chosen by a painting, not by a name.** The *Artist* row holds only
+  who has been chosen and one button; the button opens a browser inside the
+  settings tab that is the favourites browser again — the same shelf and preview,
+  told different words for its two buttons. `Pending::artist_cards` hands each
+  painter over as an `Artwork` precisely so that nothing about showing one had to
+  be written a second time. The pictures are `catalogue/dist/artists/`, written by
+  `catalogue/showcase.py` from the `showcase` and `about` in `artists.json` and
+  compiled in by `build.rs`; `art::artists::picture` unpacks one into the cache as
+  `artist-{slug}.jpg`, because every window makes thumbnails from a path. That
+  prefix is neither source's, so no sweep deletes it. Android and iOS have
+  the same row and browser, each modelled on its own favourites screen and each
+  with its own copy of the rules, reading the same directory as bundled assets.
 - **The shelf accepts the first mouse.** `acceptsFirstMouse:` returns true, and it
   has to: this program is an `Accessory` and its window is hardly ever the active
   one, so the ordinary rule — the first click into an inactive window only wakes it —

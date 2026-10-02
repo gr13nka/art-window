@@ -52,6 +52,9 @@ objc2-app-kit = { version = "0.3", features = [
     "NSControl", "NSButton", "NSTextField", "NSFont", "NSParagraphStyle",
     # The settings tab.
     "NSSegmentedControl", "NSSegmentedCell", "NSSlider", "NSSliderCell", "NSColorWell",
+    "NSPopover", "NSViewController",
+    # Alignment rects: where a button's bezel is, as against its frame.
+    "NSLayoutConstraint",
     "NSColorSpace", "NSShadow", "NSAppearance", "NSText", "NSVisualEffectView", "NSWindow",
 ] }
 

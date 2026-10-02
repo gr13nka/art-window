@@ -2,6 +2,7 @@ package dev.artwindow
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import java.io.File
 import org.junit.Test
 
 class WallpaperPreferencesTest {
@@ -134,5 +135,43 @@ class WallpaperPreferencesTest {
             setOf("Mikhail Vrubel"),
             toggled(emptySet(), "Mikhail Vrubel"),
         )
+    }
+
+    @Test
+    fun `framing defaults to centred and unzoomed`() {
+        val prefs = WallpaperPreferences()
+        assertEquals(1f, prefs.frameZoom, 0f)
+        assertEquals(Framing(), prefs.framingFor(File("/cache/x.jpg"), screen))
+    }
+
+    @Test
+    fun `the zoom follows every painting while the pan belongs to one`() {
+        val prefs = WallpaperPreferences(frameZoom = 2f, panX = 0.9f, panY = 0.1f, panPainting = "museums-met-1.jpg")
+
+        assertEquals(Framing(2f, 0.9f, 0.1f), prefs.framingFor(File("/cache/museums-met-1.jpg"), screen))
+        assertEquals(Framing(2f), prefs.framingFor(File("/cache/museums-met-2.jpg"), screen))
+    }
+
+    @Test
+    fun `a landscape screen ignores the framing altogether`() {
+        val prefs = WallpaperPreferences(frameZoom = 2f, panX = 0.9f, panPainting = "a.jpg")
+        assertEquals(Framing(), prefs.framingFor(File("/cache/a.jpg"), Screen(3840, 2160)))
+    }
+
+    @Test
+    fun `only the styles with a sharp picture are framed`() {
+        val prefs = WallpaperPreferences()
+        assertTrue(prefs.copy(style = WallpaperStyle.ZOOM).framesSharpPicture())
+        assertTrue(prefs.copy(style = WallpaperStyle.BORDERS).framesSharpPicture())
+        assertTrue(prefs.copy(style = WallpaperStyle.BLUR, blurVariant = BlurVariant.BACKDROP).framesSharpPicture())
+        assertTrue(!prefs.copy(style = WallpaperStyle.BLUR, blurVariant = BlurVariant.WHOLE_IMAGE).framesSharpPicture())
+        assertTrue(!prefs.copy(style = WallpaperStyle.STRETCH).framesSharpPicture())
+        assertEquals(Base.COVER, prefs.copy(style = WallpaperStyle.ZOOM).frameBase())
+        assertEquals(Base.FIT, prefs.copy(style = WallpaperStyle.BORDERS).frameBase())
+    }
+
+    @Test
+    fun `framing is not part of the filters`() {
+        assertTrue(WallpaperPreferences().sameFiltersAs(WallpaperPreferences(frameZoom = 3f, panX = 0.1f, panPainting = "x.jpg")))
     }
 }

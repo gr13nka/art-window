@@ -23,7 +23,7 @@
 
 use super::http;
 use super::{pick_index, Artwork, Selection, Source};
-use crate::settings::{Filters, Region, Subject};
+use crate::settings::{Filters, Region, Shape, Subject};
 use anyhow::{anyhow, Result};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -404,17 +404,41 @@ fn is_portrait(entry: &Entry) -> bool {
             .any(|t| t.eq_ignore_ascii_case("portraits"))
 }
 
-/// Whether `entry` passes every section of `filters` on a screen `aspect` wide.
+/// Whether `entry` passes `filters` on a screen `aspect` wide.
+///
+/// With a painter chosen, region and shape are not asked: a painter is a narrower
+/// origin than a region, and asking for a painter is asking for their paintings as
+/// they are, hung however they were painted. Subject, portraits and *Hide
+/// religious* still apply.
 fn admits(entry: &Entry, filters: &Filters, aspect: f64) -> bool {
     let traits = &entry.traits;
-    (filters.regions.is_empty() || filters.regions.contains(&entry.region))
+    let by_painter = !filters.artists.is_empty();
+    (by_painter || filters.regions.is_empty() || filters.regions.contains(&entry.region))
         && (filters.subjects.is_empty() || filters.subjects.iter().any(|&s| traits.is(s)))
-        && (filters.artists.is_empty() || filters.artists.contains(&entry.artist))
+        && (!by_painter || filters.artists.contains(&entry.artist))
         && !traits.portrait
         && !(filters.hide_religious && traits.religious)
-        && filters
-            .shape
-            .accepts(f64::from(entry.width) / f64::from(entry.height), aspect)
+        && (by_painter
+            || filters
+                .shape
+                .accepts(f64::from(entry.width) / f64::from(entry.height), aspect))
+}
+
+/// The promise behind every combination of filters the settings window will
+/// apply, painters aside (see [`needed`]): at least this many paintings remain to
+/// pick from, so a day's picture is never one of a handful coming round again.
+pub const MIN_POOL: usize = 20;
+
+/// How many paintings `filters` must admit to count as enough: [`MIN_POOL`], or a
+/// single one when a painter is chosen. The floor exists for the combination
+/// nobody knew was thin; someone who asked for a painter asked for that painter's
+/// paintings, however few, in turn.
+fn needed(filters: &Filters) -> usize {
+    if filters.artists.is_empty() {
+        MIN_POOL
+    } else {
+        1
+    }
 }
 
 /// Entries `selection` admits, minus whichever one `avoid` names.
@@ -430,58 +454,325 @@ fn candidates<'a>(
         .collect()
 }
 
-/// Which choices in each section would still find a painting, the other sections
-/// held where they are — what the settings window asks before it shows a chip.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct Availability {
-    pub regions: Vec<Region>,
-    pub subjects: Vec<Subject>,
-    pub artists: Vec<String>,
-    /// How many paintings the filters as a whole admit. Zero means *Apply* would
-    /// leave the rotation with nothing to pick.
-    pub matching: usize,
+/// A filter section whose current value prevents another choice finding a
+/// painting. The settings model turns these into the explanation shown by each
+/// platform; the catalogue owns discovering them because it owns `admits`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FilterSection {
+    Shape,
+    Origin,
+    Subject,
+    Artist,
+    Content,
 }
 
-/// Asks the whole catalogue [`Availability`]'s question: for each option, the
-/// pool with only that option chosen in its own section. Android's
-/// `Catalogue.availableRegions` and its siblings, in one pass per option.
+/// Why a filter choice cannot find a painting.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Unavailable {
+    /// Removing these current sections is the smallest change that produces a
+    /// match. Sections are ordered so explanations stay deterministic.
+    Conflicts(Vec<FilterSection>),
+    /// Too few paintings fit the choice (fewer than [`MIN_POOL`], or none at all
+    /// for a painter) even after every other filter is relaxed.
+    TooFew,
+}
+
+/// Unavailable choices in every section, plus the size of the current result.
+/// Choices absent from these lists are available.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Availability {
+    pub shapes: Vec<(Shape, Unavailable)>,
+    pub regions: Vec<(Region, Unavailable)>,
+    pub subjects: Vec<(Subject, Unavailable)>,
+    pub artists: Vec<(String, Unavailable)>,
+    /// How many paintings the filters as a whole admit.
+    pub matching: usize,
+    /// How many of them make a pool worth rotating through: [`MIN_POOL`], or one
+    /// when a painter is chosen. Below it, *Apply* is refused.
+    needed: usize,
+}
+
+impl Availability {
+    /// Whether the filters leave a pool worth rotating through.
+    pub fn is_enough(&self) -> bool {
+        self.matching >= self.needed
+    }
+}
+
+#[derive(Clone, Copy)]
+enum FilterChoice<'a> {
+    Shape(Shape),
+    Region(Region),
+    Subject(Subject),
+    Artist(&'a str),
+}
+
+impl FilterChoice<'_> {
+    fn section(self) -> FilterSection {
+        match self {
+            Self::Shape(_) => FilterSection::Shape,
+            Self::Region(_) => FilterSection::Origin,
+            Self::Subject(_) => FilterSection::Subject,
+            Self::Artist(_) => FilterSection::Artist,
+        }
+    }
+
+    fn apply(self, filters: &mut Filters) {
+        match self {
+            Self::Shape(shape) => filters.shape = shape,
+            Self::Region(region) => filters.regions = vec![region],
+            Self::Subject(subject) => filters.subjects = vec![subject],
+            Self::Artist(artist) => filters.artists = vec![artist.to_owned()],
+        }
+    }
+}
+
+fn relax(filters: &mut Filters, section: FilterSection) {
+    match section {
+        FilterSection::Shape => filters.shape = Shape::Any,
+        FilterSection::Origin => filters.regions.clear(),
+        FilterSection::Subject => filters.subjects.clear(),
+        FilterSection::Artist => filters.artists.clear(),
+        FilterSection::Content => filters.hide_religious = false,
+    }
+}
+
+/// The smallest set of active sections, other than `exempt`, that must be relaxed
+/// for `filters` to admit [`needed`] paintings. With a painter chosen, shape and
+/// origin are idle and so never named. `Some(vec![])` means it
+/// already does; `None` means relaxing every such section still is not enough.
+/// Ties follow the order below so the same staged settings always produce the
+/// same explanation.
+fn blockers(
+    entries: &[Entry],
+    filters: &Filters,
+    aspect: f64,
+    exempt: Option<FilterSection>,
+) -> Option<Vec<FilterSection>> {
+    // Counting stops at the floor: the catalogue holds thousands and only
+    // "enough or not" is asked, once per chip per redraw. The floor is the
+    // candidate's own, so relaxing the painter brings [`MIN_POOL`] back.
+    let enough = |f: &Filters| {
+        let floor = needed(f);
+        entries
+            .iter()
+            .filter(|e| admits(e, f, aspect))
+            .take(floor)
+            .count()
+            == floor
+    };
+    let idle = !filters.artists.is_empty();
+    if enough(filters) {
+        return Some(Vec::new());
+    }
+
+    let active: Vec<_> = [
+        (FilterSection::Shape, !idle && filters.shape != Shape::Any),
+        (FilterSection::Origin, !idle && !filters.regions.is_empty()),
+        (FilterSection::Subject, !filters.subjects.is_empty()),
+        (FilterSection::Artist, !filters.artists.is_empty()),
+        (FilterSection::Content, filters.hide_religious),
+    ]
+    .into_iter()
+    .filter_map(|(section, is_active)| (Some(section) != exempt && is_active).then_some(section))
+    .collect();
+
+    for count in 1..=active.len() {
+        for mask in 1usize..(1usize << active.len()) {
+            if mask.count_ones() as usize != count {
+                continue;
+            }
+            let blockers: Vec<_> = active
+                .iter()
+                .enumerate()
+                .filter_map(|(i, section)| ((mask & (1 << i)) != 0).then_some(*section))
+                .collect();
+            let mut relaxed = filters.clone();
+            for section in &blockers {
+                relax(&mut relaxed, *section);
+            }
+            if enough(&relaxed) {
+                return Some(blockers);
+            }
+        }
+    }
+    None
+}
+
+/// Why `choice`, added to `filters`, would leave fewer than [`needed`]
+/// paintings; `None` when it leaves enough.
+fn unavailability(
+    entries: &[Entry],
+    filters: &Filters,
+    aspect: f64,
+    choice: FilterChoice<'_>,
+) -> Option<Unavailable> {
+    let mut candidate = filters.clone();
+    choice.apply(&mut candidate);
+    match blockers(entries, &candidate, aspect, Some(choice.section())) {
+        Some(sections) if sections.is_empty() => None,
+        Some(sections) => Some(Unavailable::Conflicts(sections)),
+        None => Some(Unavailable::TooFew),
+    }
+}
+
+/// `filters`, relaxed just far enough to leave [`needed`] paintings to pick from. Settings applied before the floor existed, a catalogue that shrank, or
+/// *Screen-shaped* on a display of another shape must not leave the rotation
+/// alternating between a handful. Adequate filters come back untouched, and so do
+/// filters nothing can rescue, so the caller's "nothing matches" error still fires.
+fn widened(entries: &[Entry], filters: &Filters, aspect: f64) -> Filters {
+    let mut widened = filters.clone();
+    if let Some(sections) = blockers(entries, filters, aspect, None) {
+        for section in sections {
+            relax(&mut widened, section);
+        }
+    }
+    widened
+}
+
+/// Asks the whole catalogue which choices remain useful with the other sections
+/// held where they are. Every choice is kept; only unavailable ones are recorded.
 pub fn availability(filters: &Filters, aspect: f64) -> Availability {
     let entries = catalogue();
-    let any = |f: &Filters| entries.iter().any(|e| admits(e, f, aspect));
+    availability_in(entries, filters, aspect)
+}
+
+fn availability_in(entries: &[Entry], filters: &Filters, aspect: f64) -> Availability {
+    let mut artist_names: Vec<_> = entries
+        .iter()
+        .filter(|entry| !entry.artist.is_empty())
+        .map(|entry| entry.artist.clone())
+        .collect();
+    artist_names.sort();
+    artist_names.dedup();
     Availability {
+        shapes: Shape::ALL
+            .into_iter()
+            .filter_map(|shape| {
+                unavailability(entries, filters, aspect, FilterChoice::Shape(shape))
+                    .map(|why| (shape, why))
+            })
+            .collect(),
         regions: Region::ALL
             .into_iter()
-            .filter(|&r| {
-                any(&Filters {
-                    regions: vec![r],
-                    ..filters.clone()
-                })
+            .filter_map(|region| {
+                unavailability(entries, filters, aspect, FilterChoice::Region(region))
+                    .map(|why| (region, why))
             })
             .collect(),
         subjects: Subject::ALL
             .into_iter()
-            .filter(|&s| {
-                any(&Filters {
-                    subjects: vec![s],
-                    ..filters.clone()
-                })
+            .filter_map(|subject| {
+                unavailability(entries, filters, aspect, FilterChoice::Subject(subject))
+                    .map(|why| (subject, why))
             })
             .collect(),
-        artists: artists()
+        artists: artist_names
             .iter()
-            .filter(|a| {
-                any(&Filters {
-                    artists: vec![(*a).clone()],
-                    ..filters.clone()
-                })
+            .filter_map(|artist| {
+                unavailability(entries, filters, aspect, FilterChoice::Artist(artist))
+                    .map(|why| (artist.clone(), why))
             })
-            .cloned()
             .collect(),
         matching: entries
             .iter()
             .filter(|e| admits(e, filters, aspect))
             .count(),
+        needed: needed(filters),
     }
+}
+
+/// A plain-text table of how many paintings each combination admits on a screen
+/// `aspect` wide, for judging the catalogue after a rebuild. Cells under
+/// [`MIN_POOL`] end in `!`. Counts come from `admits`, so this is the app's own
+/// answer and not another copy of the word lists.
+pub fn report(aspect: f64) -> String {
+    use std::fmt::Write;
+    let entries = catalogue();
+    let count = |filters: &Filters| {
+        entries
+            .iter()
+            .filter(|e| admits(e, filters, aspect))
+            .count()
+    };
+    let cell = |n: usize| format!("{n}{}", if n < MIN_POOL { "!" } else { " " });
+    let regions: Vec<Option<Region>> = std::iter::once(None)
+        .chain(Region::ALL.into_iter().map(Some))
+        .collect();
+    let subjects: Vec<Option<Subject>> = std::iter::once(None)
+        .chain(Subject::ALL.into_iter().map(Some))
+        .collect();
+
+    let mut out = String::new();
+    for hide_religious in [false, true] {
+        let _ = writeln!(
+            out,
+            "hide religious: {}  (! = under {MIN_POOL})",
+            if hide_religious { "yes" } else { "no" }
+        );
+        for shape in Shape::ALL {
+            let _ = write!(out, "{:<15}", shape.label());
+            for subject in &subjects {
+                let _ = write!(out, " {:>10}", subject.map_or("any", |s| s.label()));
+            }
+            out.push('\n');
+            for region in &regions {
+                let _ = write!(out, "  {:<13}", region.map_or("any", |r| r.label()));
+                for subject in &subjects {
+                    let filters = Filters {
+                        regions: region.iter().copied().collect(),
+                        subjects: subject.iter().copied().collect(),
+                        artists: Vec::new(),
+                        hide_religious,
+                        shape,
+                    };
+                    let _ = write!(out, " {:>10}", cell(count(&filters)));
+                }
+                out.push('\n');
+            }
+        }
+    }
+
+    let totals = |label: &str, filters: Vec<(String, Filters)>| {
+        let cells: Vec<_> = filters
+            .into_iter()
+            .map(|(name, f)| format!("{name} {}", cell(count(&f)).trim_end()))
+            .collect();
+        format!("{label}: {}\n", cells.join(", "))
+    };
+    out.push_str(&totals(
+        "regions",
+        Region::ALL
+            .into_iter()
+            .map(|r| {
+                (
+                    r.label().to_owned(),
+                    Filters {
+                        regions: vec![r],
+                        subjects: Vec::new(),
+                        ..Filters::default()
+                    },
+                )
+            })
+            .collect(),
+    ));
+    out.push_str(&totals(
+        "artists",
+        artists()
+            .iter()
+            .map(|a| {
+                (
+                    a.clone(),
+                    Filters {
+                        artists: vec![a.clone()],
+                        subjects: Vec::new(),
+                        ..Filters::default()
+                    },
+                )
+            })
+            .collect(),
+    ));
+    out
 }
 
 /// Every artist the catalogue names, sorted.
@@ -497,6 +788,15 @@ pub fn artists() -> &'static [String] {
         names.dedup();
         names
     })
+}
+
+/// How many of `artist`'s paintings can ever be picked — portraits are left out
+/// whatever the filters say, so they are left out of the count too.
+pub fn paintings_by(artist: &str) -> usize {
+    catalogue()
+        .iter()
+        .filter(|e| e.artist == artist && !e.traits.portrait)
+        .count()
 }
 
 /// Recovers `(source, id)` from a file this source downloaded, or `None` if the
@@ -549,7 +849,15 @@ impl Museums {
 impl Source for Museums {
     fn fetch(&self, avoid: Option<&Artwork>) -> Result<Artwork> {
         let avoid = avoid.and_then(|a| key_of(&a.path));
-        let pool = candidates(catalogue(), &self.selection, avoid);
+        let selection = Selection {
+            filters: widened(
+                catalogue(),
+                &self.selection.filters,
+                self.selection.screen_aspect,
+            ),
+            screen_aspect: self.selection.screen_aspect,
+        };
+        let pool = candidates(catalogue(), &selection, avoid);
         if pool.is_empty() {
             return Err(anyhow!(
                 "no paintings in the catalogue match the chosen filters"
@@ -825,6 +1133,218 @@ met\t1\tEUROPE\t3000\t2000\thttps://example.com/met1.jpg\thttps://example.com/de
         // 3000×2000 is 1.5, within the trim of 1.6; 4000×3000 and the upright
         // still life are not.
         assert_eq!(ids, vec!["1"]);
+    }
+
+    /// `n` landscape paintings from `region`, 3000×2000, by `artist`.
+    fn bulk(n: usize, region: Region, artist: &str) -> Vec<Entry> {
+        (0..n)
+            .map(|i| Entry {
+                id: format!("{region:?}-{artist}-{i}"),
+                region,
+                artist: artist.to_owned(),
+                traits: Traits::of(&entry("A landscape", &[])),
+                ..entry("A landscape", &[])
+            })
+            .collect()
+    }
+
+    fn only(region: Region) -> Filters {
+        Filters {
+            regions: vec![region],
+            subjects: Vec::new(),
+            ..Filters::default()
+        }
+    }
+
+    #[test]
+    fn availability_names_the_smallest_conflicting_sections() {
+        let mut entries = bulk(MIN_POOL, Region::Europe, "");
+        entries.extend(bulk(MIN_POOL, Region::Asia, "Hokusai"));
+        let filters = Filters {
+            regions: vec![Region::Europe],
+            subjects: Vec::new(),
+            artists: vec!["Hokusai".to_owned()],
+            ..Filters::default()
+        };
+        let available = availability_in(&entries, &filters, 16.0 / 10.0);
+
+        // No still life exists at all, whatever else is relaxed.
+        assert_eq!(
+            available
+                .subjects
+                .iter()
+                .find(|(subject, _)| *subject == Subject::StillLife)
+                .map(|(_, why)| why),
+            Some(&Unavailable::TooFew)
+        );
+        // A painter wins over origin: Europe adds nothing to Hokusai's paintings.
+        assert_eq!(
+            available
+                .regions
+                .iter()
+                .find(|(region, _)| *region == Region::Europe),
+            None
+        );
+        assert_eq!(available.matching, MIN_POOL);
+    }
+
+    #[test]
+    fn a_conflict_names_only_the_sections_that_must_go() {
+        let entries = bulk(MIN_POOL, Region::Europe, "");
+        let filters = Filters {
+            subjects: Vec::new(),
+            shape: Shape::Screen,
+            ..Filters::default()
+        };
+        // 3000×2000 is far from a 3:1 screen: the shape alone is in the way.
+        let available = availability_in(&entries, &filters, 3.0);
+        assert_eq!(
+            available
+                .regions
+                .iter()
+                .find(|(r, _)| *r == Region::Europe)
+                .map(|(_, why)| why),
+            Some(&Unavailable::Conflicts(vec![FilterSection::Shape]))
+        );
+    }
+
+    fn by(artist: &str, subject: Subject) -> Filters {
+        Filters {
+            artists: vec![artist.to_owned()],
+            subjects: vec![subject],
+            ..Filters::default()
+        }
+    }
+
+    #[test]
+    fn a_chosen_painters_paintings_are_admitted_whatever_the_region_and_shape() {
+        let entries = bulk(3, Region::Oceania, "Streeton");
+        let filters = Filters {
+            regions: vec![Region::Europe],
+            shape: Shape::Screen,
+            ..by("Streeton", Subject::Landscape)
+        };
+        let available = availability_in(&entries, &filters, 3.0);
+        assert_eq!(available.matching, 3);
+        // One painting is enough with a painter chosen.
+        assert!(available.is_enough());
+    }
+
+    #[test]
+    fn without_a_painter_nineteen_is_not_enough() {
+        let entries = bulk(MIN_POOL - 1, Region::Europe, "");
+        let available = availability_in(&entries, &only(Region::Europe), 1.6);
+        assert!(!available.is_enough());
+    }
+
+    #[test]
+    fn relaxing_the_painter_brings_the_floor_of_twenty_back() {
+        let filters = by("Ghost", Subject::Landscape);
+        let mut entries = bulk(3, Region::Asia, "Hokusai");
+        assert_eq!(blockers(&entries, &filters, 1.6, None), None);
+        entries.extend(bulk(MIN_POOL - 3, Region::Europe, ""));
+        assert_eq!(
+            blockers(&entries, &filters, 1.6, None),
+            Some(vec![FilterSection::Artist])
+        );
+    }
+
+    #[test]
+    fn widening_leaves_a_painter_alone_and_relaxes_subject_when_it_empties_them() {
+        let mut entries = bulk(MIN_POOL, Region::Europe, "");
+        entries.extend(bulk(2, Region::Asia, "Hokusai"));
+        let present = by("Hokusai", Subject::Landscape);
+        assert_eq!(widened(&entries, &present, 1.6), present);
+
+        let blocked = by("Hokusai", Subject::Seascape);
+        let wider = widened(&entries, &blocked, 1.6);
+        assert!(wider.subjects.is_empty());
+        assert_eq!(wider.artists, blocked.artists);
+    }
+
+    #[test]
+    fn a_painter_is_blocked_only_by_subject() {
+        let entries = bulk(2, Region::Asia, "Hokusai");
+        let filters = Filters {
+            regions: vec![Region::Europe],
+            shape: Shape::Screen,
+            ..by("Other", Subject::Seascape)
+        };
+        let available = availability_in(&entries, &filters, 3.0);
+        assert_eq!(
+            available
+                .artists
+                .iter()
+                .find(|(a, _)| a == "Hokusai")
+                .map(|(_, why)| why),
+            Some(&Unavailable::Conflicts(vec![FilterSection::Subject]))
+        );
+    }
+
+    #[test]
+    fn a_choice_needs_the_whole_floor_to_be_available() {
+        for (n, available) in [(MIN_POOL - 1, false), (MIN_POOL, true)] {
+            let entries = bulk(n, Region::Africa, "");
+            let result = availability_in(&entries, &Filters::default(), 16.0 / 10.0);
+            let why = result
+                .regions
+                .iter()
+                .find(|(region, _)| *region == Region::Africa)
+                .map(|(_, why)| why);
+            if available {
+                assert_eq!(why, None);
+            } else {
+                assert_eq!(why, Some(&Unavailable::TooFew));
+            }
+            assert_eq!(result.is_enough(), available);
+        }
+    }
+
+    #[test]
+    fn availability_distinguishes_a_choice_with_no_catalogue_entries() {
+        let entries = bulk(MIN_POOL, Region::Europe, "");
+        let available = availability_in(&entries, &Filters::default(), 16.0 / 10.0);
+
+        assert_eq!(
+            available
+                .regions
+                .iter()
+                .find(|(region, _)| *region == Region::Asia)
+                .map(|(_, why)| why),
+            Some(&Unavailable::TooFew)
+        );
+    }
+
+    #[test]
+    fn adequate_filters_are_not_widened() {
+        let entries = bulk(MIN_POOL, Region::Europe, "");
+        let filters = only(Region::Europe);
+        assert_eq!(widened(&entries, &filters, 16.0 / 10.0), filters);
+    }
+
+    #[test]
+    fn thin_filters_are_relaxed_only_as_far_as_they_must() {
+        let mut entries = bulk(MIN_POOL, Region::Europe, "");
+        entries.extend(bulk(2, Region::Africa, ""));
+        let filters = Filters {
+            regions: vec![Region::Africa],
+            subjects: vec![Subject::Landscape],
+            shape: Shape::Screen,
+            ..Filters::default()
+        };
+        // The 3000×2000 pictures suit a 3:2 screen, so shape and subject stay;
+        // only the region must go.
+        let wider = widened(&entries, &filters, 1.5);
+        assert!(wider.regions.is_empty());
+        assert_eq!(wider.subjects, filters.subjects);
+        assert_eq!(wider.shape, Shape::Screen);
+    }
+
+    #[test]
+    fn filters_nothing_can_rescue_come_back_unchanged() {
+        let entries = bulk(MIN_POOL - 1, Region::Europe, "");
+        let filters = only(Region::Africa);
+        assert_eq!(widened(&entries, &filters, 16.0 / 10.0), filters);
     }
 
     #[test]

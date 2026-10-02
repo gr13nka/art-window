@@ -64,6 +64,114 @@ share the App Group `group.dev.artwindow`, accessed through `SharedContainer`:
 App Groups need a paid Apple Developer team; a free personal team cannot sign
 this app.
 
+## A filter set must leave twenty paintings
+
+`Catalogue.minPool` (20) mirrors `MIN_POOL` in `src/art/museums.rs` and `Catalogue.kt`,
+on purpose. A pool of a handful is the same few pictures coming round again, so:
+
+- a chip in Settings is offered only when at least twenty paintings pass with it
+  chosen alone and the other sections held as staged (one already selected stays
+  visible so it can be removed);
+- *Apply changes* is disabled while the staged filters leave fewer than twenty, with
+  "Only N paintings match these filters — at least 20 are needed", or "No painting
+  matches these filters — set one section to Any" for none. Filters already applied
+  are not held against a change of placement style, so a selection saved before the
+  floor existed does not lock the tab;
+- at fetch, `Catalogue.widened` relaxes the smallest set of active sections that
+  restores twenty (single sections first, then pairs; ties in the order Shape,
+  Origin, Subject, Artist, Content). Thin saved settings, a catalogue that shrank
+  or *Phone-shaped* on another device therefore never alternate between a handful.
+  If nothing cures it the filters are used as given and `nothingMatches` still fires.
+
+## Choosing a painter by a painting
+
+Fourteen names in one wrapping run of chips said nothing to someone who had not heard
+them, so the Settings *Artist* section lists only the painters already chosen (tap one
+to remove it; a stored name the catalogue no longer holds still shows, so it can go)
+and one row, *Any artist* or, once somebody is chosen, *Add*. The row opens a browser
+modelled on `FavouritesView`: a grid of one picture per painter, ticked when chosen,
+and a sheet for the one tapped with their painting large, a line of the form
+"Golden summer, Eaglemont, 1889 · Oceania, 40 paintings", *Choose* or *Remove*, and
+*Read more*, a `Link` that hands the Wikipedia article to Safari. On an iPad the grid
+simply has more columns. Choosing only stages the name in the same `filters` Settings
+holds; *Apply changes* still commits it. Painters run by region, in the `Region`
+order, then by name. The count is `Catalogue.paintings(by:)`, portraits left out.
+
+A chosen painter wins over Shape and Origins: choosing one means "show me their
+work", so `Catalogue.admits` does not ask for region or shape while any artist is
+staged, and Settings shows those two sections idle ("Not used while an artist is
+chosen.") rather than hiding them. Subject and *Hide religious scenes* still narrow,
+and so does the enlargement check. The twenty-painting floor goes too:
+`Catalogue.needed(for:)` is 1 with a painter and `minPool` without, and `hasEnough`,
+`widened` and the Apply rule all ask it, so the fetch never widens a painter away
+while they have something to show. Relaxing the Artists section in `widened` brings
+twenty back, because the threshold belongs to the filters being tested. Before this
+a phone set to phone-shaped paintings from Europe could choose nobody.
+
+A painter whose *Choose* is disabled is one whom Subject or *Hide religious scenes*
+leaves with nothing (`Catalogue.whatEmpties`): "None of … paintings match the chosen
+subject." or "… are left with religious scenes hidden." When only the enlargement
+check empties them the first wording is used, which is slightly off.
+
+The pictures are `catalogue/dist/artists/` (an `index.tsv` and one JPEG per painter),
+referenced in place as a folder resource of `ArtWindowKit` like `paintings.tsv`, so
+they land under `artists/` in the framework with no copy to drift. `Artists` parses
+the index; a malformed row is skipped, and a painter the catalogue lists but the
+index does not is left out of the browser. Thumbnails are downsampled by ImageIO as
+the favourites ones are, and only the painter being looked at is decoded large.
+Nothing is fetched, and neither the widget nor the intents read any of it. The rules
+mirror `Pending::artist_row` and `artist_cards` on the desktop and the Android copy.
+
+## Turning wide paintings (iPhone)
+
+*Turn wide paintings*, off by default and absent on iPad, turns a painting wider than
+tall 90° clockwise (its top ends at the screen's right edge) before it is hung on a
+screen taller than wide. It is not a fifth style: Zoom, Stretch, Blur and Borders then
+work on the turned picture. `RenderStyle.hung(width:height:on:)` is the one answer to
+"the size as it will be hung"; the shape filter, `canRender` and `Renderer.render` all
+ask it, so the pool is judged as the paintings will hang. The size check against the
+catalogue's declared size in `Museums.fetch` still uses the file's own size. The
+renderer gates on a portrait screen itself, so the square iPad canvas can never turn a
+picture even with a stale preference. ImageIO's thumbnailer cannot rotate, so the
+decoded thumbnail is drawn into a context of the swapped size; only `render` and
+`edgeColours` do this. `thumbnail` stays upright, so the widget, the in-app picture
+and favourites never turn. A saved style from before the option has no such key and
+decodes with it off. *Apply changes* does not re-hang anything on iOS: the turned
+wallpaper arrives with the next Shortcuts run.
+
+## Framing the painting (iPhone)
+
+Cover-cropped, a wide painting on a tall phone shows its centre strip, and the centre
+is often not the part worth seeing. In Zoom, Blur (with a backdrop) and Borders the
+Settings preview can be pinched and dragged to frame the sharp painting: `frameZoom`
+runs from 1, the style's own size (cover for Zoom, fit for the other two), up to 3,
+and the painting is cropped by the screen wherever it overflows, backdrop or border
+showing only where it does not reach. Stretch and Blur's whole fill have no sharp
+picture to frame, and the iPad's square canvas is not framed at all. A painting turned
+by *Turn wide paintings* is framed like any other.
+
+Zoom is a style option and outlives the painting. The position, `panX` and `panY`
+(0 to 1 of the overflow on that axis, 0.5 centred), belongs to one painting:
+`RenderStyle` keeps it with `panFor`, the file name it was set for, and
+`effectivePan(for:)` is the only reader, answering the centre for any other painting,
+so the next painting starts centred with nothing resetting it. A style saved with the
+first version's single `pan` reads it into both axes. `canRender` and the shape filter
+still judge a painting at zoom 1, so which paintings are admitted never depends on the
+zoom.
+
+`Framing.rect` in `Screen.swift` is the one geometry: where the painting's rectangle
+sits relative to the screen. `Renderer` asks it at the screen's size and the preview at
+its own, so they cannot disagree. The preview is two layers: what does not depend on
+framing (the blurred backdrop, the border colour) is rendered once by `Renderer`, and
+over it the sharp painting is an image of its own, decoded once, which SwiftUI offsets
+and scales. A gesture changes three numbers and nothing is decoded until it ends,
+when they are written to the staged style; the picture moves exactly as far as the
+finger. The gestures are UIKit's, because only a UIKit pan can decline to begin: a drag
+along an axis the picture cannot move on is refused at the start, so the Settings list
+scrolls from a touch on the preview. Rendering a zoomed painting never decodes it larger
+than its own pixels or 4096 px on the long side. The pan reaches the wallpaper with the
+next Shortcuts run, which renders the same painting with the stored framing.
+
 ## iPad: a square canvas
 
 An iPad wallpaper serves both orientations, and iOS keeps the centre of it in

@@ -54,6 +54,25 @@ class CatalogueTest {
         return fields.joinToString("\t")
     }
 
+    /**
+     * [count] rows sharing the given traits, ids `prefix-0` … — the pool the floor is
+     * measured against needs [Catalogue.MIN_POOL] of them, not one.
+     */
+    private fun bulk(
+        count: Int,
+        prefix: String,
+        region: String = "EUROPE",
+        title: String = "Landscape View",
+        width: String = "1080",
+        height: String = "2340",
+        artist: String? = null,
+        source: String = "met",
+    ): List<String> = (0 until count).map {
+        row(source = source, id = "$prefix-$it", region = region, title = title, width = width, height = height, artist = artist)
+    }
+
+    private val pool = Catalogue.MIN_POOL
+
     @Test
     fun `parse skips comment lines, malformed rows, unknown regions, unknown sources, and bad numbers`() {
         val tsv = listOf(
@@ -282,9 +301,9 @@ class CatalogueTest {
     }
 
     @Test
-    fun `an artist match is still subject to region, shape, and the portrait and religious filters`() {
+    fun `a chosen artist is still subject to subject, portrait and religious, but not region or shape`() {
         val tsv = listOf(
-            row(id = "1", source = "wmc", region = "ASIA", title = "Demon Downcast", artist = "Mikhail Vrubel"), // wrong region
+            row(id = "1", source = "wmc", region = "ASIA", title = "Demon Downcast", artist = "Mikhail Vrubel"), // another region: not asked
             row(id = "2", source = "wmc", title = "Portrait of a Lady", artist = "Mikhail Vrubel", tags = "Portraits"), // portrait
             row(id = "3", source = "wmc", title = "The Crucifixion", artist = "Mikhail Vrubel"), // religious, only excluded when asked
             row(id = "4", source = "wmc", title = "Demon Seated", artist = "Mikhail Vrubel"), // passes everything
@@ -292,86 +311,201 @@ class CatalogueTest {
         val catalogue = Catalogue.parse(tsv)
         val vrubelInEurope = prefs(regions = setOf(ArtworkRegion.EUROPE), artists = setOf("Mikhail Vrubel"))
 
-        assertEquals(setOf("3", "4"), catalogue.candidates(vrubelInEurope, screen).map { it.id }.toSet())
+        assertEquals(setOf("1", "3", "4"), catalogue.candidates(vrubelInEurope, screen).map { it.id }.toSet())
         assertEquals(
-            setOf("4"),
+            setOf("1", "4"),
             catalogue.candidates(vrubelInEurope.copy(hideReligious = true), screen).map { it.id }.toSet(),
         )
     }
 
     @Test
-    fun `anyMatch reports whether any painting passes every section, without building the full list`() {
-        val tsv = row(id = "1", region = "EUROPE", title = "Landscape at Dawn")
-        val catalogue = Catalogue.parse(tsv)
+    fun `hasEnough is false one painting short of the floor and true at it`() {
+        val short = Catalogue.parse(bulk(pool - 1, "e").joinToString("\n"))
+        val enough = Catalogue.parse(bulk(pool, "e").joinToString("\n"))
 
-        assertTrue(catalogue.anyMatch(prefs(regions = setOf(ArtworkRegion.EUROPE)), screen))
-        assertFalse(catalogue.anyMatch(prefs(regions = setOf(ArtworkRegion.ASIA)), screen)) // wrong region
-        assertFalse(
-            catalogue.anyMatch(prefs(regions = setOf(ArtworkRegion.EUROPE), artists = setOf("Nobody")), screen),
-        ) // no painting by "Nobody"
+        assertFalse(short.hasEnough(prefs(), screen))
+        assertEquals(pool - 1, short.matchCount(prefs(), screen))
+        assertTrue(enough.hasEnough(prefs(), screen))
+        assertFalse(enough.hasEnough(prefs(regions = setOf(ArtworkRegion.ASIA)), screen)) // wrong region: none
+        assertEquals(0, enough.matchCount(prefs(regions = setOf(ArtworkRegion.ASIA)), screen))
     }
 
     @Test
-    fun `availableRegions is computed against the other sections' staged values`() {
-        val tsv = listOf(
-            row(id = "1", region = "EUROPE", title = "Demon Seated", artist = "Mikhail Vrubel"),
-            row(id = "2", region = "ASIA", title = "Mount Fuji", artist = "Katsushika Hokusai"),
-        ).joinToString("\n")
+    fun `availableRegions needs the floor, computed against the other sections' staged values`() {
+        val tsv = (
+            bulk(pool, "e", region = "EUROPE", artist = "Mikhail Vrubel") +
+                bulk(pool - 1, "a", region = "ASIA", artist = "Katsushika Hokusai") +
+                bulk(pool, "o", region = "OCEANIA")
+            ).joinToString("\n")
         val catalogue = Catalogue.parse(tsv)
 
-        // With no artist staged, both regions have something to offer.
-        assertEquals(setOf(ArtworkRegion.EUROPE, ArtworkRegion.ASIA), catalogue.availableRegions(prefs(), screen))
-        // Staged to Vrubel, only Vrubel's region remains available — choosing Asia
-        // alone, with Vrubel still staged in Artists, would leave nothing.
+        // Asia holds one painting too few, so it is hidden even though it is not empty.
+        assertEquals(setOf(ArtworkRegion.EUROPE, ArtworkRegion.OCEANIA), catalogue.availableRegions(prefs(), screen))
+        // A chosen painter is not asked for a region, so no region is hidden on his account.
         assertEquals(
-            setOf(ArtworkRegion.EUROPE),
+            ArtworkRegion.entries.toSet(),
             catalogue.availableRegions(prefs(artists = setOf("Mikhail Vrubel")), screen),
         )
     }
 
     @Test
-    fun `availableSubjects is computed against the other sections' staged values`() {
-        val tsv = listOf(
-            row(id = "1", region = "EUROPE", title = "Landscape at Dawn"),
-            row(id = "2", region = "ASIA", title = "Seascape at Dusk"),
-        ).joinToString("\n")
+    fun `availableSubjects needs the floor, computed against the other sections' staged values`() {
+        val tsv = (
+            bulk(pool, "l", title = "Landscape at Dawn") +
+                bulk(pool - 1, "s", region = "ASIA", title = "Seascape at Dusk")
+            ).joinToString("\n")
         val catalogue = Catalogue.parse(tsv)
 
+        assertEquals(setOf(ArtworkSubject.LANDSCAPE), catalogue.availableSubjects(prefs(), screen))
         assertEquals(setOf(ArtworkSubject.LANDSCAPE), catalogue.availableSubjects(prefs(regions = setOf(ArtworkRegion.EUROPE)), screen))
-        assertEquals(
-            setOf(ArtworkSubject.LANDSCAPE, ArtworkSubject.SEASCAPE),
-            catalogue.availableSubjects(prefs(regions = setOf(ArtworkRegion.EUROPE, ArtworkRegion.ASIA)), screen),
-        )
+        // One more seascape tips it over.
+        val more = Catalogue.parse(bulk(pool, "s", region = "ASIA", title = "Seascape at Dusk").joinToString("\n"))
+        assertTrue(ArtworkSubject.SEASCAPE in more.availableSubjects(prefs(), screen))
     }
 
     @Test
-    fun `availableSubjects excludes a subject with no catalogued entry close enough for the staged shape`() {
-        val tsv = row(id = "1", region = "EUROPE", width = "3600", height = "2400", title = "Wide Landscape")
-        val wide = Catalogue.parse(tsv)
+    fun `availableSubjects excludes a subject without enough entries close enough for the staged shape`() {
+        val wide = Catalogue.parse(bulk(pool, "w", width = "3600", height = "2400", title = "Wide Landscape").joinToString("\n"))
 
         assertTrue(ArtworkSubject.LANDSCAPE in wide.availableSubjects(prefs(), screen))
         assertFalse(ArtworkSubject.LANDSCAPE in wide.availableSubjects(prefs(shape = ArtworkShape.SCREEN), screen))
     }
 
     @Test
-    fun `availableArtists is computed against the other sections' staged values`() {
-        val tsv = listOf(
-            row(id = "1", source = "wmc", region = "EUROPE", title = "Demon Seated", artist = "Mikhail Vrubel"),
-            row(id = "2", source = "wmc", region = "ASIA", title = "Mount Fuji", artist = "Katsushika Hokusai"),
-            // Same artist as id 1, but wide rather than phone-shaped.
-            row(id = "3", source = "wmc", region = "EUROPE", width = "3600", height = "2400", title = "Demon Downcast", artist = "Mikhail Vrubel"),
-        ).joinToString("\n")
+    fun `availableArtists needs one painting, whatever the region and shape`() {
+        val tsv = (
+            bulk(3, "v", source = "wmc", region = "EUROPE", width = "3600", height = "2400", title = "Landscape at Dawn", artist = "Mikhail Vrubel") +
+                bulk(2, "h", source = "wmc", region = "ASIA", title = "Crucifixion Landscape", artist = "Katsushika Hokusai")
+            ).joinToString("\n")
+        val catalogue = Catalogue.parse(tsv)
+        val both = setOf("Mikhail Vrubel", "Katsushika Hokusai")
+
+        // Wide, in another region than the one staged, and only three of them: still available.
+        assertEquals(both, catalogue.availableArtists(prefs(regions = setOf(ArtworkRegion.OCEANIA), shape = ArtworkShape.SCREEN), screen))
+        assertEquals(setOf("Mikhail Vrubel"), catalogue.availableArtists(prefs(hideReligious = true), screen))
+        assertEquals(
+            mapOf("Katsushika Hokusai" to ArtistBlock.RELIGIOUS),
+            catalogue.artistBlocks(prefs(hideReligious = true), screen),
+        )
+        assertEquals(
+            mapOf("Mikhail Vrubel" to ArtistBlock.SUBJECT, "Katsushika Hokusai" to ArtistBlock.SUBJECT),
+            catalogue.artistBlocks(prefs(subjects = setOf(ArtworkSubject.STILL_LIFE)), screen),
+        )
+    }
+
+    @Test
+    fun `one painting is enough with an artist and nineteen is not enough without`() {
+        val catalogue = Catalogue.parse((bulk(pool - 1, "e") + bulk(1, "v", source = "wmc", artist = "Mikhail Vrubel")).joinToString("\n"))
+
+        assertTrue(catalogue.hasEnough(prefs(artists = setOf("Mikhail Vrubel")), screen))
+        assertFalse(Catalogue.parse(bulk(pool - 1, "e").joinToString("\n")).hasEnough(prefs(), screen))
+    }
+
+    @Test
+    fun `widened leaves adequate filters alone`() {
+        val catalogue = Catalogue.parse(bulk(pool, "e").joinToString("\n"))
+        val adequate = prefs(regions = setOf(ArtworkRegion.EUROPE), subjects = setOf(ArtworkSubject.LANDSCAPE))
+
+        assertEquals(adequate, catalogue.widened(adequate, screen))
+    }
+
+    @Test
+    fun `widened relaxes only the section that must go`() {
+        // Plenty of Europe, plenty of landscapes, but Asia holds none: Origins alone is
+        // the smallest cure, so Subjects and Content stay as given.
+        val catalogue = Catalogue.parse(bulk(pool, "e", title = "Landscape at Dawn").joinToString("\n"))
+        val thin = prefs(
+            regions = setOf(ArtworkRegion.ASIA),
+            subjects = setOf(ArtworkSubject.LANDSCAPE),
+            hideReligious = true,
+        )
+
+        assertEquals(thin.copy(artworkRegions = emptySet()), catalogue.widened(thin, screen))
+    }
+
+    @Test
+    fun `widened prefers a single section to a pair, and leaves a chosen artist alone`() {
+        val tsv = (
+            bulk(pool - 1, "v", source = "wmc", title = "Landscape at Dawn", artist = "Mikhail Vrubel") +
+                bulk(pool, "x", title = "Still Life with Flowers")
+            ).joinToString("\n")
         val catalogue = Catalogue.parse(tsv)
 
-        assertEquals(setOf("Mikhail Vrubel"), catalogue.availableArtists(prefs(regions = setOf(ArtworkRegion.EUROPE)), screen))
-        assertEquals(
-            setOf("Mikhail Vrubel", "Katsushika Hokusai"),
-            catalogue.availableArtists(prefs(regions = setOf(ArtworkRegion.EUROPE, ArtworkRegion.ASIA)), screen),
+        // No still life by Vrubel, but one painter's work is enough: dropping Subject cures it,
+        // and neither Origins nor the Artist section is touched (Origins is not asked anyway).
+        val artistLed = prefs(
+            regions = setOf(ArtworkRegion.EUROPE),
+            subjects = setOf(ArtworkSubject.STILL_LIFE),
+            artists = setOf("Mikhail Vrubel"),
         )
-        assertEquals(
-            // id 1 still fits PHONE even though id 3 (the wide one) does not.
-            setOf("Mikhail Vrubel"),
-            catalogue.availableArtists(prefs(regions = setOf(ArtworkRegion.EUROPE), shape = ArtworkShape.SCREEN), screen),
+        assertEquals(artistLed.copy(artworkSubjects = emptySet()), catalogue.widened(artistLed, screen))
+
+        // Without the artist the floor is twenty: Origins is the one section that must go.
+        val thin = prefs(regions = setOf(ArtworkRegion.ASIA), subjects = setOf(ArtworkSubject.STILL_LIFE))
+        assertEquals(thin.copy(artworkRegions = emptySet()), catalogue.widened(thin, screen))
+
+        // A painter with something to show is returned untouched.
+        val adequate = prefs(artists = setOf("Mikhail Vrubel"))
+        assertEquals(adequate, catalogue.widened(adequate, screen))
+    }
+
+    @Test
+    fun `widened returns filters nothing can rescue unchanged`() {
+        val catalogue = Catalogue.parse(bulk(pool - 1, "e").joinToString("\n"))
+        val hopeless = prefs(regions = setOf(ArtworkRegion.ASIA), subjects = setOf(ArtworkSubject.LANDSCAPE))
+
+        assertEquals(hopeless, catalogue.widened(hopeless, screen))
+    }
+
+    @Test
+    fun `thin filters already applied do not block a change of style`() {
+        val catalogue = Catalogue.parse(bulk(pool - 1, "e").joinToString("\n"))
+        val applied = prefs(regions = setOf(ArtworkRegion.EUROPE))
+
+        assertFalse(catalogue.hasEnough(applied, screen))
+        assertTrue(catalogue.canApply(applied.copy(style = WallpaperStyle.BLUR), applied, screen))
+        // Touching the filters brings the floor back.
+        assertFalse(catalogue.canApply(applied.copy(hideReligious = true), applied, screen))
+    }
+
+    @Test
+    fun `a change of filters is appliable only with enough paintings`() {
+        val catalogue = Catalogue.parse(bulk(pool, "e").joinToString("\n"))
+        val applied = prefs()
+
+        assertTrue(catalogue.canApply(applied.copy(artworkRegions = setOf(ArtworkRegion.EUROPE)), applied, screen))
+        assertFalse(catalogue.canApply(applied.copy(artworkRegions = setOf(ArtworkRegion.ASIA)), applied, screen))
+    }
+
+    @Test
+    fun `paintingsBy counts an artist's paintings and leaves portraits out`() {
+        val catalogue = Catalogue.parse(
+            (bulk(3, "a", artist = "Tom Roberts") +
+                bulk(2, "p", title = "Portrait of a Man", artist = "Tom Roberts") +
+                bulk(4, "b", artist = "Conrad Martens")).joinToString("\n"),
         )
+
+        assertEquals(3, catalogue.paintingsBy("Tom Roberts"))
+        assertEquals(4, catalogue.paintingsBy("Conrad Martens"))
+        assertEquals(0, catalogue.paintingsBy("Nobody"))
+    }
+
+    @Test
+    fun `the hung size swaps only for a wide painting on a tall screen with rotate on`() {
+        val on = prefs().copy(rotateWide = true)
+
+        assertEquals(2400 to 3600, on.hungSize(3600, 2400, screen))
+        assertEquals(2400 to 3600, on.hungSize(2400, 3600, screen))
+        assertEquals(3600 to 2400, on.hungSize(3600, 2400, Screen(2340, 1080)))
+        assertEquals(3600 to 2400, prefs().hungSize(3600, 2400, screen))
+    }
+
+    @Test
+    fun `with rotate on a wide painting is judged as it will hang`() {
+        val catalogue = Catalogue.parse(bulk(pool, "w", width = "5000", height = "2400").joinToString("\n"))
+        val phoneShaped = prefs(shape = ArtworkShape.SCREEN)
+
+        assertFalse(catalogue.hasEnough(phoneShaped, screen))
+        assertTrue(catalogue.hasEnough(phoneShaped.copy(rotateWide = true), screen))
     }
 }

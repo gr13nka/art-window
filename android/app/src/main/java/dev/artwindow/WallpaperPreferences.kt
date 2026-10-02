@@ -1,6 +1,7 @@
 package dev.artwindow
 
 import android.content.Context
+import java.io.File
 
 enum class WallpaperStyle { ZOOM, STRETCH, BLUR, BORDERS }
 
@@ -102,7 +103,24 @@ data class WallpaperPreferences(
     val artworkSubjects: Set<ArtworkSubject> = ArtworkSubject.DEFAULT,
     val artworkArtists: Set<String> = emptySet(),
     val hideReligious: Boolean = false,
+    /** Phones only: turn a wide painting a quarter turn before hanging it; see [hungSize]. */
+    val rotateWide: Boolean = false,
+    /** How far the sharp painting is zoomed, 1 to [Screen.MAX_ZOOM]: a style option, kept across paintings and styles. */
+    val frameZoom: Float = 1f,
+    /** Where the screen's window sits on the painting along each axis, 0 to 1; belongs to [panPainting] alone, see [framingFor]. */
+    val panX: Float = Screen.CENTRED,
+    val panY: Float = Screen.CENTRED,
+    /** The file name of the one painting [panX] and [panY] were set for; any other painting is centred. */
+    val panPainting: String? = null,
 ) {
+    /** Whether [other] chooses the same paintings, whatever it does with them: every filter equal, style and colours ignored. */
+    fun sameFiltersAs(other: WallpaperPreferences): Boolean =
+        artworkShape == other.artworkShape &&
+            artworkRegions == other.artworkRegions &&
+            artworkSubjects == other.artworkSubjects &&
+            artworkArtists == other.artworkArtists &&
+            hideReligious == other.hideReligious
+
     companion object {
         const val DEFAULT_BLUR_STRENGTH = 50
         const val DEFAULT_CUSTOM_COLOR = 0xff3434c8.toInt()
@@ -123,6 +141,12 @@ class WallpaperPreferencesStore(context: Context) {
         artworkSubjects = subjectValues(prefs.getString(KEY_SUBJECTS, null)),
         artworkArtists = artistValues(prefs.getString(KEY_ARTISTS, null)),
         hideReligious = prefs.getBoolean(KEY_HIDE_RELIGIOUS, false),
+        rotateWide = prefs.getBoolean(KEY_ROTATE_WIDE, false),
+        frameZoom = prefs.getFloat(KEY_FRAME_ZOOM, 1f).finiteOr(1f).coerceIn(1f, Screen.MAX_ZOOM),
+        // `pan` was one number for whichever axis overflowed; it now seeds both.
+        panX = prefs.getFloat(KEY_PAN_X, prefs.getFloat(KEY_PAN, Screen.CENTRED)).finiteOr(Screen.CENTRED).coerceIn(0f, 1f),
+        panY = prefs.getFloat(KEY_PAN_Y, prefs.getFloat(KEY_PAN, Screen.CENTRED)).finiteOr(Screen.CENTRED).coerceIn(0f, 1f),
+        panPainting = prefs.getString(KEY_PAN_PAINTING, null),
     )
 
     fun save(value: WallpaperPreferences): Boolean = prefs.edit()
@@ -136,6 +160,12 @@ class WallpaperPreferencesStore(context: Context) {
         .putString(KEY_SUBJECTS, value.artworkSubjects.sortedBy { it.ordinal }.joinToString(",") { it.name })
         .putString(KEY_ARTISTS, value.artworkArtists.sorted().joinToString(","))
         .putBoolean(KEY_HIDE_RELIGIOUS, value.hideReligious)
+        .putBoolean(KEY_ROTATE_WIDE, value.rotateWide)
+        .remove(KEY_PAN)
+        .putFloat(KEY_FRAME_ZOOM, value.frameZoom.finiteOr(1f).coerceIn(1f, Screen.MAX_ZOOM))
+        .putFloat(KEY_PAN_X, value.panX.finiteOr(Screen.CENTRED).coerceIn(0f, 1f))
+        .putFloat(KEY_PAN_Y, value.panY.finiteOr(Screen.CENTRED).coerceIn(0f, 1f))
+        .putString(KEY_PAN_PAINTING, value.panPainting)
         .commit()
 
     private companion object {
@@ -150,6 +180,12 @@ class WallpaperPreferencesStore(context: Context) {
         const val KEY_SUBJECTS = "artwork_subjects"
         const val KEY_ARTISTS = "artwork_artists"
         const val KEY_HIDE_RELIGIOUS = "hide_religious"
+        const val KEY_ROTATE_WIDE = "rotate_wide"
+        const val KEY_PAN = "pan"
+        const val KEY_PAN_X = "pan_x"
+        const val KEY_PAN_Y = "pan_y"
+        const val KEY_FRAME_ZOOM = "frame_zoom"
+        const val KEY_PAN_PAINTING = "pan_painting"
     }
 }
 
@@ -206,13 +242,66 @@ internal fun <T> toggled(current: Set<T>, item: T): Set<T> =
  * would fail to render is never offered. Shared by [Catalogue] (screening the
  * catalogue's own pixel counts) and [Museums] (verifying what actually downloaded).
  */
-fun WallpaperPreferences.canRender(width: Int, height: Int, screen: Screen): Boolean = when (style) {
-    WallpaperStyle.ZOOM -> screen.cover(width, height) != null
-    WallpaperStyle.STRETCH -> screen.canStretch(width, height)
-    WallpaperStyle.BLUR -> if (blurVariant == BlurVariant.BACKDROP) {
-        screen.fit(width, height) != null
-    } else {
-        screen.cover(width, height) != null
+fun WallpaperPreferences.canRender(width: Int, height: Int, screen: Screen): Boolean {
+    val (w, h) = hungSize(width, height, screen)
+    return when (style) {
+        WallpaperStyle.ZOOM -> screen.cover(w, h) != null
+        WallpaperStyle.STRETCH -> screen.canStretch(w, h)
+        WallpaperStyle.BLUR -> if (blurVariant == BlurVariant.BACKDROP) {
+            screen.fit(w, h) != null
+        } else {
+            screen.cover(w, h) != null
+        }
+        WallpaperStyle.BORDERS -> screen.fit(w, h) != null
     }
-    WallpaperStyle.BORDERS -> screen.fit(width, height) != null
 }
+
+/** Whether a painting [width] x [height] is turned a quarter turn on [screen]: asked for, wide, and the screen tall. */
+fun WallpaperPreferences.turns(width: Int, height: Int, screen: Screen): Boolean =
+    rotateWide && !screen.isLandscape && width > height
+
+/**
+ * The size a painting of [width] x [height] has once hung on [screen]: swapped when it
+ * is turned (see [turns]). The one place that decides it, so the shape filter, the render
+ * check and the renderer cannot disagree. Not for comparing a download with the
+ * catalogue's declared size, which is about the file and not the hanging.
+ */
+fun WallpaperPreferences.hungSize(width: Int, height: Int, screen: Screen): Pair<Int, Int> =
+    if (turns(width, height, screen)) height to width else width to height
+
+/**
+ * How the painting in [file] is framed on [screen]. The zoom is a style option and
+ * applies to any painting; the pan belongs to the one painting it was set for and is
+ * the centre for every other, so the next painting starts centred with nothing resetting
+ * anything. A painting is recognised by its file name, which a favourite's copy keeps.
+ * A landscape screen — a TV — ignores both: nobody can adjust them there.
+ */
+fun WallpaperPreferences.framingFor(file: File, screen: Screen): Framing = when {
+    screen.isLandscape -> Framing()
+    panPainting == file.name -> Framing(frameZoom, panX, panY)
+    else -> Framing(frameZoom)
+}
+
+/**
+ * Whether the style hangs a sharp painting that can be framed: Zoom, Blur with its
+ * backdrop, Borders. Stretch fills the screen with the painting whatever its shape, and
+ * Blur's whole-image variant has no sharp picture.
+ */
+fun WallpaperPreferences.framesSharpPicture(): Boolean =
+    style == WallpaperStyle.ZOOM || style == WallpaperStyle.BORDERS ||
+        (style == WallpaperStyle.BLUR && blurVariant == BlurVariant.BACKDROP)
+
+/** Where [framesSharpPicture]'s picture starts out: filling the screen for Zoom, fitted inside it otherwise. */
+fun WallpaperPreferences.frameBase(): Base = if (style == WallpaperStyle.ZOOM) Base.COVER else Base.FIT
+
+internal fun WallpaperPreferences.hungAspect(width: Int, height: Int, screen: Screen): Double {
+    val (w, h) = hungSize(width, height, screen)
+    return w.toDouble() / h
+}
+
+/**
+ * `coerceIn` lets a NaN straight through, and a NaN pan — which a build of 2026-10-02
+ * could store — pins the painting to its left edge for good. Read or written, a framing
+ * number that is not a number is the default.
+ */
+private fun Float.finiteOr(fallback: Float): Float = if (isFinite()) this else fallback

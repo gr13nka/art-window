@@ -133,6 +133,8 @@ enum Wanted {
     /// Use these settings from now on.
     Apply(Settings),
     Browse,
+    /// Open a page the window named — a painter's, from the artist browser.
+    Read(String),
     Reapply,
     Login(bool),
     /// Keep a painting ready as the background of the next meeting in this app,
@@ -161,6 +163,7 @@ impl From<Pick> for Wanted {
             Pick::Show(key) => Self::Show(key),
             Pick::Forget(key) => Self::Forget(key),
             Pick::Apply(settings) => Self::Apply(settings),
+            Pick::Read(url) => Self::Read(url),
         }
     }
 }
@@ -390,6 +393,7 @@ pub fn run(paths: Paths, config: Config, mut settings: Settings, mut state: Stat
         move |control| {
             let _ = control_proxy.send_event(Wake::Chose(control.into()));
         },
+        paths.cache.clone(),
         &state.backdrops,
     )?;
 
@@ -703,6 +707,8 @@ pub fn run(paths: Paths, config: Config, mut settings: Settings, mut state: Stat
                 }
             }
 
+            Wanted::Read(url) => desktop::browse(&url),
+
             // The one place the desktop is blanked while somebody is watching, and
             // rightly: this row exists to say *put it right now*, and waiting for
             // the next redraw is not what it means.
@@ -949,6 +955,7 @@ impl Ui {
     fn new(
         on_pick: impl Fn(Pick) + 'static,
         on_control: impl Fn(Control) + 'static,
+        pictures: PathBuf,
         backdrops: &[Slot],
     ) -> Result<Self> {
         let ui = Self {
@@ -960,7 +967,7 @@ impl Ui {
             keep: MenuItem::new("Add to favourites", false, None),
             favourites: MenuItem::new("Favourites…", false, None),
             settings: MenuItem::new("Settings…", true, None),
-            gallery: Gallery::new(on_pick, on_control),
+            gallery: Gallery::new(on_pick, on_control, pictures),
             today: MenuItem::new(NO_WAY_BACK, false, None),
             reapply: MenuItem::new("Re-apply wallpaper", false, None),
             login: CheckMenuItem::new("Start at login", true, desktop::starts_at_login(), None),
@@ -1273,6 +1280,10 @@ mod tests {
         assert!(matches!(
             Wanted::from(Pick::Apply(Settings::default())),
             Wanted::Apply(s) if s == Settings::default()
+        ));
+        assert!(matches!(
+            Wanted::from(Pick::Read("https://example.org".into())),
+            Wanted::Read(url) if url == "https://example.org"
         ));
     }
 

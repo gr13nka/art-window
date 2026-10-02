@@ -76,8 +76,11 @@ final class Museums: @unchecked Sendable {
     ) async throws -> Artwork {
         let avoidKey = avoid.flatMap { keyOf($0.fileName) }
         // Catalogue.candidates already shuffles every qualifying entry, so there is no
-        // per-choice draw or fallback pass left to do here.
-        let ordered = catalogue.candidates(filters, screen: screen, style: style)
+        // per-choice draw or fallback pass left to do here. The filters are widened first
+        // when they admit fewer than `Catalogue.minPool` paintings, so a thin saved choice
+        // never leaves the rotation alternating between a handful.
+        let wide = catalogue.widened(filters, screen: screen, style: style)
+        let ordered = catalogue.candidates(wide, screen: screen, style: style)
             .filter { avoidKey == nil || $0.id != avoidKey }
         guard !ordered.isEmpty else { throw RotationError.nothingMatches }
 

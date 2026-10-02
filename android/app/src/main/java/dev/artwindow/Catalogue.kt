@@ -45,33 +45,76 @@ class Catalogue(private val entries: List<Entry>) {
         matching(preferences, screen).toList().shuffled()
 
     /**
-     * Whether anything at all passes [matching] under [preferences] and [screen] —
-     * Settings uses this to decide whether Apply should be enabled, checked with
-     * [Sequence.any] rather than building and shuffling [candidates]' full list, since
-     * only presence, not the entry, matters here.
+     * How many entries pass [matching] under [preferences] and [screen] — exact, for
+     * the sentence Settings shows when [hasEnough] says no. Anything that only needs
+     * the yes/no asks [hasEnough] instead, which stops counting at [MIN_POOL].
      */
-    fun anyMatch(preferences: WallpaperPreferences, screen: Screen): Boolean = matching(preferences, screen).any()
+    fun matchCount(preferences: WallpaperPreferences, screen: Screen): Int = matching(preferences, screen).count()
 
     /**
-     * Which [ArtworkRegion]s have at least one entry when chosen alone within Origins,
-     * the other sections (Subjects, Artists, Shape, the religious toggle) held at
-     * [preferences]'s currently staged values — see [matching]. Settings hides a region
-     * chip this doesn't return.
+     * Whether [preferences] leave at least [needed] paintings to pick from on
+     * [screen]. Counting stops at the floor rather than walking the whole catalogue,
+     * since only "enough or not" is asked, once per option per recomputation.
+     */
+    fun hasEnough(preferences: WallpaperPreferences, screen: Screen): Boolean {
+        val required = needed(preferences)
+        return matching(preferences, screen).take(required).count() == required
+    }
+
+    /**
+     * Whether Settings may offer Apply for [staged] on top of what is already [applied].
+     * Filters that were already applied are not held against a change of style: a
+     * selection saved before the floor existed would otherwise lock the whole screen
+     * until it was widened. Only a change to the filters themselves has to leave
+     * [MIN_POOL] paintings.
+     */
+    fun canApply(staged: WallpaperPreferences, applied: WallpaperPreferences, screen: Screen): Boolean =
+        staged.sameFiltersAs(applied) || hasEnough(staged, screen)
+
+    /**
+     * [preferences], relaxed just far enough to leave [MIN_POOL] paintings to pick
+     * from: the smallest set of active sections to set back to Any, tried as single
+     * sections, then pairs, and so on, ties broken in [FilterSection] order. Settings
+     * saved before the floor existed, a catalogue that shrank, or a screen-shaped
+     * filter on a screen of another shape must not leave the rotation alternating
+     * between a handful of pictures. Adequate filters come back untouched, and so do
+     * filters nothing can rescue, so the caller's "no paintings match" error still
+     * fires.
+     */
+    fun widened(preferences: WallpaperPreferences, screen: Screen): WallpaperPreferences {
+        if (hasEnough(preferences, screen)) return preferences
+        val active = FilterSection.entries.filter { it.isActive(preferences) }
+        for (count in 1..active.size) {
+            for (mask in 1 until (1 shl active.size)) {
+                if (Integer.bitCount(mask) != count) continue
+                val relaxed = active.filterIndexed { i, _ -> mask and (1 shl i) != 0 }
+                    .fold(preferences) { prefs, section -> section.relax(prefs) }
+                if (hasEnough(relaxed, screen)) return relaxed
+            }
+        }
+        return preferences
+    }
+
+    /**
+     * Which [ArtworkRegion]s leave enough entries when chosen alone within
+     * Origins, the other sections (Subjects, Artists, Shape, the religious toggle) held
+     * at [preferences]'s currently staged values — see [matching]. Settings hides a
+     * region chip this doesn't return.
      */
     fun availableRegions(preferences: WallpaperPreferences, screen: Screen): Set<ArtworkRegion> =
         ArtworkRegion.entries.filterTo(mutableSetOf()) { region ->
-            matching(preferences.copy(artworkRegions = setOf(region)), screen).any()
+            hasEnough(preferences.copy(artworkRegions = setOf(region)), screen)
         }
 
     /**
-     * Which [ArtworkSubject]s have at least one entry when chosen alone within
+     * Which [ArtworkSubject]s leave enough entries when chosen alone within
      * Subjects, the other sections held at [preferences]'s currently staged values —
      * [availableRegions]'s mirror for the subject axis. Settings hides a subject chip
      * this doesn't return.
      */
     fun availableSubjects(preferences: WallpaperPreferences, screen: Screen): Set<ArtworkSubject> =
         ArtworkSubject.entries.filterTo(mutableSetOf()) { subject ->
-            matching(preferences.copy(artworkSubjects = setOf(subject)), screen).any()
+            hasEnough(preferences.copy(artworkSubjects = setOf(subject)), screen)
         }
 
     /**
@@ -81,15 +124,41 @@ class Catalogue(private val entries: List<Entry>) {
     fun artists(): List<String> = entries.mapNotNull { it.artist.takeIf(String::isNotEmpty) }.distinct().sorted()
 
     /**
-     * Which of [artists]' names have at least one entry when chosen alone within
+     * How many of [artist]'s paintings the catalogue holds, portraits left out because
+     * the rotation never shows one — the number the artist browser quotes, mirroring
+     * `museums::paintings_by` on the desktop.
+     */
+    fun paintingsBy(artist: String): Int = entries.count { it.artist == artist && !isPortrait(it.title, it.tags) }
+
+    /**
+     * Which of [artists]' names leave at least one entry when chosen alone within
      * Artists, the other sections held at [preferences]'s currently staged values —
-     * [availableRegions]'s mirror for the artist axis. Settings hides an artist chip
-     * this doesn't return.
+     * [availableRegions]'s mirror for the artist axis. The browser refuses *Choose* for
+     * a painter this doesn't return.
      */
     fun availableArtists(preferences: WallpaperPreferences, screen: Screen): Set<String> =
         artists().filterTo(mutableSetOf()) { artist ->
-            matching(preferences.copy(artworkArtists = setOf(artist)), screen).any()
+            hasEnough(preferences.copy(artworkArtists = setOf(artist)), screen)
         }
+
+    /**
+     * Why each artist [availableArtists] leaves out cannot be chosen, for the browser to
+     * say. Only Subject and the religious toggle can empty a painter (a chosen painter is
+     * exempt from Shape, Origin and the floor — see [matching]), so the cause is found by
+     * lifting the religious toggle: if that brings paintings back, it was the toggle;
+     * otherwise the staged Subject, or, with none staged, the screen's size limits.
+     */
+    fun artistBlocks(preferences: WallpaperPreferences, screen: Screen): Map<String, ArtistBlock> {
+        val available = availableArtists(preferences, screen)
+        return artists().filterNot { it in available }.associateWith { artist ->
+            val alone = preferences.copy(artworkArtists = setOf(artist))
+            when {
+                hasEnough(alone.copy(hideReligious = false), screen) -> ArtistBlock.RELIGIOUS
+                preferences.artworkSubjects.isNotEmpty() -> ArtistBlock.SUBJECT
+                else -> ArtistBlock.SIZE
+            }
+        }
+    }
 
     /**
      * An entry qualifies when it passes every section — Shape, Origins, Subjects and
@@ -98,10 +167,15 @@ class Catalogue(private val entries: List<Entry>) {
      * needs this — [ArtworkShape.ANY] already means Any there). Sections are ANDed
      * together; the choices within a section are ORed. The portrait and religious
      * exclusions apply regardless of what qualified an entry.
+     *
+     * **A chosen artist wins over Shape and Origins**: with any artist chosen, neither is
+     * asked. A painter is a narrower origin than a region, and what someone who picks
+     * a painter wants is that painter's work, wide or not; Subject and the religious toggle
+     * still narrow it. Mirrors `admits` in `src/art/museums.rs` and `Catalogue.swift`.
      */
     private fun matching(preferences: WallpaperPreferences, screen: Screen): Sequence<Entry> = entries
         .asSequence()
-        .filter { preferences.artworkRegions.isEmpty() || it.region in preferences.artworkRegions }
+        .filter { preferences.artworkArtists.isNotEmpty() || preferences.artworkRegions.isEmpty() || it.region in preferences.artworkRegions }
         .filter { entry ->
             preferences.artworkSubjects.isEmpty() ||
                 preferences.artworkSubjects.any { subject -> matchesSubject(entry, subject) }
@@ -109,10 +183,32 @@ class Catalogue(private val entries: List<Entry>) {
         .filter { entry -> preferences.artworkArtists.isEmpty() || entry.artist in preferences.artworkArtists }
         .filterNot { isPortrait(it.title, it.tags) }
         .filterNot { preferences.hideReligious && isReligious(it.title, it.tags) }
-        .filter { entry -> preferences.artworkShape.accepts(entry.width.toDouble() / entry.height, screen) }
+        .filter { entry ->
+            preferences.artworkArtists.isNotEmpty() ||
+                preferences.artworkShape.accepts(preferences.hungAspect(entry.width, entry.height, screen), screen)
+        }
         .filter { entry -> preferences.canRender(entry.width, entry.height, screen) }
 
+    /**
+     * How many paintings [preferences] must leave. The floor of [MIN_POOL] exists for
+     * combinations nobody knew were thin; a chosen painter's few paintings are exactly
+     * what was asked for, so one is enough and the fetch never widens a painter away
+     * while there is one to show. Mirrors `needed` in `src/art/museums.rs`.
+     */
+    private fun needed(preferences: WallpaperPreferences): Int =
+        if (preferences.artworkArtists.isEmpty()) MIN_POOL else 1
+
     companion object {
+        /**
+         * The promise behind every filter Settings will apply: at least this many
+         * paintings remain to pick from, because a pool of a handful is the same few
+         * pictures coming round again. Owned here so that nothing else on Android
+         * decides what "enough" is. The desktop keeps its own copy as `MIN_POOL` in
+         * `src/art/museums.rs` and iOS in `Catalogue.swift`; a change belongs in all
+         * three, like the word lists.
+         */
+        const val MIN_POOL = 20
+
         private const val ASSET_NAME = "paintings.tsv"
         private const val FIELD_COUNT = 11
         private const val FIELD_COUNT_WITH_ARTIST = 12
@@ -173,6 +269,36 @@ class Catalogue(private val entries: List<Entry>) {
                 artist = fields.getOrNull(11).orEmpty(),
             )
         }
+    }
+}
+
+/** Why the browser refuses a painter; see [Catalogue.artistBlocks]. */
+enum class ArtistBlock { SUBJECT, RELIGIOUS, SIZE }
+
+/**
+ * The five filters a painting must pass, in the order [Catalogue.widened] breaks ties:
+ * the first one listed is the first to be given up.
+ */
+private enum class FilterSection {
+    SHAPE, ORIGIN, SUBJECT, ARTIST, CONTENT;
+
+    fun isActive(preferences: WallpaperPreferences): Boolean = when (this) {
+        // With an artist chosen neither is asked (see [Catalogue.matching]), so relaxing
+        // them would change nothing and only waste the smallest-set search.
+        SHAPE -> preferences.artworkArtists.isEmpty() && preferences.artworkShape != ArtworkShape.ANY
+        ORIGIN -> preferences.artworkArtists.isEmpty() && preferences.artworkRegions.isNotEmpty()
+        SUBJECT -> preferences.artworkSubjects.isNotEmpty()
+        ARTIST -> preferences.artworkArtists.isNotEmpty()
+        CONTENT -> preferences.hideReligious
+    }
+
+    /** [preferences] with this section back at Any. */
+    fun relax(preferences: WallpaperPreferences): WallpaperPreferences = when (this) {
+        SHAPE -> preferences.copy(artworkShape = ArtworkShape.ANY)
+        ORIGIN -> preferences.copy(artworkRegions = emptySet())
+        SUBJECT -> preferences.copy(artworkSubjects = emptySet())
+        ARTIST -> preferences.copy(artworkArtists = emptySet())
+        CONTENT -> preferences.copy(hideReligious = false)
     }
 }
 

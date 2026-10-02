@@ -155,7 +155,7 @@ English-language titles with false matches. See the doc comment on
 ## Artist choice
 
 Settings can also choose specific artists — one chip per name `Catalogue.artists()`
-finds in the catalogue, currently just Mikhail Vrubel. `WallpaperPreferences.artworkArtists`
+finds in the catalogue, fourteen painters as of the 2026-10-02 build. `WallpaperPreferences.artworkArtists`
 holds the choice as plain strings rather than an enum like `ArtworkSubject`, because
 the artist list is catalogue data, not a fixed set this app defines; an artist name
 that no longer appears in a later catalogue is simply tolerated and matches nothing,
@@ -164,12 +164,19 @@ never dropped from the stored preference the way a retired subject or region nam
 fresh install — there is no curated artist default the way there is for regions and
 subjects.
 
-Choosing an artist narrows Artists to that artist's own work, same as any other
-section — combined with Subjects at Landscape, only that artist's landscapes
-qualify, because both sections must pass (see **The filter model** above). This
-is a deliberate change from an earlier build, where a chosen artist and a chosen
-subject were alternatives (either counted): three turns in four came out as
-whatever the largest OR-ed pool was, drowning out a specific artist choice.
+A chosen artist wins over Shape and Origins. Asking for a painter is asking for
+their paintings as they are, so with any artist chosen neither section is asked at
+all, and one painting is enough — the floor of twenty exists for combinations nobody
+knew were thin, and a painter's seventeen paintings are what was asked for. Subject
+and *Hide religious scenes* still narrow: combined with Subjects at Landscape, only
+that artist's landscapes qualify (see **The filter model** above). Before this, on a
+phone set to phone-shaped paintings from Europe, no painter could be chosen at all:
+six of the named painters' paintings are that shape, and twelve of the fourteen are
+from Oceania, South America or Africa. An earlier build, where a chosen artist and a
+chosen subject were alternatives, was the other mistake: the largest OR-ed pool
+drowned out the painter. Settings keeps Shape and Origins on show but dimmed and
+inert, saying "Not used while an artist is chosen." This mirrors `admits` and `needed`
+in `src/art/museums.rs` and `Catalogue.swift`.
 
 The artists themselves come from `catalogue/artists.json`, a small config
 `catalogue/build.py` reads to pull specific Wikimedia Commons categories into the
@@ -178,6 +185,40 @@ work) — a fifth source (`wmc`) alongside the four museums, distinguished in
 `paintings.tsv` by a twelfth `artist` column the other four leave empty. See
 `catalogue/build.py` for the pipeline side of this; `Catalogue.kt` only ever reads
 the column.
+
+Not every painter in `artists.json` becomes a chip. Most of them are there to give
+Oceania, South America and Africa something to show, which the four museums
+barely hold, and the build names an artist in the twelfth column only when it kept
+at least twenty of their paintings (`MIN_PER_CHOICE` in `build.py`). The rest keep
+their rows and their byline and leave the column empty, so their work arrives
+under its region without a chip that would lead to three pictures.
+
+Each entry also carries `about` (the painter's Wikipedia article) and, for those
+who keep the column, `showcase` (the Commons page id of the painting they are
+known by). `catalogue/showcase.py` turns those into `catalogue/dist/artists/` — an
+`index.tsv` and one picture per painter, at most 1400 px on the long side — which
+the build bundles with the rest of `dist/` as the assets `artists/index.tsv` and
+`artists/<slug>.jpg`. `Artists.kt` reads the index once (a short row or an unknown
+region is skipped; a painter `Catalogue.artists()` names but the index lacks is
+left out of the browser) and decodes a picture only at the size it is shown, so
+fourteen painters never mean fourteen large bitmaps.
+
+Settings' *Artists* section lists only the painters already chosen — tap one to
+remove it, including a name a newer catalogue no longer holds — and one button,
+*Any artist* while nobody is chosen and *Add* after. That button opens
+`ArtistBrowserScreen`, built like `FavouritesScreen`: a grid of one picture per
+painter, ordered by region and then name, a tick on the chosen. Tapping one
+shows their best-known painting large, their name, a line such as "Golden
+summer, Eaglemont, 1889 · Oceania, 40 paintings" (`Catalogue.paintingsBy`
+counts the non-portrait rows), *Choose* or *Remove*, and *Read more*, which
+hands the Wikipedia article to the system browser and is hidden where nothing
+can open it (a TV often has no browser, which is why the manifest declares a
+`queries` entry for https). *Choose* is refused, with the reason in view, for
+a painter `availableArtists` does not return: "Fewer than 20 catalogue paintings
+are available" below `MIN_POOL`, otherwise "Too few paintings match with the other
+filters." Choosing only stages the change, the way a chip did, and *Apply
+changes* still commits it. Back leaves the painter, then the browser. The rules
+mirror `Pending::artist_row` and `artist_cards` on the desktop; iOS keeps its own copy.
 
 ### Availability
 
@@ -191,25 +232,52 @@ close to it, even once the Met's own paintings join the list — the format
 problem is about what a landscape *is*, not which museum photographed it.
 
 `Catalogue.availableRegions`, `availableSubjects` and `availableArtists` each
-answer, for one section, which of its options still have at least one candidate
-— checking an option **alone within its own section, with the other three
+answer, for one section, which of its options still leave a pool worth rotating
+through — checking an option **alone within its own section, with the other
 sections held at whatever Settings currently has staged**. Choosing Landscape
-alone in Subjects while Vrubel is staged in Artists asks whether Vrubel has any
-landscapes, not whether the catalogue has landscapes at all. Each is checked one
-option at a time with `Sequence.any`, stopping at the first match, rather than
-building `candidates`' full shuffled list — only presence, not the entry,
-matters here. Settings recomputes all three, and `anyMatch` besides, off the
-main thread on every staged change to any section, and hides an option a
-section's availability call doesn't return; **Any is always shown**, whatever
-the other sections are staged to.
+alone in Subjects while Vrubel is staged in Artists asks whether Vrubel has
+enough landscapes, not whether the catalogue has landscapes at all. "Enough" is
+`Catalogue.MIN_POOL`, **20 paintings**: a pool of a handful is the same few
+pictures coming round again, and one painting used to be enough to keep an option
+on screen, which let a person end up alternating between two. The threshold
+mirrors `MIN_POOL` in `src/art/museums.rs` and `Catalogue.swift` on purpose, like
+the word lists. Each option is checked with `hasEnough`, which counts only as far
+as the floor (`take(MIN_POOL)`) rather than building `candidates`' full shuffled
+list — only enough-or-not matters here. "Enough" is `needed(preferences)`: `MIN_POOL`
+with no artist chosen, one with one; the threshold belongs to the preferences being
+tested, so relaxing the Artist section in `widened`'s search brings twenty back, and
+with an artist chosen Shape and Origins are not active sections for it (relaxing them
+changes nothing), so the fetch never widens a painter away while they have a
+painting to show. A painter is unavailable only when the staged Subject or the
+religious toggle leaves them nothing, and the browser says which
+(`Catalogue.artistBlocks`). Settings recomputes all three, and the
+whole-selection check besides, off the main thread on every staged change to any
+section, and hides an option a section's availability call doesn't return; **Any
+is always shown**, whatever the other sections are staged to, and so is an option
+already selected, so it can still be unchecked.
 
-When nothing at all passes every currently staged section, `Catalogue.anyMatch`
-says so, Settings shows "Nothing matches these filters — set one section to
-Any", and Apply stays disabled until something changes — the always-visible Any
-option in every section is the guaranteed way out of that state. `Museums.fetch`
-asks the same question by way of `candidates` coming back empty, and throws "No
-paintings match these filters" — there is no separate availability check to run
-first, because an empty `candidates` already means the same thing.
+When the staged selection as a whole leaves fewer than `MIN_POOL`, Settings says
+how many in the line under the sections — "No painting matches these filters — set
+one section to Any" for none, otherwise "Only 7 paintings match these filters — at
+least 20 are needed" ("Only 1 painting matches" in the singular). Apply is
+disabled while it stands, **but only when the staged filters differ from the ones
+already applied**: `Catalogue.canApply` lets a change that doesn't touch the
+filters — placement style, colours — through even when the applied filters are
+themselves thin, because a selection saved before the floor existed would
+otherwise lock the whole screen until it was widened. Then the line reads "…so
+pictures come from a wider selection" instead, which is what fetch does. The
+always-visible Any option in every section is the guaranteed way out.
+
+`Museums.fetch` asks `Catalogue.widened` before it picks. Filters that admit
+fewer than `MIN_POOL` paintings — saved before the floor existed, a catalogue that
+shrank, or Phone-shaped on a screen of another shape — are relaxed by the
+smallest set of active sections that cures it: single sections first, then pairs,
+and so on, ties broken in the order Shape, Origins, Subjects, Artists, Content
+(the religious toggle). Adequate filters come back untouched, and so do filters
+nothing can rescue, so the pool is empty and `fetch` still throws "No paintings
+match these filters" — an empty `candidates` already means that, with no separate
+availability check to run first. The stored preference is never rewritten; only
+the pick is widened.
 
 The religious-scene filter is a toggle, off by default, and sits below the four
 sections rather than inside one of them, since it applies to all of them at
@@ -248,6 +316,54 @@ The screen size comes from `DisplayManager`'s current display mode, not
 `WindowManager`, because the daily rotation runs from a `JobService` with no
 Activity to ask. Home and lock screens receive the same bitmap in one call.
 
+*Turn wide paintings* (`rotateWide`, off by default, phones only) hangs a painting
+wider than tall a quarter turn clockwise — its top at the screen's right edge — on a
+screen taller than wide, so it fills the screen and is viewed with the phone on its
+side. It is not a fifth style: `render` lays the painting out in whichever style is
+set on a screen lying on its side, then turns the finished bitmap, so Zoom, Stretch,
+Blur and Borders all work on the turned picture. `hungSize` is the one place that
+answers "the size as it will be hung"; the shape filter and `canRender` ask it, so
+the pool is judged as the paintings will hang, while `Museums.fetch`'s check of a
+download against the catalogue's declared size does not (that is about the file).
+The renderer gates on a portrait screen itself, so a stale preference never turns a
+picture on a TV. The in-app picture stays upright.
+
+A wide painting hung upright is cropped to its centre strip by Zoom, and the centre is
+often not the part worth seeing, so on a phone the sharp painting can be framed: pinch
+the Settings preview to zoom it, from its own size (filling the screen for Zoom, fitted
+inside it for Blur's backdrop and Borders) up to three times, and drag it to choose the
+part. Stretch and Blur's whole-image variant have no sharp picture, so nothing to frame.
+`frameZoom` is a style option, like blur strength: one value that persists across
+paintings and styles. The position, `panX` and `panY` (0 to 1 of the overflow on each
+axis, 0.5 centred), belongs to one painting: `panPainting` holds the file name it was
+set for, and `framingFor(file, screen)` answers the stored position for that painting
+and the centre for every other, so the next painting starts centred with nothing
+resetting anything. A pan saved before the two axes existed seeds both. A landscape
+screen ignores the framing entirely, since nobody can adjust it there. A painting
+turned by *Turn wide paintings* can be framed too: the geometry does not care, and the
+renderer maps the position through the quarter turn.
+
+All of it comes from one geometry in `Screen.kt`: `frame` says where the painting's
+rectangle sits relative to the screen for a size, a base (cover or fit), a zoom and a
+pan, always reaching both screen edges along an axis it overflows, and `reframe` turns a
+gesture into a new framing so the painting moves exactly as far as the fingers and
+stops at its edges. `WallpaperRenderer` asks it at screen size and decodes only the part
+the screen shows, at the size it is shown, so a painting zoomed threefold costs one
+screen of pixels; the preview asks it at its own size. The enlargement limit judges the
+painting at zoom 1, so which paintings are admitted does not depend on the zoom, and a
+zoomed one may be upscaled past it by choice.
+
+The preview is two layers. Under it, what does not depend on the framing — Blur's
+backdrop or the border colour — is rendered through the renderer and redone only when a
+style option changes; over it the painting is decoded once per painting and drawn by
+Compose at the geometry's position. A gesture changes numbers and Compose redraws, so
+the picture follows the fingers at the screen's frame rate and nothing is re-rendered
+until *Apply changes*. A single finger is claimed only if it moves the way the picture
+can, so a vertical drag on a painting that can only move sideways still scrolls the
+Settings column. The main picture in the app uses the same geometry when the applied
+style is Zoom, and shows the centre of the painting for the others. There are no
+gestures on a TV, which has no touch.
+
 ## Activity and Settings UI
 
 The activity always opens on the existing dark artwork view. **Next picture**
@@ -269,6 +385,16 @@ The status line narrates the same progress in words ("Choosing a painting…",
 This also appears when the
 scheduled job runs the fetch, since `Rotation` is a singleton in the same process
 `MainActivity` reads its `StateFlow` from.
+
+Every screen, phone and television, wears one palette, and it lives in `Theme.kt`
+alone. It is neutral on purpose — greys, white ink, no hue except the paintings —
+to match the desktop, whose window takes its colours from the system by role (ink,
+muted, accent, wash, line). Screens ask for a role (`primary` for the accent,
+`muted`, `wash`, `hairline`, `raised`), never for a colour, so the app is restyled in
+that one file. The colours that stay literal are data rather than chrome: the border
+picker's swatches and wheel, and anything computed from a painting. The window
+shown before Compose draws (`themes.xml`, `colors.xml`) repeats the background
+because XML cannot read `Theme.kt`.
 
 Settings uses the same near-black gallery atmosphere as the artwork view. Its
 wallpaper preview is a centred 150 dp-wide phone frame rendered at the physical

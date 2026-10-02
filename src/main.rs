@@ -35,6 +35,7 @@ fn main() -> Result<()> {
             "--where" => mode = Mode::Where,
             "--check" => mode = Mode::Check,
             "--quit" => mode = Mode::Quit,
+            "--catalogue" => mode = Mode::Catalogue,
             "--help" | "-h" => {
                 usage();
                 return Ok(());
@@ -46,6 +47,14 @@ fn main() -> Result<()> {
     #[cfg(windows)]
     if !matches!(mode, Mode::Tray) {
         desktop::attach_console();
+    }
+
+    if let Mode::Catalogue = mode {
+        // 16:10 rather than the screen's own shape: this mode must run without a
+        // display, from a build script, and a fixed answer is comparable between
+        // runs and machines.
+        print!("{}", art::museums::report(16.0 / 10.0));
+        return Ok(());
     }
 
     if let Mode::Quit = mode {
@@ -92,6 +101,7 @@ fn main() -> Result<()> {
         Mode::Where => unreachable!("handled above, before the config is read"),
         Mode::Check => unreachable!("handled above, before the config is read"),
         Mode::Quit => unreachable!("handled above, before paths are located"),
+        Mode::Catalogue => unreachable!("handled above, before paths are located"),
         Mode::Tray => {
             #[cfg(windows)]
             desktop::log_to(&paths.state.with_file_name("art-window.log"));
@@ -141,6 +151,8 @@ enum Mode {
     /// Ask the running instance to exit: over D-Bus on GNOME, by a named event on
     /// Windows.
     Quit,
+    /// Print how many paintings each filter combination leaves, and stop.
+    Catalogue,
 }
 
 fn usage() {
@@ -150,5 +162,6 @@ fn usage() {
     println!("  art-window --if-due   the same, but only if one is due");
     println!("  art-window --where    print where settings and pictures live");
     println!("  art-window --check    diagnose GNOME desktop integration");
+    println!("  art-window --catalogue  count the paintings each filter combination leaves");
     println!("  art-window --quit     stop the running instance (Linux, Windows)");
 }

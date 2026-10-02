@@ -29,6 +29,10 @@ targets:
       - path: ../catalogue/dist/paintings.tsv
         group: Resources
         buildPhase: resources
+      # The painters' pictures and index, as a folder so they land under artists/.
+      - path: ../catalogue/dist/artists
+        type: folder
+        buildPhase: resources
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.artwindow.kit

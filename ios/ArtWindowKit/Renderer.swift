@@ -25,23 +25,43 @@ public enum Renderer {
     private static let blurShortEdge = 256
     private static let colourSampleSize = 160
 
-    public static func render(imageAt url: URL, style: RenderStyle, screen: Screen) throws -> CGImage {
+    /// `picture: false` leaves out the sharp painting wherever the style lets the user frame it
+    /// (see `RenderStyle.canFrame`): the preview draws that layer itself, so framing it never
+    /// re-renders this one.
+    public static func render(imageAt url: URL, style: RenderStyle, screen: Screen, picture: Bool = true) throws -> CGImage {
         guard FileManager.default.fileExists(atPath: url.path) else {
             throw RenderError(errorDescription: "\(url.lastPathComponent) is no longer available")
         }
-        guard let size = pixelSize(of: url) else {
+        guard let fileSize = pixelSize(of: url) else {
             throw RenderError(errorDescription: "\(url.lastPathComponent) could not be read as an image")
+        }
+        // Turned before anything is measured or drawn, so every mode below works on the
+        // picture as it will hang.
+        let hung = style.hung(width: fileSize.width, height: fileSize.height, on: screen)
+        let rotate = hung != fileSize
+        let size = hung
+        func downsample(_ url: URL, maxPixel: Int) throws -> CGImage {
+            try Renderer.downsample(url, maxPixel: maxPixel, rotate: rotate)
         }
         let tooSmall = RenderError(errorDescription:
             "\(url.lastPathComponent) (\(size.width)x\(size.height)) is too small for \(screen.width)x\(screen.height)")
         let canvas = try Canvas(width: screen.width, height: screen.height)
         let full = CGRect(x: 0, y: 0, width: screen.width, height: screen.height)
+        // The sharp painting, where the user may have framed it. The source is never decoded
+        // larger than its own pixels or 4096 on the long side, however far it is zoomed;
+        // the context scales it into the rectangle and crops to the canvas.
+        let framed = style.framedRect(
+            for: url.lastPathComponent, painting: CGSize(width: size.width, height: size.height), on: screen)
+        func drawFramed() throws {
+            guard picture || !style.canFrame(on: screen) else { return }
+            let wanted = Int(max(framed.width, framed.height).rounded(.up))
+            canvas.draw(try downsample(url, maxPixel: min(wanted, 4096, max(size.width, size.height))), in: framed)
+        }
 
         switch style.mode {
         case .zoom:
             guard screen.cover(width: size.width, height: size.height) != nil else { throw tooSmall }
-            let rect = aspectFill(size, into: full)
-            canvas.draw(try downsample(url, maxPixel: Int(max(rect.width, rect.height).rounded(.up))), in: rect)
+            try drawFramed()
 
         case .stretch:
             guard screen.canStretch(width: size.width, height: size.height) else { throw tooSmall }
@@ -63,8 +83,7 @@ public enum Renderer {
                 guard screen.cover(width: size.width, height: size.height) != nil else { throw tooSmall }
             } else {
                 guard screen.fit(width: size.width, height: size.height) != nil else { throw tooSmall }
-                let rect = aspectFit(size, into: full)
-                canvas.draw(try downsample(url, maxPixel: Int(max(rect.width, rect.height).rounded(.up))), in: rect)
+                try drawFramed()
             }
 
         case .borders:
@@ -77,8 +96,7 @@ public enum Renderer {
                 let (r, g, b) = channels(edgeAverageColour(sample.pixels, width: sample.width, height: sample.height))
                 canvas.fill(red: Double(r) / 255, green: Double(g) / 255, blue: Double(b) / 255)
             }
-            let rect = aspectFit(size, into: full)
-            canvas.draw(try downsample(url, maxPixel: Int(max(rect.width, rect.height).rounded(.up))), in: rect)
+            try drawFramed()
         }
         return try canvas.image()
     }
@@ -88,9 +106,18 @@ public enum Renderer {
         try? downsample(url, maxPixel: maxPixel)
     }
 
+    /// The painting upright, or turned as `render` turns it, for a layer the preview moves
+    /// itself. Decoded once per painting at no more than `maxPixel`.
+    public static func picture(imageAt url: URL, maxPixel: Int, turned: Bool) -> CGImage? {
+        try? downsample(url, maxPixel: maxPixel, rotate: turned)
+    }
+
     /// Up to five visibly distinct, most-common colours, for the border colour picker.
-    public static func edgeColours(imageAt url: URL) -> [RenderStyle.Border] {
-        guard let image = try? downsample(url, maxPixel: colourSampleSize),
+    public static func edgeColours(imageAt url: URL, style: RenderStyle, screen: Screen) -> [RenderStyle.Border] {
+        let rotate = pixelSize(of: url).map {
+            style.hung(width: $0.width, height: $0.height, on: screen) != $0
+        } ?? false
+        guard let image = try? downsample(url, maxPixel: colourSampleSize, rotate: rotate),
               let sample = try? pixels(of: image) else { return [] }
         return commonImageColours(sample.pixels, limit: 5).map { colour in
             let (r, g, b) = channels(colour)
@@ -107,11 +134,6 @@ public enum Renderer {
         return centred(CGFloat(size.width) * scale, CGFloat(size.height) * scale, in: box)
     }
 
-    private static func aspectFit(_ size: (width: Int, height: Int), into box: CGRect) -> CGRect {
-        let scale = min(box.width / CGFloat(size.width), box.height / CGFloat(size.height))
-        return centred((CGFloat(size.width) * scale).rounded(), (CGFloat(size.height) * scale).rounded(), in: box)
-    }
-
     private static func centred(_ width: CGFloat, _ height: CGFloat, in box: CGRect) -> CGRect {
         CGRect(x: box.minX + (box.width - width) / 2, y: box.minY + (box.height - height) / 2, width: width, height: height)
     }
@@ -119,7 +141,7 @@ public enum Renderer {
     // MARK: ImageIO
 
     /// Pixel size from the file header alone, with EXIF orientation applied.
-    static func pixelSize(of url: URL) -> (width: Int, height: Int)? {
+    public static func pixelSize(of url: URL) -> (width: Int, height: Int)? {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary),
               let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
               let width = properties[kCGImagePropertyPixelWidth] as? Int,
@@ -130,7 +152,10 @@ public enum Renderer {
         return (5...8).contains(orientation) ? (height, width) : (width, height)
     }
 
-    private static func downsample(_ url: URL, maxPixel: Int) throws -> CGImage {
+    /// `rotate` turns the result 90° clockwise, which ImageIO's thumbnailer cannot do: the
+    /// decoded thumbnail is drawn into a context of the swapped size. Only `render` and
+    /// `edgeColours` ask for it; `thumbnail` stays upright.
+    private static func downsample(_ url: URL, maxPixel: Int, rotate: Bool = false) throws -> CGImage {
         let options: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceCreateThumbnailWithTransform: true,
@@ -140,7 +165,25 @@ public enum Renderer {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary),
               let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
         else { throw RenderError(errorDescription: "\(url.lastPathComponent) could not be decoded") }
-        return image
+        return rotate ? try turnedClockwise(image) : image
+    }
+
+    private static func turnedClockwise(_ image: CGImage) throws -> CGImage {
+        let (w, h) = (image.width, image.height)
+        guard let context = CGContext(
+            data: nil, width: h, height: w, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)
+        else { throw RenderError(errorDescription: "Could not allocate a \(h)x\(w) canvas") }
+        // A quarter turn clockwise in CoreGraphics' y-up space is -90°, then lifted back
+        // into the bitmap by the new height (the old width).
+        context.translateBy(x: 0, y: CGFloat(w))
+        context.rotate(by: -.pi / 2)
+        context.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
+        guard let turned = context.makeImage() else {
+            throw RenderError(errorDescription: "Could not turn the picture")
+        }
+        return turned
     }
 
     // MARK: Drawing

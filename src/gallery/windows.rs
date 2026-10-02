@@ -124,6 +124,12 @@ const SURFACE_CLASS: PCWSTR = w!("ArtWindowSettings");
 const SHOW_ID: i32 = 1001;
 const FORGET_ID: i32 = 1002;
 const CANVAS_ID: i32 = 1003;
+// The artist browser's controls: the same four as the favourites'.
+const ARTIST_CANVAS_ID: i32 = 1011;
+const CHOOSE_ID: i32 = 1012;
+const READ_ID: i32 = 1013;
+const CHOOSE_W: i32 = 112;
+const READ_W: i32 = 112;
 /// Names this file's subclass on the window, so that it can be taken off again
 /// without disturbing tao's own.
 /// `LVS_NOLABELS`, which the bindings do not carry: the pictures are named in the
@@ -334,10 +340,24 @@ fn thumbnail(path: &Path, cell: i32) -> Option<Bitmap> {
     Some(square)
 }
 
-/// One kept picture, as the window has it.
+/// One picture on a shelf, as the window has it.
+#[derive(Clone)]
 struct Card {
     key: String,
     art: Artwork,
+    /// Whether the painter is already chosen. Always false on the favourites' shelf.
+    on: bool,
+    /// Why the card's main button is inert, if it is. Always `None` on the
+    /// favourites' shelf.
+    note: Option<String>,
+}
+
+/// Which of the two shelves a [`Browser`] is. The only thing that differs between
+/// them is what the pane says and what its two buttons mean.
+#[derive(Clone, Copy, PartialEq)]
+enum Shelf {
+    Favourites,
+    Artists,
 }
 
 /// The list as it stands, and what was made for it.
@@ -370,18 +390,18 @@ struct Fonts {
 /// deleting the list's items notifies us that they were unselected.
 struct Inner {
     parent: HWND,
-    list: HWND,
-    canvas: HWND,
-    title: HWND,
-    byline: HWND,
-    show: HWND,
-    forget: HWND,
+    favourites: Browser,
+    artists: Browser,
     /// The strip of tabs, and the settings page under it. Both are windows of
     /// one class of ours, painted by hand, and both find this through their
     /// `GWLP_USERDATA`.
     strip: HWND,
     page: HWND,
     tab: Cell<Tab>,
+    /// Whether the artist browser stands where the settings page would. Only ever
+    /// true on the Settings tab; the page is then no more than the strip along the
+    /// bottom that holds *Apply changes*.
+    browsing: Cell<bool>,
     pending: RefCell<Pending>,
     /// The settings preview as a bitmap, at the pixels it is drawn at.
     picture: RefCell<Option<Bitmap>>,
@@ -392,6 +412,21 @@ struct Inner {
     scroll: Cell<i32>,
     dragging: Cell<bool>,
     fonts: Fonts,
+    on_pick: Rc<dyn Fn(Pick)>,
+}
+
+/// One shelf and its pane: the controls, and what they currently hold. The window
+/// has two, built identically — the kept pictures, and the painters to choose from.
+struct Browser {
+    shelf: Shelf,
+    list: HWND,
+    canvas: HWND,
+    title: HWND,
+    byline: HWND,
+    /// *Set as wallpaper*, or *Choose* / *Remove*.
+    primary: HWND,
+    /// *Forget*, or *Read more*.
+    secondary: HWND,
     shown: RefCell<Shown>,
     selected: Cell<Option<usize>>,
     /// The one painting held at its full size, and only ever one: choosing another
@@ -400,7 +435,19 @@ struct Inner {
     /// Set while this is changing the list itself, so that the control's
     /// notifications about it are not mistaken for somebody choosing a picture.
     quiet: Cell<bool>,
-    on_pick: Rc<dyn Fn(Pick)>,
+}
+
+impl Browser {
+    fn controls(&self) -> [HWND; 6] {
+        [
+            self.list,
+            self.canvas,
+            self.title,
+            self.byline,
+            self.primary,
+            self.secondary,
+        ]
+    }
 }
 
 impl Inner {
@@ -427,13 +474,65 @@ impl Inner {
         }
         let (width, height) = (client.right, client.bottom);
         let top = self.px(STRIP);
+
+        let place = |hwnd: HWND, x: i32, y: i32, w: i32, h: i32| {
+            // SAFETY: `hwnd` is one of this window's own children.
+            let _ = unsafe { MoveWindow(hwnd, x, y, w.max(1), h.max(1), true) };
+        };
+        place(self.strip, 0, 0, width, top);
+        // The page is the whole area under the strip, unless the artist browser is
+        // standing in it: then it is only the floor, where *Apply changes* is.
+        let foot = self.foot();
+        if self.browsing.get() {
+            place(self.page, 0, height - foot, width, foot);
+        } else {
+            place(self.page, 0, top, width, height - top);
+        }
+        self.place_browser(
+            &self.favourites,
+            (top, height),
+            top,
+            (self.px(SHOW_W), self.px(FORGET_W)),
+        );
+        // The artists' shelf stops above the floor, where the page's strip is.
+        self.place_browser(
+            &self.artists,
+            (top, height - foot),
+            top,
+            (self.px(CHOOSE_W), self.px(READ_W)),
+        );
+    }
+
+    /// The height of the strip of the page that stays up while the artist browser
+    /// is open: the same air and the same button as `build` gives *Apply changes*.
+    fn foot(&self) -> i32 {
+        2 * self.px(SETTINGS_PAD) + self.px(CHIP_H + 6)
+    }
+
+    /// Places one browser's controls in the band `top..bottom` (the column keeps its
+    /// width and takes the band from `list_top`; the pane takes the rest, with the
+    /// buttons on its floor and the picture over whatever room is left above the
+    /// two lines).
+    fn place_browser(
+        &self,
+        b: &Browser,
+        (top, bottom): (i32, i32),
+        list_top: i32,
+        (primary_w, secondary_w): (i32, i32),
+    ) {
+        let mut client = RECT::default();
+        // SAFETY: `client` is a RECT.
+        if unsafe { GetClientRect(self.parent, &mut client) }.is_err() {
+            return;
+        }
+        let width = client.right;
         let pad = self.px(PAD);
         let shelf = self.px(SHELF);
         let left = shelf + pad;
         let wide = (width - left - pad).max(1);
 
         let button_h = self.px(BUTTON_H);
-        let floor = height - pad - button_h;
+        let floor = bottom - pad - button_h;
         let byline_y = floor - self.px(14) - self.px(LINE);
         let title_y = byline_y - self.px(2) - self.px(TITLE_H);
 
@@ -441,21 +540,19 @@ impl Inner {
             // SAFETY: `hwnd` is one of this window's own children.
             let _ = unsafe { MoveWindow(hwnd, x, y, w.max(1), h.max(1), true) };
         };
-        place(self.strip, 0, 0, width, top);
-        place(self.page, 0, top, width, height - top);
-        place(self.list, 0, top, shelf, height - top);
-        place(self.show, left, floor, self.px(SHOW_W), button_h);
+        place(b.list, 0, list_top, shelf, bottom - list_top);
+        place(b.primary, left, floor, primary_w, button_h);
         place(
-            self.forget,
-            left + self.px(SHOW_W) + self.px(8),
+            b.secondary,
+            left + primary_w + self.px(8),
             floor,
-            self.px(FORGET_W),
+            secondary_w,
             button_h,
         );
-        place(self.byline, left, byline_y, wide, self.px(LINE));
-        place(self.title, left, title_y, wide, self.px(TITLE_H));
+        place(b.byline, left, byline_y, wide, self.px(LINE));
+        place(b.title, left, title_y, wide, self.px(TITLE_H));
         place(
-            self.canvas,
+            b.canvas,
             left,
             top + pad,
             wide,
@@ -466,13 +563,15 @@ impl Inner {
     /// Takes a new list, keeping what can be kept: the selection stays on the same
     /// painting where that painting is still there, and a thumbnail already made is
     /// never made twice.
-    fn adopt(&self, cards: Vec<Card>) {
-        let was = self.selected_key();
+    ///
+    /// `want` names the card to land on instead, when it is still there.
+    fn adopt(&self, b: &Browser, cards: Vec<Card>, want: Option<String>) {
+        let was = want.or_else(|| self.selected_key(b));
         let cell = self.px(THUMB);
 
-        self.quiet.set(true);
+        b.quiet.set(true);
         {
-            let mut shown = self.shown.borrow_mut();
+            let mut shown = b.shown.borrow_mut();
             if shown.cell != cell {
                 shown.thumbs.clear();
                 shown.cell = cell;
@@ -489,15 +588,15 @@ impl Inner {
             }
             shown.cards = cards;
         }
-        self.refill_list();
-        self.quiet.set(false);
+        self.refill_list(b);
+        b.quiet.set(false);
 
         let row = {
-            let shown = self.shown.borrow();
+            let shown = b.shown.borrow();
             was.and_then(|key| shown.cards.iter().position(|card| card.key == key))
                 .or_else(|| (!shown.cards.is_empty()).then_some(0))
         };
-        self.choose(row, true);
+        self.choose(b, row, true);
     }
 
     /// Rebuilds the control's contents from `shown`: a fresh image list, in card
@@ -506,18 +605,18 @@ impl Inner {
     /// The image list is rebuilt whole rather than patched, because an item names
     /// its picture by index and an index is only meaningful for as long as nothing
     /// before it is removed.
-    fn refill_list(&self) {
-        let mut shown = self.shown.borrow_mut();
+    fn refill_list(&self, b: &Browser) {
+        let mut shown = b.shown.borrow_mut();
         let cell = shown.cell;
         // SAFETY: every handle is ours or the list control's; the old image list is
         // destroyed only after the control has stopped using it, and the control was
         // made with LVS_SHAREIMAGELISTS so it never destroys ours behind our back.
         unsafe {
-            send(self.list, LVM_DELETEALLITEMS, 0, 0);
+            send(b.list, LVM_DELETEALLITEMS, 0, 0);
             let images =
                 ImageList_Create(cell, cell, ILC_COLOR24, shown.cards.len().max(1) as i32, 4);
             send(
-                self.list,
+                b.list,
                 LVM_SETIMAGELIST,
                 LVSIL_NORMAL as usize,
                 images.0 as isize,
@@ -529,7 +628,7 @@ impl Inner {
             // is reset by swapping the image list.
             let spacing = self.px(CELL) as u32;
             send(
-                self.list,
+                b.list,
                 LVM_SETICONSPACING,
                 0,
                 ((spacing << 16) | spacing) as isize,
@@ -549,20 +648,15 @@ impl Inner {
                     iImage: image,
                     ..LVITEMW::default()
                 };
-                send(
-                    self.list,
-                    LVM_INSERTITEMW,
-                    0,
-                    &item as *const LVITEMW as isize,
-                );
+                send(b.list, LVM_INSERTITEMW, 0, &item as *const LVITEMW as isize);
             }
         }
     }
 
     /// Picks out a row: lights it, if `light` says the control does not already
     /// have it lit, and fills the pane beside it.
-    fn choose(&self, row: Option<usize>, light: bool) {
-        self.selected.set(row);
+    fn choose(&self, b: &Browser, row: Option<usize>, light: bool) {
+        b.selected.set(row);
         if let (true, Some(row)) = (light, row) {
             let state = LIST_VIEW_ITEM_STATE_FLAGS(LVIS_SELECTED.0 | LVIS_FOCUSED.0);
             let item = LVITEMW {
@@ -570,63 +664,87 @@ impl Inner {
                 state,
                 ..LVITEMW::default()
             };
-            self.quiet.set(true);
+            b.quiet.set(true);
             // `item` outlives the call, which does not keep the pointer.
             send(
-                self.list,
+                b.list,
                 LVM_SETITEMSTATE,
                 row,
                 &item as *const LVITEMW as isize,
             );
-            send(self.list, LVM_ENSUREVISIBLE, row, 0);
-            self.quiet.set(false);
+            send(b.list, LVM_ENSUREVISIBLE, row, 0);
+            b.quiet.set(false);
         }
-        let art = row.and_then(|row| {
-            self.shown
-                .borrow()
-                .cards
-                .get(row)
-                .map(|card| card.art.clone())
-        });
-        self.point_at(art.as_ref());
+        let card = row.and_then(|row| b.shown.borrow().cards.get(row).cloned());
+        self.point_at(b, card.as_ref());
     }
 
     /// Points the pane at a picture, or empties it when there is none.
-    fn point_at(&self, art: Option<&Artwork>) {
-        match art {
-            Some(art) => {
-                *self.preview.borrow_mut() = self.preview_of(&art.path);
-                set_text(self.title, &art.title);
+    fn point_at(&self, b: &Browser, card: Option<&Card>) {
+        *b.preview.borrow_mut() = card.and_then(|card| self.preview_of(b, &card.art.path));
+        self.describe_card(b, card);
+        // SAFETY: repaints one of our own children.
+        let _ = unsafe { InvalidateRect(Some(b.canvas), None, false) };
+    }
+
+    /// Everything in the pane except the picture: the two lines, and what the two
+    /// buttons say and whether they can be pressed. Apart from `point_at` so that a
+    /// painter being chosen can change them without the painting being decoded again.
+    fn describe_card(&self, b: &Browser, card: Option<&Card>) {
+        match (b.shelf, card) {
+            (Shelf::Favourites, Some(card)) => {
+                let art = &card.art;
+                set_text(b.title, &art.title);
                 set_text(
-                    self.byline,
+                    b.byline,
                     if art.byline.is_empty() {
                         &art.attribution
                     } else {
                         &art.byline
                     },
                 );
-                enable(self.show, true);
-                enable(self.forget, true);
+                enable(b.primary, true);
+                enable(b.secondary, true);
             }
-            None => {
-                *self.preview.borrow_mut() = None;
-                set_text(self.title, "Nothing kept yet");
+            (Shelf::Favourites, None) => {
+                set_text(b.title, "Nothing kept yet");
                 set_text(
-                    self.byline,
+                    b.byline,
                     "Add to favourites keeps the picture on the desktop",
                 );
-                enable(self.show, false);
-                enable(self.forget, false);
+                enable(b.primary, false);
+                enable(b.secondary, false);
+            }
+            (Shelf::Artists, Some(card)) => {
+                let art = &card.art;
+                set_text(b.title, &art.title);
+                // The reason is shown where the byline is: it is the one place on
+                // this window that has room to say it.
+                set_text(
+                    b.byline,
+                    match &card.note {
+                        Some(reason) => reason,
+                        None if art.byline.is_empty() => &art.attribution,
+                        None => &art.byline,
+                    },
+                );
+                set_text(b.primary, if card.on { "Remove" } else { "Choose" });
+                enable(b.primary, card.note.is_none());
+                enable(b.secondary, art.details_url.is_some());
+            }
+            (Shelf::Artists, None) => {
+                set_text(b.title, "No painters yet");
+                set_text(b.byline, "");
+                enable(b.primary, false);
+                enable(b.secondary, false);
             }
         }
-        // SAFETY: repaints one of our own children.
-        let _ = unsafe { InvalidateRect(Some(self.canvas), None, false) };
     }
 
-    fn preview_of(&self, path: &Path) -> Option<Bitmap> {
+    fn preview_of(&self, b: &Browser, path: &Path) -> Option<Bitmap> {
         let mut area = RECT::default();
         // SAFETY: `area` is a RECT.
-        let _ = unsafe { GetClientRect(self.canvas, &mut area) };
+        let _ = unsafe { GetClientRect(b.canvas, &mut area) };
         shell_image(
             path,
             area.right.max(PREVIEW_AT_LEAST),
@@ -635,27 +753,31 @@ impl Inner {
     }
 
     /// The key of the picture in the pane, if there is one.
-    fn selected_key(&self) -> Option<String> {
-        let row = self.selected.get()?;
-        let shown = self.shown.borrow();
-        shown.cards.get(row).map(|card| card.key.clone())
+    fn selected_key(&self, b: &Browser) -> Option<String> {
+        self.selected_card(b).map(|card| card.key)
     }
 
-    /// Says what was asked of the picture in the pane.
+    fn selected_card(&self, b: &Browser) -> Option<Card> {
+        let row = b.selected.get()?;
+        let shown = b.shown.borrow();
+        shown.cards.get(row).cloned()
+    }
+
+    /// Says what was asked of the picture in the favourites' pane.
     ///
     /// By key, and read out before anybody is told, because answering this will take
     /// the list apart underneath us — and no borrow is held while they are.
     fn ask(&self, what: fn(String) -> Pick) {
-        let Some(key) = self.selected_key() else {
+        let Some(key) = self.selected_key(&self.favourites) else {
             return;
         };
         (self.on_pick)(what(key));
     }
 
     /// Draws the picture, and black wherever it does not reach.
-    fn paint_canvas(&self, item: &DRAWITEMSTRUCT) {
+    fn paint_canvas(&self, b: &Browser, item: &DRAWITEMSTRUCT) {
         let area = item.rcItem;
-        let picture = self
+        let picture = b
             .preview
             .borrow()
             .as_ref()
@@ -695,22 +817,23 @@ impl Inner {
         }
     }
 
-    fn on_item_changed(&self, change: &NMLISTVIEW) {
+    fn on_item_changed(&self, b: &Browser, change: &NMLISTVIEW) {
         let lit = LVIS_SELECTED.0;
         let newly_selected = change.uNewState & lit != 0 && change.uOldState & lit == 0;
-        if self.quiet.get() || !newly_selected || change.iItem < 0 {
+        if b.quiet.get() || !newly_selected || change.iItem < 0 {
             return;
         }
         let row = change.iItem as usize;
-        if self.selected.get() != Some(row) {
-            self.choose(Some(row), false);
+        if b.selected.get() != Some(row) {
+            self.choose(b, Some(row), false);
         }
     }
 
     fn on_double_click(&self, click: &NMITEMACTIVATE) {
         // A double-click on a picture is impatience, and means the button beside it.
         // The first click of the pair has already chosen it; one on bare ground
-        // names nothing.
+        // names nothing. Only the favourites' shelf listens: choosing a painter
+        // twice over by a stray double-click would be an undo nobody asked for.
         if click.iItem >= 0 {
             self.ask(Pick::Show);
         }
@@ -736,6 +859,10 @@ enum Act {
     Region(Region),
     Subject(Subject),
     Artist(String),
+    /// Opens the artist browser in place of the page.
+    BrowseArtists,
+    /// Closes the artist browser, back to the page.
+    CloseBrowser,
     Religious,
     Slider,
     Apply,
@@ -1006,10 +1133,10 @@ impl Column<'_> {
         self.y += h + self.px(10);
     }
 
-    fn chips(&mut self, chips: Vec<(String, bool, Act)>, enabled: bool) {
+    fn chips(&mut self, chips: Vec<(String, bool, Act, bool)>, enabled: bool) {
         let (h, gap, pad) = (self.px(CHIP_H), self.px(GAP), self.px(CHIP_PAD));
         let (mut x, mut y) = (0, self.y);
-        for (label, selected, act) in chips {
+        for (label, selected, act, available) in chips {
             let w = text_width(self.hdc, self.fonts.chip, &label) + 2 * pad;
             if x > 0 && x + w > self.width {
                 x = 0;
@@ -1021,7 +1148,12 @@ impl Column<'_> {
                 right: self.x0 + x + w,
                 bottom: y + h,
             };
-            self.push(rect, Kind::Chip(label, selected), Some(act), enabled);
+            self.push(
+                rect,
+                Kind::Chip(label, selected),
+                Some(act),
+                enabled && available,
+            );
             x += w + gap;
         }
         self.y = y + h;
@@ -1044,6 +1176,7 @@ impl Inner {
         let mut client = RECT::default();
         // SAFETY: `client` is a RECT.
         let _ = unsafe { GetClientRect(self.page, &mut client) };
+        let browsing = self.browsing.get();
         let pad = self.px(SETTINGS_PAD);
         let preview_w = self.px(PREVIEW_W);
         let x0 = pad + preview_w + pad;
@@ -1062,18 +1195,20 @@ impl Inner {
         let mut fixed = Vec::new();
 
         let preview_h = (preview_w as f64 / pending.aspect().max(0.1)).round() as i32;
-        fixed.push(Item {
-            rect: RECT {
-                left: pad,
-                top: pad,
-                right: pad + preview_w,
-                bottom: pad + preview_h.max(1),
-            },
-            kind: Kind::Preview,
-            act: None,
-            enabled: true,
-            scrolls: false,
-        });
+        if !browsing {
+            fixed.push(Item {
+                rect: RECT {
+                    left: pad,
+                    top: pad,
+                    right: pad + preview_w,
+                    bottom: pad + preview_h.max(1),
+                },
+                kind: Kind::Preview,
+                act: None,
+                enabled: true,
+                scrolls: false,
+            });
+        }
         let label = "Apply changes";
         let apply_w = text_width(hdc, fonts.apply, label) + 2 * self.px(20);
         let apply = RECT {
@@ -1082,14 +1217,35 @@ impl Inner {
             right: x0 + width,
             bottom: bar_top + apply_h,
         };
+        // While the artist browser is up the floor of the page also holds the way
+        // out of it, at the left edge, level with *Apply changes*.
+        let mut note_left = x0;
+        if browsing {
+            let label = "Back";
+            let inset = (apply_h - self.px(CHIP_H)) / 2;
+            let back = RECT {
+                left: pad,
+                top: bar_top + inset,
+                right: pad + text_width(hdc, fonts.chip, label) + 2 * self.px(CHIP_PAD),
+                bottom: bar_top + inset + self.px(CHIP_H),
+            };
+            note_left = note_left.max(back.right + self.px(16));
+            fixed.push(Item {
+                rect: back,
+                kind: Kind::Chip(label.to_owned(), false),
+                act: Some(Act::CloseBrowser),
+                enabled: true,
+                scrolls: false,
+            });
+        }
         if let Some(note) = pending.note() {
             fixed.push(Item {
                 rect: RECT {
-                    left: x0,
+                    left: note_left,
                     right: apply.left - self.px(16),
                     ..apply
                 },
-                kind: Kind::Note(note.to_owned()),
+                kind: Kind::Note(note),
                 act: None,
                 enabled: true,
                 scrolls: false,
@@ -1102,6 +1258,14 @@ impl Inner {
             enabled: pending.can_apply(),
             scrolls: false,
         });
+        if browsing {
+            // The page is only its floor now; the column is not on screen and the
+            // scroll position is left as it was for the way back.
+            return Built {
+                items: fixed,
+                viewport,
+            };
+        }
 
         let mut col = Column {
             hdc,
@@ -1144,16 +1308,19 @@ impl Inner {
                             "Black".into(),
                             border == Border::Black,
                             Act::Border(Border::Black),
+                            true,
                         ),
                         (
                             "Automatic".into(),
                             border == Border::Auto,
                             Act::Border(Border::Auto),
+                            true,
                         ),
                         (
                             "Custom".into(),
                             matches!(border, Border::Custom { .. }),
                             Act::Border(Border::Custom { rgb: custom }),
+                            true,
                         ),
                     ],
                     true,
@@ -1180,11 +1347,13 @@ impl Inner {
                             "Behind the picture".into(),
                             variant == BlurVariant::Backdrop,
                             Act::Blur(BlurVariant::Backdrop),
+                            true,
                         ),
                         (
                             "Whole picture".into(),
                             variant == BlurVariant::WholeImage,
                             Act::Blur(BlurVariant::WholeImage),
+                            true,
                         ),
                     ],
                     true,
@@ -1214,32 +1383,51 @@ impl Inner {
         let chips = pending
             .shapes()
             .into_iter()
-            .map(|c| (c.label, c.selected, Act::Shape(c.value)))
+            .map(|c| {
+                let available = c.disabled_reason.is_none();
+                (c.label, c.selected, Act::Shape(c.value), available)
+            })
             .collect();
         col.chips(chips, filters);
         col.heading("Origin", true);
         let chips = pending
             .regions()
             .into_iter()
-            .map(|c| (c.label, c.selected, Act::Region(c.value)))
+            .map(|c| {
+                let available = c.disabled_reason.is_none();
+                (c.label, c.selected, Act::Region(c.value), available)
+            })
             .collect();
         col.chips(chips, filters);
         col.heading("Subject", true);
         let chips = pending
             .subjects()
             .into_iter()
-            .map(|c| (c.label, c.selected, Act::Subject(c.value)))
+            .map(|c| {
+                let available = c.disabled_reason.is_none();
+                (c.label, c.selected, Act::Subject(c.value), available)
+            })
             .collect();
         col.chips(chips, filters);
-        let artists = pending.artists();
-        if !artists.is_empty() {
-            col.heading("Artist", true);
-            let chips = artists
-                .into_iter()
-                .map(|c| (c.label, c.selected, Act::Artist(c.value)))
-                .collect();
-            col.chips(chips, filters);
-        }
+        // Shown even when nobody is chosen: the button is how anybody gets to be.
+        let row = pending.artist_row();
+        col.heading("Artist", true);
+        let browse_available = row.disabled_reason.is_none();
+        let mut chips: Vec<_> = row
+            .chosen
+            .into_iter()
+            .map(|c| {
+                let available = c.disabled_reason.is_none();
+                (c.label, c.selected, Act::Artist(c.value), available)
+            })
+            .collect();
+        chips.push((
+            row.browse.to_owned(),
+            false,
+            Act::BrowseArtists,
+            browse_available,
+        ));
+        col.chips(chips, filters);
         col.y += col.px(24);
         let h = col.px(28);
         let row = RECT {
@@ -1288,32 +1476,142 @@ impl Inner {
 
     fn set_tab(&self, tab: Tab) {
         self.tab.set(tab);
+        // Every way of arriving on a tab, including the one already up, lands on
+        // its front page.
+        self.close_browser();
         let favourites = tab == Tab::Favourites;
-        let (now, then) = if favourites {
-            (SW_SHOW, SW_HIDE)
-        } else {
-            (SW_HIDE, SW_SHOW)
-        };
-        for hwnd in [
-            self.list,
-            self.canvas,
-            self.title,
-            self.byline,
-            self.show,
-            self.forget,
-        ] {
-            // SAFETY: our own children.
-            let _ = unsafe { ShowWindow(hwnd, now) };
-        }
-        // SAFETY: as above.
+        // SAFETY: our own children.
         unsafe {
-            let _ = ShowWindow(self.page, then);
             let _ = InvalidateRect(Some(self.strip), None, false);
             let _ = InvalidateRect(Some(self.parent), None, true);
         }
+        self.show_controls();
         if !favourites && self.stale.get() {
             self.refresh_preview();
         }
+    }
+
+    /// Shows what the tab and the browser say should be showing, and hides the rest:
+    /// the favourites' shelf on its tab, on the other the page — or, in its place,
+    /// the artists' shelf above the strip of the page that is left.
+    fn show_controls(&self) {
+        let settings = self.tab.get() == Tab::Settings;
+        let browsing = settings && self.browsing.get();
+        let show = |hwnd: HWND, on: bool| {
+            // SAFETY: our own children.
+            let _ = unsafe { ShowWindow(hwnd, if on { SW_SHOW } else { SW_HIDE }) };
+        };
+        for hwnd in self.favourites.controls() {
+            show(hwnd, !settings);
+        }
+        for hwnd in self.artists.controls() {
+            show(hwnd, browsing);
+        }
+        show(self.page, settings);
+    }
+
+    /// Puts the artist browser where the page was, on a shelf freshly made from what
+    /// is chosen now.
+    ///
+    /// The thumbnails are made here, the first time, and not when the window opens.
+    /// They are then kept by name, so the next visit pays for none of them.
+    fn browse_artists(&self) {
+        // Placed before it is filled: the preview is made at the pane's own size.
+        self.browsing.set(true);
+        self.layout();
+        self.show_controls();
+
+        let cards = self.artist_cards();
+        let first_chosen = cards
+            .iter()
+            .find(|card| card.on)
+            .map(|card| card.key.clone());
+        // Without a name to land on, `adopt` would keep wherever the last visit left
+        // off; a visit begins at the first painter chosen, or else the first.
+        let want = first_chosen.or_else(|| cards.first().map(|card| card.key.clone()));
+        self.adopt(&self.artists, cards, want);
+        self.browser_moved();
+    }
+
+    /// Takes the artist browser away again, if it is up, and lets go of the one
+    /// painting it holds at full size.
+    fn close_browser(&self) {
+        if !self.browsing.get() {
+            return;
+        }
+        self.browsing.set(false);
+        *self.artists.preview.borrow_mut() = None;
+        self.layout();
+        self.show_controls();
+        self.browser_moved();
+    }
+
+    /// Repaints what the browser's coming and going changes the look of: the strip
+    /// above it and the page below.
+    fn browser_moved(&self) {
+        // SAFETY: repaints our own children.
+        unsafe {
+            let _ = InvalidateRect(Some(self.strip), None, false);
+            let _ = InvalidateRect(Some(self.page), None, true);
+            let _ = InvalidateRect(Some(self.parent), None, true);
+        }
+    }
+
+    /// Every painter who can be chosen, as the shelf's cards.
+    fn artist_cards(&self) -> Vec<Card> {
+        self.pending
+            .borrow()
+            .artist_cards()
+            .into_iter()
+            .map(|card| Card {
+                key: card.art.title.clone(),
+                art: card.art,
+                on: card.selected,
+                note: card.disabled_reason,
+            })
+            .collect()
+    }
+
+    /// Chooses the painter in the pane, or takes them out again.
+    fn toggle_painter(&self) {
+        let Some(key) = self.selected_key(&self.artists) else {
+            return;
+        };
+        // The borrow ends with the statement: `changed` and `retag_artists` read
+        // `pending` again.
+        self.pending.borrow_mut().toggle_artist(&key);
+        self.changed();
+        self.retag_artists();
+    }
+
+    /// Brings the shelf's cards in line with what is chosen, without remaking the
+    /// list or the picture: choosing one painter can make another unavailable, so
+    /// every card is asked again, but only the pane's words and buttons change.
+    fn retag_artists(&self) {
+        let fresh = self.artist_cards();
+        {
+            let mut shown = self.artists.shown.borrow_mut();
+            for card in &mut shown.cards {
+                if let Some(now) = fresh.iter().find(|now| now.key == card.key) {
+                    card.on = now.on;
+                    card.note = now.note.clone();
+                }
+            }
+        }
+        let card = self.selected_card(&self.artists);
+        self.describe_card(&self.artists, card.as_ref());
+    }
+
+    /// Asks for the painter's page to be read. The window is left for it, so this
+    /// is the loop's to do.
+    fn read_painter(&self) {
+        let Some(url) = self
+            .selected_card(&self.artists)
+            .and_then(|card| card.art.details_url)
+        else {
+            return;
+        };
+        (self.on_pick)(Pick::Read(url));
     }
 
     fn strip_segments(&self, client: &RECT) -> [RECT; 2] {
@@ -1389,6 +1687,14 @@ impl Inner {
             Act::Region(region) => self.pending.borrow_mut().toggle_region(region),
             Act::Subject(subject) => self.pending.borrow_mut().toggle_subject(subject),
             Act::Artist(name) => self.pending.borrow_mut().toggle_artist(&name),
+            Act::BrowseArtists => {
+                self.browse_artists();
+                return;
+            }
+            Act::CloseBrowser => {
+                self.close_browser();
+                return;
+            }
             Act::Religious => {
                 let hide = self.pending.borrow().hide_religious();
                 self.pending.borrow_mut().set_hide_religious(!hide);
@@ -1435,11 +1741,17 @@ impl Inner {
     }
 
     fn paint_page(&self, dc: HDC, client: &RECT) {
-        // SAFETY: the brush is made, used and deleted here.
+        // SAFETY: the brush is made, used and deleted here; the system's is not ours.
         unsafe {
-            let white = CreateSolidBrush(colour(WHITE));
-            FillRect(dc, client, white);
-            let _ = DeleteObject(HGDIOBJ(white.0));
+            if self.browsing.get() {
+                // The floor of the page sits under a shelf drawn on the window's own
+                // face, and matches it.
+                FillRect(dc, client, GetSysColorBrush(COLOR_BTNFACE));
+            } else {
+                let white = CreateSolidBrush(colour(WHITE));
+                FillRect(dc, client, white);
+                let _ = DeleteObject(HGDIOBJ(white.0));
+            }
         }
         let fonts = PageFonts::new(|s| self.px(s));
         let built = self.build(dc, &fonts);
@@ -1617,7 +1929,7 @@ impl Inner {
         let settings = self.tab.get() == Tab::Settings;
         // SAFETY: the system brush is not ours; the white one is deleted after use.
         unsafe {
-            if settings {
+            if settings && !self.browsing.get() {
                 let white = CreateSolidBrush(colour(WHITE));
                 FillRect(dc, client, white);
                 let _ = DeleteObject(HGDIOBJ(white.0));
@@ -1790,8 +2102,10 @@ impl Drop for Inner {
             let _ = RemoveWindowSubclass(self.parent, Some(subclass_proc), SUBCLASS_ID);
             let _ = DeleteObject(HGDIOBJ(self.fonts.body.0));
             let _ = DeleteObject(HGDIOBJ(self.fonts.heading.0));
-            if let Some(images) = self.shown.borrow_mut().images.take() {
-                let _ = ImageList_Destroy(Some(images));
+            for browser in [&self.favourites, &self.artists] {
+                if let Some(images) = browser.shown.borrow_mut().images.take() {
+                    let _ = ImageList_Destroy(Some(images));
+                }
             }
         }
     }
@@ -1841,7 +2155,7 @@ unsafe extern "system" fn subclass_proc(
         WM_SIZE => inner.layout(),
         // The wheel goes to whichever window has the keyboard, which is never the
         // page; it arrives here, and means the settings column when that is up.
-        WM_MOUSEWHEEL if inner.tab.get() == Tab::Settings => {
+        WM_MOUSEWHEEL if inner.tab.get() == Tab::Settings && !inner.browsing.get() => {
             inner.wheel(wheel_delta(wparam));
             return LRESULT(0);
         }
@@ -1860,21 +2174,29 @@ unsafe extern "system" fn subclass_proc(
             }
             return LRESULT(1);
         }
-        WM_DRAWITEM if wparam.0 as i32 == CANVAS_ID => {
+        WM_DRAWITEM if wparam.0 as i32 == CANVAS_ID || wparam.0 as i32 == ARTIST_CANVAS_ID => {
+            let browser = if wparam.0 as i32 == CANVAS_ID {
+                &inner.favourites
+            } else {
+                &inner.artists
+            };
             // SAFETY: for WM_DRAWITEM, `lparam` points to a DRAWITEMSTRUCT.
-            inner.paint_canvas(unsafe { &*(lparam.0 as *const DRAWITEMSTRUCT) });
+            inner.paint_canvas(browser, unsafe { &*(lparam.0 as *const DRAWITEMSTRUCT) });
             return LRESULT(1);
         }
         WM_NOTIFY => {
             // SAFETY: for WM_NOTIFY, `lparam` points to an NMHDR, and to the larger
             // structure its `code` names.
             let header = unsafe { &*(lparam.0 as *const NMHDR) };
-            if header.hwndFrom == inner.list {
+            for browser in [&inner.favourites, &inner.artists] {
+                if header.hwndFrom != browser.list {
+                    continue;
+                }
                 match header.code {
                     LVN_ITEMCHANGED => {
-                        inner.on_item_changed(unsafe { &*(lparam.0 as *const NMLISTVIEW) })
+                        inner.on_item_changed(browser, unsafe { &*(lparam.0 as *const NMLISTVIEW) })
                     }
-                    NM_DBLCLK => {
+                    NM_DBLCLK if browser.shelf == Shelf::Favourites => {
                         inner.on_double_click(unsafe { &*(lparam.0 as *const NMITEMACTIVATE) })
                     }
                     _ => {}
@@ -1885,6 +2207,8 @@ unsafe extern "system" fn subclass_proc(
             match (wparam.0 & 0xffff) as i32 {
                 SHOW_ID => inner.ask(Pick::Show),
                 FORGET_ID => inner.ask(Pick::Forget),
+                CHOOSE_ID => inner.toggle_painter(),
+                READ_ID => inner.read_painter(),
                 _ => {}
             }
             return LRESULT(0);
@@ -1966,6 +2290,101 @@ fn child(
     }
 }
 
+/// One shelf with its pane — the list, the canvas, the two lines and the two
+/// buttons — as children of `parent`, unplaced.
+fn browser(
+    parent: HWND,
+    fonts: &Fonts,
+    shelf: Shelf,
+    canvas_id: i32,
+    primary: (PCWSTR, i32),
+    secondary: (PCWSTR, i32),
+) -> Result<Browser> {
+    let list = child(
+        parent,
+        WC_LISTVIEWW,
+        PCWSTR::null(),
+        LVS_ICON
+            | LVS_SINGLESEL
+            | LVS_SHOWSELALWAYS
+            | LVS_NOLABELS
+            | LVS_AUTOARRANGE
+            | LVS_SHAREIMAGELISTS
+            | WS_TABSTOP.0,
+        0,
+        fonts.body,
+    )
+    .map_err(|e| anyhow!("building the picture list: {e}"))?;
+    // SAFETY: both are messages the list control defines. Double buffering stops
+    // the column flickering as it is refilled; the Explorer theme is what gives
+    // a selected picture the system's own highlight rather than a grey box.
+    unsafe {
+        send(
+            list,
+            LVM_SETEXTENDEDLISTVIEWSTYLE,
+            LVS_EX_DOUBLEBUFFER as usize,
+            LVS_EX_DOUBLEBUFFER as isize,
+        );
+        let _ = SetWindowTheme(list, w!("Explorer"), PCWSTR::null());
+    }
+
+    let canvas = child(
+        parent,
+        w!("STATIC"),
+        PCWSTR::null(),
+        SS_OWNERDRAW.0,
+        canvas_id,
+        fonts.body,
+    )?;
+    let title = child(
+        parent,
+        w!("STATIC"),
+        PCWSTR::null(),
+        SS_LEFT.0 | SS_ENDELLIPSIS.0,
+        0,
+        fonts.heading,
+    )?;
+    let byline = child(
+        parent,
+        w!("STATIC"),
+        PCWSTR::null(),
+        SS_LEFT.0 | SS_ENDELLIPSIS.0,
+        0,
+        fonts.body,
+    )?;
+    let button = |(label, id): (PCWSTR, i32)| {
+        child(
+            parent,
+            w!("BUTTON"),
+            label,
+            WS_TABSTOP.0 | BS_PUSHBUTTON as u32,
+            id,
+            fonts.body,
+        )
+    };
+    let primary = button(primary)?;
+    let secondary = button(secondary)?;
+
+    Ok(Browser {
+        shelf,
+        list,
+        canvas,
+        title,
+        byline,
+        primary,
+        secondary,
+        shown: RefCell::new(Shown {
+            cards: Vec::new(),
+            thumbs: HashMap::new(),
+            cell: 0,
+            images: None,
+        }),
+        selected: Cell::new(None),
+        preview: RefCell::new(None),
+        quiet: Cell::new(false),
+    })
+}
+
 /// The window's contents. Dropping it takes the subclass off and frees what was
 /// made; the children themselves go with tao's window.
 pub struct Content {
@@ -2007,85 +2426,34 @@ impl Content {
         };
         let fonts = system_fonts(dpi);
 
-        let list = child(
+        let favourites = browser(
             parent,
-            WC_LISTVIEWW,
-            PCWSTR::null(),
-            LVS_ICON
-                | LVS_SINGLESEL
-                | LVS_SHOWSELALWAYS
-                | LVS_NOLABELS
-                | LVS_AUTOARRANGE
-                | LVS_SHAREIMAGELISTS
-                | WS_TABSTOP.0,
-            0,
-            fonts.body,
-        )
-        .map_err(|e| anyhow!("building the favourites list: {e}"))?;
-        // SAFETY: both are messages the list control defines. Double buffering stops
-        // the column flickering as it is refilled; the Explorer theme is what gives
-        // a selected picture the system's own highlight rather than a grey box.
-        unsafe {
-            send(
-                list,
-                LVM_SETEXTENDEDLISTVIEWSTYLE,
-                LVS_EX_DOUBLEBUFFER as usize,
-                LVS_EX_DOUBLEBUFFER as isize,
-            );
-            let _ = SetWindowTheme(list, w!("Explorer"), PCWSTR::null());
-        }
-
-        let canvas = child(
-            parent,
-            w!("STATIC"),
-            PCWSTR::null(),
-            SS_OWNERDRAW.0,
+            &fonts,
+            Shelf::Favourites,
             CANVAS_ID,
-            fonts.body,
+            (w!("Set as wallpaper"), SHOW_ID),
+            (w!("Forget"), FORGET_ID),
         )?;
-        let title = child(
+        let artists = browser(
             parent,
-            w!("STATIC"),
-            PCWSTR::null(),
-            SS_LEFT.0 | SS_ENDELLIPSIS.0,
-            0,
-            fonts.heading,
-        )?;
-        let byline = child(
-            parent,
-            w!("STATIC"),
-            PCWSTR::null(),
-            SS_LEFT.0 | SS_ENDELLIPSIS.0,
-            0,
-            fonts.body,
+            &fonts,
+            Shelf::Artists,
+            ARTIST_CANVAS_ID,
+            (w!("Choose"), CHOOSE_ID),
+            (w!("Read more"), READ_ID),
         )?;
         register_surface_class()?;
         let strip = surface(parent, true)?;
         let page = surface(parent, false)?;
-        let button = |label: PCWSTR, id: i32| {
-            child(
-                parent,
-                w!("BUTTON"),
-                label,
-                WS_TABSTOP.0 | BS_PUSHBUTTON as u32,
-                id,
-                fonts.body,
-            )
-        };
-        let show = button(w!("Set as wallpaper"), SHOW_ID)?;
-        let forget = button(w!("Forget"), FORGET_ID)?;
 
         let inner = Rc::new(Inner {
             parent,
-            list,
-            canvas,
-            title,
-            byline,
-            show,
-            forget,
+            favourites,
+            artists,
             strip,
             page,
             tab: Cell::new(Tab::Favourites),
+            browsing: Cell::new(false),
             pending: RefCell::new(Pending::new(
                 crate::settings::Settings::default(),
                 true,
@@ -2096,15 +2464,6 @@ impl Content {
             scroll: Cell::new(0),
             dragging: Cell::new(false),
             fonts,
-            shown: RefCell::new(Shown {
-                cards: Vec::new(),
-                thumbs: HashMap::new(),
-                cell: 0,
-                images: None,
-            }),
-            selected: Cell::new(None),
-            preview: RefCell::new(None),
-            quiet: Cell::new(false),
             on_pick,
         });
 
@@ -2129,30 +2488,41 @@ impl Content {
             }
         }
         inner.layout();
-        inner.point_at(None);
+        inner.point_at(&inner.favourites, None);
+        inner.point_at(&inner.artists, None);
         inner.set_tab(Tab::Favourites);
         Ok(Self { inner })
     }
 
     pub fn relist(&self, favourites: &Favourites) {
         self.inner.adopt(
+            &self.inner.favourites,
             favourites
                 .iter()
                 .map(|(key, art)| Card {
                     key: key.to_string(),
                     art: art.clone(),
+                    on: false,
+                    note: None,
                 })
                 .collect(),
+            None,
         );
     }
 
     pub fn describe(&self, snapshot: &Snapshot, favourites: &Favourites) {
         {
             let mut pending = self.inner.pending.borrow_mut();
+            pending.keep_pictures_in(&snapshot.pictures);
             pending.adopt(&snapshot.settings, snapshot.filters_apply, snapshot.aspect);
             pending.set_picture(snapshot.shown.as_ref().map(|art| art.path.as_path()));
         }
         self.inner.changed();
+        // The shelf is made when it is first opened; one that is open already is
+        // told only what a new painting or new settings can change about it.
+        if self.inner.browsing.get() {
+            self.inner.retag_artists();
+        }
         self.relist(favourites);
     }
 

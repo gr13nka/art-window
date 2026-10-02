@@ -62,7 +62,7 @@ fun FavouritesScreen(
                 if (favourites.isEmpty()) "Tap the heart on a painting to keep it here."
                 else "${favourites.size} saved ${if (favourites.size == 1) "painting" else "paintings"}",
                 style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f),
+                color = MaterialTheme.colorScheme.muted,
                 modifier = Modifier.padding(top = 4.dp, bottom = 14.dp),
             )
             error?.let {
@@ -139,7 +139,7 @@ private fun FavouriteDetail(
             .padding(horizontal = 20.dp, vertical = 12.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        TextButton(onClick = onBack, modifier = Modifier.align(Alignment.Start)) { Text("Back to favourites") }
+        TextButton(onClick = onBack, colors = quietButtonColors(), modifier = Modifier.align(Alignment.Start)) { Text("Back to favourites") }
         SampledImage(
             favourite.artwork,
             targetWidth = DETAIL_WIDTH,
@@ -153,7 +153,7 @@ private fun FavouriteDetail(
                 Text(it, style = MaterialTheme.typography.bodyMedium)
             }
             favourite.artwork.origin?.let {
-                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.muted)
             }
             favourite.artwork.attribution.takeIf { it.isNotEmpty() }?.let {
                 Text(it, style = MaterialTheme.typography.bodySmall)
@@ -164,7 +164,7 @@ private fun FavouriteDetail(
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             Button(onClick = onShow, enabled = enabled) { Text("Set as wallpaper") }
-            TextButton(onClick = onForget, enabled = enabled) { Text("Remove") }
+            TextButton(onClick = onForget, enabled = enabled, colors = quietButtonColors()) { Text("Remove") }
         }
     }
 }

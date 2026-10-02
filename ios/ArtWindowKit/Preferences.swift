@@ -135,8 +135,30 @@ public struct RenderStyle: Codable, Equatable, Sendable {
     /// Android's `BlurVariant.WHOLE_IMAGE`: the blurred picture fills the screen and the sharp one is not drawn on top.
     public var blurWholeFill: Bool
     public var border: Border
+    /// iPhone only: a painting wider than tall is turned 90° clockwise (its top ends at the
+    /// screen's right edge) before it is hung on a screen taller than wide, and every mode
+    /// then works on the turned picture. Not a fifth mode.
+    public var rotateWide: Bool
+    /// How the sharp painting is framed in Zoom, Blur and Borders. `frameZoom` (1...3, 1 being
+    /// the style's own size) is a style option that outlives the painting; `panX` and `panY`
+    /// (0...1 of the overflow on that axis, 0.5 centred) belong to the one painting named by
+    /// `panFor` and are read only through `effectivePan(for:)`, so the next painting starts
+    /// centred with nothing to reset.
+    public var frameZoom: Double
+    public var panX: Double
+    public var panY: Double
+    public var panFor: String?
 
-    public init(mode: Mode = .zoom, blurStrength: Int = 50, blurWholeFill: Bool = false, border: Border = .black) {
+    public init(
+        mode: Mode = .zoom, blurStrength: Int = 50, blurWholeFill: Bool = false, border: Border = .black,
+        rotateWide: Bool = false, frameZoom: Double = 1, panX: Double = 0.5, panY: Double = 0.5,
+        panFor: String? = nil
+    ) {
+        self.frameZoom = frameZoom
+        self.panX = panX
+        self.panY = panY
+        self.panFor = panFor
+        self.rotateWide = rotateWide
         self.mode = mode
         self.blurStrength = blurStrength
         self.blurWholeFill = blurWholeFill
@@ -145,11 +167,98 @@ public struct RenderStyle: Codable, Equatable, Sendable {
 
     public static let defaults = RenderStyle()
 
+    private enum CodingKeys: String, CodingKey { case mode, blurStrength, blurWholeFill, border, rotateWide, frameZoom, panX, panY, panFor
+        /// Written by the first framing build, which had one pan; read, never written.
+        case pan
+    }
+
+    /// Styles saved before `rotateWide` have no such key; failing on it would reset every
+    /// one of them to the default without a word.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        mode = try c.decode(Mode.self, forKey: .mode)
+        blurStrength = try c.decode(Int.self, forKey: .blurStrength)
+        blurWholeFill = try c.decode(Bool.self, forKey: .blurWholeFill)
+        border = try c.decode(Border.self, forKey: .border)
+        rotateWide = try c.decodeIfPresent(Bool.self, forKey: .rotateWide) ?? false
+        frameZoom = try c.decodeIfPresent(Double.self, forKey: .frameZoom) ?? 1
+        // The old single pan moved along whichever axis the painting overflowed, and the
+        // other axis did not overflow at zoom 1, so it is the right value for both.
+        let old = try c.decodeIfPresent(Double.self, forKey: .pan) ?? 0.5
+        panX = try c.decodeIfPresent(Double.self, forKey: .panX) ?? old
+        panY = try c.decodeIfPresent(Double.self, forKey: .panY) ?? old
+        panFor = try c.decodeIfPresent(String.self, forKey: .panFor)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(mode, forKey: .mode)
+        try c.encode(blurStrength, forKey: .blurStrength)
+        try c.encode(blurWholeFill, forKey: .blurWholeFill)
+        try c.encode(border, forKey: .border)
+        try c.encode(rotateWide, forKey: .rotateWide)
+        try c.encode(frameZoom, forKey: .frameZoom)
+        try c.encode(panX, forKey: .panX)
+        try c.encode(panY, forKey: .panY)
+        try c.encodeIfPresent(panFor, forKey: .panFor)
+    }
+
+    /// The pan for the painting called `fileName`: the stored one when it was set for that
+    /// painting, otherwise the centre.
+    public func effectivePan(for fileName: String?) -> (x: Double, y: Double) {
+        guard let fileName, panFor == fileName else { return (0.5, 0.5) }
+        return (min(max(panX, 0), 1), min(max(panY, 0), 1))
+    }
+
+    public var effectiveZoom: Double { min(max(frameZoom, 1), Framing.maxZoom) }
+
+    /// Whether the sharp painting can be pinched and dragged in this style: Zoom, Blur
+    /// with a backdrop and Borders. Stretch shows the whole picture and Blur's whole fill
+    /// has no sharp one. Only a portrait screen frames; the iPad's square canvas does not.
+    public func canFrame(on screen: Screen) -> Bool {
+        guard screen.height > screen.width else { return false }
+        return switch mode {
+        case .zoom, .borders: true
+        case .blur: !blurWholeFill
+        case .stretch: false
+        }
+    }
+
+    public var frameBase: Framing.Base { mode == .zoom ? .cover : .fit }
+
+    /// This style with the framing back at its default: the part of the style that the
+    /// backdrop underneath the sharp painting depends on.
+    public var unframed: RenderStyle {
+        var style = self
+        style.frameZoom = 1
+        style.panX = 0.5
+        style.panY = 0.5
+        style.panFor = nil
+        return style
+    }
+
+    /// Where the sharp painting of `fileName`, of size `painting` as hung, sits on `screen`.
+    public func framedRect(for fileName: String?, painting: CGSize, on screen: Screen) -> CGRect {
+        let size = CGSize(width: screen.width, height: screen.height)
+        guard canFrame(on: screen) else { return Framing.rect(painting: painting, screen: size, base: frameBase) }
+        let pan = effectivePan(for: fileName)
+        return Framing.rect(painting: painting, screen: size, base: frameBase, zoom: effectiveZoom, panX: pan.x, panY: pan.y)
+    }
+
+    /// The size of a painting as it will be hung: turned when `rotateWide` is on, the
+    /// screen is taller than wide and the painting is wider than tall. The one answer to
+    /// that question — the shape filter, `canRender` and the renderer all ask it, so a
+    /// square iPad canvas can never turn a picture even with a stale preference.
+    public func hung(width: Int, height: Int, on screen: Screen) -> (width: Int, height: Int) {
+        rotateWide && screen.height > screen.width && width > height ? (height, width) : (width, height)
+    }
+
     /// Whether a picture of this size can be drawn in this style without exceeding
     /// `Screen.maxEnlargement` — the geometry `Renderer.render` applies, asked ahead of
     /// time so a candidate that would fail to render is never offered.
     func canRender(width: Int, height: Int, on screen: Screen) -> Bool {
-        switch mode {
+        let (width, height) = hung(width: width, height: height, on: screen)
+        return switch mode {
         case .zoom: screen.cover(width: width, height: height) != nil
         case .stretch: screen.canStretch(width: width, height: height)
         case .blur:

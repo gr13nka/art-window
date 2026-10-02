@@ -1,4 +1,4 @@
-use super::{Chip, Control, Pending, Pick, Snapshot, StyleKind, Tab};
+use super::{ArtistRow, Chip, Control, Pending, Pick, Snapshot, StyleKind, Tab};
 use crate::art::Artwork;
 use crate::favourites::Favourites;
 use crate::settings::{BlurVariant, Border, Region, Shape, Subject};
@@ -25,10 +25,235 @@ pub(super) fn close(window: &Window) -> bool {
     true
 }
 
+/// One row on a shelf. Everything a shelf varies by — what the primary button
+/// says and whether it may be pressed — is carried here, so [`Browser`] itself
+/// never learns whether it is showing favourites or painters.
 #[derive(Clone)]
 struct Card {
+    /// What the selection is remembered by across a rebuild, and what the actions
+    /// are handed back: the favourite's key, the painter's name.
     key: String,
     art: Artwork,
+    /// Drawn before the name on the shelf.
+    marked: bool,
+    primary: String,
+    /// Why the primary button cannot be pressed for this card.
+    blocked: Option<String>,
+    can_secondary: bool,
+}
+
+/// A shelf of thumbnails beside a large preview and two buttons: the whole of
+/// the favourites page, and the artist browser in the settings tab. What the
+/// buttons do is wired by the owner, because that differs and the layout does not.
+struct Browser {
+    split: gtk::Paned,
+    list: gtk::ListBox,
+    scroll: gtk::ScrolledWindow,
+    cards: Rc<RefCell<Vec<Card>>>,
+    /// By key and never by position, so a list rebuilt around a deletion cannot
+    /// pair a card with somebody else's picture.
+    thumbs: RefCell<HashMap<String, Pixbuf>>,
+    primary: gtk::Button,
+    secondary: gtk::Button,
+}
+
+impl Browser {
+    /// `empty` is the title and byline shown while the shelf has nothing on it.
+    fn new(primary: &str, secondary: &str, empty: (&'static str, &'static str)) -> Rc<Self> {
+        let split = gtk::Paned::new(gtk::Orientation::Horizontal);
+        split.set_position(240);
+        split.set_wide_handle(true);
+
+        let list = gtk::ListBox::new();
+        list.set_selection_mode(gtk::SelectionMode::Single);
+        list.set_activate_on_single_click(false);
+        let scroll = gtk::ScrolledWindow::new(None::<&gtk::Adjustment>, None::<&gtk::Adjustment>);
+        scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
+        scroll.set_min_content_width(220);
+        scroll.add(&list);
+        split.add1(&scroll);
+
+        let detail = gtk::Box::new(gtk::Orientation::Vertical, 8);
+        detail.set_margin_start(12);
+        let canvas = gtk::Image::new();
+        canvas.set_hexpand(true);
+        canvas.set_vexpand(true);
+        let title = gtk::Label::new(Some(empty.0));
+        title.set_xalign(0.0);
+        title.set_selectable(true);
+        let byline = gtk::Label::new(Some(empty.1));
+        byline.set_xalign(0.0);
+        byline.set_selectable(true);
+        let actions = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        let primary = gtk::Button::with_label(primary);
+        let secondary = gtk::Button::with_label(secondary);
+        primary.set_sensitive(false);
+        secondary.set_sensitive(false);
+        actions.pack_start(&primary, false, false, 0);
+        actions.pack_start(&secondary, false, false, 0);
+        detail.pack_start(&canvas, true, true, 0);
+        detail.pack_start(&title, false, false, 0);
+        detail.pack_start(&byline, false, false, 0);
+        detail.pack_start(&actions, false, false, 0);
+        split.add2(&detail);
+
+        let cards = Rc::new(RefCell::new(Vec::<Card>::new()));
+        let selected_cards = cards.clone();
+        let (selected_primary, selected_secondary) = (primary.clone(), secondary.clone());
+        list.connect_row_selected(move |_, row| {
+            let card =
+                row.and_then(|row| selected_cards.borrow().get(row.index() as usize).cloned());
+            match card {
+                Some(card) => {
+                    match Pixbuf::from_file_at_scale(
+                        &card.art.path,
+                        PREVIEW_WIDTH,
+                        PREVIEW_HEIGHT,
+                        true,
+                    ) {
+                        Ok(preview) => canvas.set_from_pixbuf(Some(&preview)),
+                        Err(_) => canvas.clear(),
+                    }
+                    title.set_text(&card.art.title);
+                    byline.set_text(if card.art.byline.is_empty() {
+                        &card.art.attribution
+                    } else {
+                        &card.art.byline
+                    });
+                    selected_primary.set_label(&card.primary);
+                    selected_primary.set_sensitive(card.blocked.is_none());
+                    selected_primary.set_tooltip_text(card.blocked.as_deref());
+                    selected_secondary.set_sensitive(card.can_secondary);
+                }
+                None => {
+                    canvas.clear();
+                    title.set_text(empty.0);
+                    byline.set_text(empty.1);
+                    selected_primary.set_sensitive(false);
+                    selected_primary.set_tooltip_text(None);
+                    selected_secondary.set_sensitive(false);
+                }
+            }
+        });
+
+        Rc::new(Self {
+            split,
+            list,
+            scroll,
+            cards,
+            thumbs: RefCell::new(HashMap::new()),
+            primary,
+            secondary,
+        })
+    }
+
+    /// Says what the buttons and a double-click do. Each is handed a copy of the
+    /// selected card, because an action may well rebuild the shelf it came from.
+    fn wire(
+        self: &Rc<Self>,
+        primary: Rc<dyn Fn(&Card)>,
+        secondary: Rc<dyn Fn(&Card)>,
+        activate: Rc<dyn Fn(&Card)>,
+    ) {
+        for (button, action) in [(&self.primary, primary), (&self.secondary, secondary)] {
+            let weak = Rc::downgrade(self);
+            button.connect_clicked(move |_| {
+                if let Some(card) = weak.upgrade().and_then(|browser| browser.selected_card()) {
+                    action(&card);
+                }
+            });
+        }
+        let weak = Rc::downgrade(self);
+        self.list.connect_row_activated(move |_, row| {
+            let card = weak
+                .upgrade()
+                .and_then(|browser| browser.cards.borrow().get(row.index() as usize).cloned());
+            if let Some(card) = card {
+                activate(&card);
+            }
+        });
+    }
+
+    fn selected_card(&self) -> Option<Card> {
+        let row = self.list.selected_row()?;
+        self.cards.borrow().get(row.index() as usize).cloned()
+    }
+
+    fn selected_key(&self) -> Option<String> {
+        self.selected_card().map(|card| card.key)
+    }
+
+    /// Replaces the shelf. `want` is the key to leave selected, else the first
+    /// card is. The scroll position is kept when `keep_scroll`, and otherwise the
+    /// selected row is brought into view; either has to wait for the new rows to
+    /// be allocated.
+    fn set_cards(&self, cards: Vec<Card>, want: Option<String>, keep_scroll: bool) {
+        let adjustment = self.scroll.vadjustment();
+        let scrolled = adjustment.value();
+
+        self.thumbs
+            .borrow_mut()
+            .retain(|key, _| cards.iter().any(|card| &card.key == key));
+        for card in &cards {
+            if !self.thumbs.borrow().contains_key(&card.key) {
+                if let Ok(thumbnail) =
+                    Pixbuf::from_file_at_scale(&card.art.path, THUMBNAIL, THUMBNAIL, true)
+                {
+                    self.thumbs.borrow_mut().insert(card.key.clone(), thumbnail);
+                }
+            }
+        }
+
+        for child in self.list.children() {
+            self.list.remove(&child);
+        }
+        *self.cards.borrow_mut() = cards;
+        for card in self.cards.borrow().iter() {
+            let row = gtk::ListBoxRow::new();
+            let content = gtk::Box::new(gtk::Orientation::Vertical, 4);
+            content.set_margin_top(8);
+            content.set_margin_bottom(8);
+            content.set_margin_start(8);
+            content.set_margin_end(8);
+            let image = match self.thumbs.borrow().get(&card.key) {
+                Some(thumbnail) => gtk::Image::from_pixbuf(Some(thumbnail)),
+                None => gtk::Image::new(),
+            };
+            let name = if card.marked {
+                format!("\u{2713} {}", card.art.title)
+            } else {
+                card.art.title.clone()
+            };
+            let label = gtk::Label::new(Some(&name));
+            label.set_line_wrap(true);
+            label.set_max_width_chars(24);
+            content.pack_start(&image, false, false, 0);
+            content.pack_start(&label, false, false, 0);
+            row.add(&content);
+            self.list.add(&row);
+        }
+        self.list.show_all();
+
+        let row = want
+            .and_then(|key| self.cards.borrow().iter().position(|card| card.key == key))
+            .or_else(|| (!self.cards.borrow().is_empty()).then_some(0))
+            .and_then(|index| self.list.row_at_index(index as i32));
+        match row {
+            Some(row) => self.list.select_row(Some(&row)),
+            None => self.list.unselect_all(),
+        }
+
+        let list = self.list.clone();
+        glib::idle_add_local_once(move || {
+            let top = if keep_scroll {
+                scrolled
+            } else {
+                list.selected_row()
+                    .map_or(0.0, |row| row.allocation().y() as f64)
+            };
+            adjustment.set_value(top);
+        });
+    }
 }
 
 /// The GTK half of the one Linux window: daily controls above an accessible
@@ -44,9 +269,7 @@ pub(super) struct Content {
     login: gtk::CheckButton,
     stack: gtk::Stack,
     settings: Rc<SettingsView>,
-    list: gtk::ListBox,
-    cards: Rc<RefCell<Vec<Card>>>,
-    thumbs: Rc<RefCell<HashMap<String, Pixbuf>>>,
+    favourites: Rc<Browser>,
     updating_login: Rc<Cell<bool>>,
 }
 
@@ -103,44 +326,15 @@ impl Content {
             0,
         );
 
-        let split = gtk::Paned::new(gtk::Orientation::Horizontal);
-        split.set_position(240);
-        split.set_wide_handle(true);
-        root.pack_start(&split, true, true, 0);
-
-        let list = gtk::ListBox::new();
-        list.set_selection_mode(gtk::SelectionMode::Single);
-        list.set_activate_on_single_click(false);
-        let scroll = gtk::ScrolledWindow::new(None::<&gtk::Adjustment>, None::<&gtk::Adjustment>);
-        scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
-        scroll.set_min_content_width(220);
-        scroll.add(&list);
-        split.add1(&scroll);
-
-        let detail = gtk::Box::new(gtk::Orientation::Vertical, 8);
-        detail.set_margin_start(12);
-        let canvas = gtk::Image::new();
-        canvas.set_hexpand(true);
-        canvas.set_vexpand(true);
-        let favourite_title = gtk::Label::new(Some("Nothing kept yet"));
-        favourite_title.set_xalign(0.0);
-        favourite_title.set_selectable(true);
-        let favourite_byline =
-            gtk::Label::new(Some("Add to favourites keeps the picture on the desktop"));
-        favourite_byline.set_xalign(0.0);
-        favourite_byline.set_selectable(true);
-        let favourite_actions = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        let show = gtk::Button::with_label("Set as wallpaper");
-        let forget = gtk::Button::with_label("Forget");
-        show.set_sensitive(false);
-        forget.set_sensitive(false);
-        favourite_actions.pack_start(&show, false, false, 0);
-        favourite_actions.pack_start(&forget, false, false, 0);
-        detail.pack_start(&canvas, true, true, 0);
-        detail.pack_start(&favourite_title, false, false, 0);
-        detail.pack_start(&favourite_byline, false, false, 0);
-        detail.pack_start(&favourite_actions, false, false, 0);
-        split.add2(&detail);
+        let favourites = Browser::new(
+            "Set as wallpaper",
+            "Forget",
+            (
+                "Nothing kept yet",
+                "Add to favourites keeps the picture on the desktop",
+            ),
+        );
+        root.pack_start(&favourites.split, true, true, 0);
 
         connect_control(&open, on_control.clone(), || Control::Browse);
         connect_control(&next, on_control.clone(), || Control::Next);
@@ -158,58 +352,28 @@ impl Content {
             }
         });
 
-        let cards = Rc::new(RefCell::new(Vec::<Card>::new()));
-        let selected_cards = cards.clone();
-        let selected_canvas = canvas.clone();
-        let selected_title = favourite_title.clone();
-        let selected_byline = favourite_byline.clone();
-        let selected_show = show.clone();
-        let selected_forget = forget.clone();
-        list.connect_row_selected(move |_, row| {
-            let artwork = row
-                .and_then(|row| selected_cards.borrow().get(row.index() as usize).cloned())
-                .map(|card| card.art);
-            match artwork {
-                Some(art) => {
-                    match Pixbuf::from_file_at_scale(&art.path, PREVIEW_WIDTH, PREVIEW_HEIGHT, true)
-                    {
-                        Ok(preview) => selected_canvas.set_from_pixbuf(Some(&preview)),
-                        Err(_) => selected_canvas.clear(),
-                    }
-                    selected_title.set_text(&art.title);
-                    selected_byline.set_text(if art.byline.is_empty() {
-                        &art.attribution
-                    } else {
-                        &art.byline
-                    });
-                    selected_show.set_sensitive(true);
-                    selected_forget.set_sensitive(true);
-                }
-                None => {
-                    selected_canvas.clear();
-                    selected_title.set_text("Nothing kept yet");
-                    selected_byline.set_text("Add to favourites keeps the picture on the desktop");
-                    selected_show.set_sensitive(false);
-                    selected_forget.set_sensitive(false);
-                }
-            }
-        });
-
-        let activated_cards = cards.clone();
-        let activated_pick = on_pick.clone();
-        list.connect_row_activated(move |_, row| {
-            if let Some(card) = activated_cards.borrow().get(row.index() as usize) {
-                activated_pick(Pick::Show(card.key.clone()));
-            }
-        });
-
-        connect_pick(&show, &list, cards.clone(), on_pick.clone(), Pick::Show);
-        connect_pick(&forget, &list, cards.clone(), on_pick.clone(), Pick::Forget);
+        let (show_pick, forget_pick, activate_pick) =
+            (on_pick.clone(), on_pick.clone(), on_pick.clone());
+        favourites.wire(
+            Rc::new(move |card: &Card| show_pick(Pick::Show(card.key.clone()))),
+            Rc::new(move |card: &Card| forget_pick(Pick::Forget(card.key.clone()))),
+            Rc::new(move |card: &Card| activate_pick(Pick::Show(card.key.clone()))),
+        );
 
         let settings = SettingsView::build(on_pick);
         let stack = gtk::Stack::new();
         stack.add_titled(&root, "favourites", "Favourites");
         stack.add_titled(&settings.page, "settings", "Settings");
+        // Leaving the settings tab closes the artist browser, so coming back lands
+        // on the rows rather than in the middle of a choice made last time.
+        let leaving = Rc::downgrade(&settings);
+        stack.connect_visible_child_notify(move |stack| {
+            if stack.visible_child_name().as_deref() != Some("settings") {
+                if let Some(settings) = leaving.upgrade() {
+                    settings.show_rows();
+                }
+            }
+        });
         let switcher = gtk::StackSwitcher::new();
         switcher.set_stack(Some(&stack));
         switcher.set_halign(gtk::Align::Center);
@@ -235,6 +399,9 @@ impl Content {
     }
 
     pub(super) fn show_tab(&self, tab: Tab) {
+        if tab == Tab::Settings {
+            self.settings.show_rows();
+        }
         self.stack.set_visible_child_name(match tab {
             Tab::Favourites => "favourites",
             Tab::Settings => "settings",
@@ -287,88 +454,24 @@ impl Content {
     }
 
     pub(super) fn relist(&self, favourites: &Favourites) {
-        let selected = self
-            .list
-            .selected_row()
-            .and_then(|row| self.cards.borrow().get(row.index() as usize).cloned())
-            .map(|card| card.key);
-        let cards: Vec<Card> = favourites
+        let cards = favourites
             .iter()
             .map(|(key, art)| Card {
                 key: key.to_string(),
                 art: art.clone(),
+                marked: false,
+                primary: "Set as wallpaper".to_owned(),
+                blocked: None,
+                can_secondary: true,
             })
             .collect();
-
-        self.thumbs
-            .borrow_mut()
-            .retain(|key, _| cards.iter().any(|card| &card.key == key));
-        for card in &cards {
-            if !self.thumbs.borrow().contains_key(&card.key) {
-                if let Ok(thumbnail) =
-                    Pixbuf::from_file_at_scale(&card.art.path, THUMBNAIL, THUMBNAIL, true)
-                {
-                    self.thumbs.borrow_mut().insert(card.key.clone(), thumbnail);
-                }
-            }
-        }
-
-        for child in self.list.children() {
-            self.list.remove(&child);
-        }
-        *self.cards.borrow_mut() = cards;
-        for card in self.cards.borrow().iter() {
-            let row = gtk::ListBoxRow::new();
-            let content = gtk::Box::new(gtk::Orientation::Vertical, 4);
-            content.set_margin_top(8);
-            content.set_margin_bottom(8);
-            content.set_margin_start(8);
-            content.set_margin_end(8);
-            let image = match self.thumbs.borrow().get(&card.key) {
-                Some(thumbnail) => gtk::Image::from_pixbuf(Some(thumbnail)),
-                None => gtk::Image::new(),
-            };
-            let label = gtk::Label::new(Some(&card.art.title));
-            label.set_line_wrap(true);
-            label.set_max_width_chars(24);
-            content.pack_start(&image, false, false, 0);
-            content.pack_start(&label, false, false, 0);
-            row.add(&content);
-            self.list.add(&row);
-        }
-        self.list.show_all();
-
-        let row = selected
-            .and_then(|key| self.cards.borrow().iter().position(|card| card.key == key))
-            .or_else(|| (!self.cards.borrow().is_empty()).then_some(0))
-            .and_then(|index| self.list.row_at_index(index as i32));
-        match row {
-            Some(row) => self.list.select_row(Some(&row)),
-            None => self.list.unselect_all(),
-        }
+        self.favourites
+            .set_cards(cards, self.favourites.selected_key(), true);
     }
 }
 
 fn connect_control(button: &gtk::Button, on_control: Rc<dyn Fn(Control)>, action: fn() -> Control) {
     button.connect_clicked(move |_| on_control(action()));
-}
-
-fn connect_pick(
-    button: &gtk::Button,
-    list: &gtk::ListBox,
-    cards: Rc<RefCell<Vec<Card>>>,
-    on_pick: Rc<dyn Fn(Pick)>,
-    action: fn(String) -> Pick,
-) {
-    let list = list.clone();
-    button.connect_clicked(move |_| {
-        let Some(row) = list.selected_row() else {
-            return;
-        };
-        if let Some(card) = cards.borrow().get(row.index() as usize) {
-            on_pick(action(card.key.clone()));
-        }
-    });
 }
 
 /// The preview card's width, in logical pixels.
@@ -472,7 +575,11 @@ struct SettingsView {
     regions: gtk::FlowBox,
     subjects: gtk::FlowBox,
     artists: gtk::FlowBox,
-    artists_section: gtk::Box,
+    /// The settings sections ("rows") or the artist browser, with the bar below
+    /// them staying put in both.
+    inner: gtk::Stack,
+    back: gtk::Button,
+    browser: Rc<Browser>,
     religious: gtk::Switch,
     canvas: gtk::DrawingArea,
     empty: gtk::Label,
@@ -493,7 +600,7 @@ impl SettingsView {
             }
         }
 
-        let page = gtk::Box::new(gtk::Orientation::Horizontal, 24);
+        let page = gtk::Box::new(gtk::Orientation::Vertical, 0);
         add_class(&page, "aw-page");
         page.set_margin_top(8);
         page.set_margin_bottom(8);
@@ -501,6 +608,7 @@ impl SettingsView {
         page.set_margin_end(8);
 
         // Left: the preview card. The margin leaves room for the shadow to be seen.
+        let rows = gtk::Box::new(gtk::Orientation::Horizontal, 24);
         let card = gtk::Box::new(gtk::Orientation::Vertical, 0);
         add_class(&card, "aw-previewcard");
         card.set_valign(gtk::Align::Start);
@@ -517,7 +625,7 @@ impl SettingsView {
         overlay.add_overlay(&empty);
         overlay.set_overlay_pass_through(&empty, true);
         card.pack_start(&overlay, false, false, 0);
-        page.pack_start(&card, false, false, 0);
+        rows.pack_start(&card, false, false, 0);
 
         let surface = Rc::new(RefCell::new(None::<gtk::cairo::Surface>));
         let drawn = surface.clone();
@@ -549,17 +657,16 @@ impl SettingsView {
             glib::Propagation::Proceed
         });
 
-        // Right: sections that scroll, and the bar that does not.
-        let right = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        right.set_hexpand(true);
+        // Right: sections that scroll. The bar that does not is further down.
         let scroll = gtk::ScrolledWindow::new(None::<&gtk::Adjustment>, None::<&gtk::Adjustment>);
         scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
         scroll.set_shadow_type(gtk::ShadowType::None);
+        scroll.set_hexpand(true);
         scroll.set_vexpand(true);
         let column = gtk::Box::new(gtk::Orientation::Vertical, 0);
         column.set_margin_end(12);
         scroll.add(&column);
-        right.pack_start(&scroll, true, true, 0);
+        rows.pack_start(&scroll, true, true, 0);
 
         column.pack_start(&section_title("Style"), false, false, 0);
         let card_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
@@ -588,12 +695,7 @@ impl SettingsView {
         let shapes = flow_under("Shape");
         let regions = flow_under("Origin");
         let subjects = flow_under("Subject");
-        let artists_section = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        let artists = chip_flow();
-        artists_section.pack_start(&section_title("Artist"), false, false, 0);
-        artists_section.pack_start(&artists, false, false, 0);
-        artists_section.set_no_show_all(true);
-        filters.pack_start(&artists_section, false, false, 0);
+        let artists = flow_under("Artist");
 
         let religious_row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
         religious_row.set_margin_top(24);
@@ -615,10 +717,22 @@ impl SettingsView {
         add_class(&note, "aw-note");
         let apply = gtk::Button::with_label("Apply changes");
         add_class(&apply, "aw-apply");
+        // Only while the artist browser is up; `set_visible` alone would be undone
+        // by the `show_all` that opens the window.
+        let back = gtk::Button::with_label("Back");
+        back.set_no_show_all(true);
+        back.set_visible(false);
+        bar.pack_start(&back, false, false, 0);
         bar.pack_start(&note, true, true, 0);
         bar.pack_end(&apply, false, false, 0);
-        right.pack_start(&bar, false, false, 0);
-        page.pack_start(&right, true, true, 0);
+
+        let browser = Browser::new("Choose", "Read more", ("No painters", ""));
+
+        let inner = gtk::Stack::new();
+        inner.add_named(&rows, "rows");
+        inner.add_named(&browser.split, "browser");
+        page.pack_start(&inner, true, true, 0);
+        page.pack_start(&bar, false, false, 0);
 
         let view = Rc::new(Self {
             page,
@@ -636,7 +750,9 @@ impl SettingsView {
             regions,
             subjects,
             artists,
-            artists_section,
+            inner,
+            back,
+            browser,
             religious,
             canvas,
             empty,
@@ -645,6 +761,12 @@ impl SettingsView {
             apply,
         });
         view.connect();
+        let weak = Rc::downgrade(&view);
+        view.back.connect_clicked(move |_| {
+            if let Some(view) = weak.upgrade() {
+                view.show_rows();
+            }
+        });
         view.redraw(Redraw::All);
         view
     }
@@ -672,6 +794,29 @@ impl SettingsView {
                 }
             }
         });
+
+        let weak = Rc::downgrade(self);
+        let choose: Rc<dyn Fn(&Card)> = Rc::new(move |card: &Card| {
+            if let Some(view) = weak.upgrade() {
+                view.pending.borrow_mut().toggle_artist(&card.key);
+                view.redraw(Redraw::All);
+            }
+        });
+        let (activate, on_pick) = (choose.clone(), self.on_pick.clone());
+        self.browser.wire(
+            choose,
+            Rc::new(move |card: &Card| {
+                if let Some(url) = &card.art.details_url {
+                    on_pick(Pick::Read(url.clone()));
+                }
+            }),
+            Rc::new(move |card: &Card| {
+                if card.blocked.is_none() {
+                    activate(card);
+                }
+            }),
+        );
+
         let weak = Rc::downgrade(self);
         self.apply.connect_clicked(move |_| {
             if let Some(view) = weak.upgrade() {
@@ -684,6 +829,7 @@ impl SettingsView {
     fn describe(self: &Rc<Self>, snapshot: &Snapshot) {
         {
             let mut pending = self.pending.borrow_mut();
+            pending.keep_pictures_in(&snapshot.pictures);
             pending.adopt(&snapshot.settings, snapshot.filters_apply, snapshot.aspect);
             pending.set_picture(snapshot.shown.as_ref().map(|art| art.path.as_path()));
         }
@@ -698,7 +844,7 @@ impl SettingsView {
             set_class(button, "aw-card-selected", *card == kind);
         }
         self.apply.set_sensitive(pending.can_apply());
-        self.note.set_text(pending.note().unwrap_or(""));
+        self.note.set_text(&pending.note().unwrap_or_default());
         if matches!(what, Redraw::Light) {
             return;
         }
@@ -713,7 +859,7 @@ impl SettingsView {
             pending.shapes(),
             pending.regions(),
             pending.subjects(),
-            pending.artists(),
+            pending.artist_row(),
         );
         drop(pending);
 
@@ -723,8 +869,62 @@ impl SettingsView {
         self.fill(&self.subjects, subjects, |p, v: &Subject| {
             p.toggle_subject(*v)
         });
-        self.artists_section.set_visible(!artists.is_empty());
-        self.fill(&self.artists, artists, |p, v: &String| p.toggle_artist(v));
+        self.fill_artists(artists);
+        // Choosing a painter changes the mark on the shelf and the button under the
+        // picture, so a shelf that is being looked at is rebuilt like the chips.
+        if self.inner.visible_child_name().as_deref() == Some("browser") {
+            self.browser
+                .set_cards(self.artist_cards(), self.browser.selected_key(), true);
+        }
+    }
+
+    /// The chosen painters as chips, then the button that opens the browser.
+    fn fill_artists(self: &Rc<Self>, row: ArtistRow) {
+        self.fill(&self.artists, row.chosen, |p, v: &String| {
+            p.toggle_artist(v)
+        });
+        let browse = chip_button(row.browse, false);
+        browse.set_sensitive(row.disabled_reason.is_none());
+        browse.set_tooltip_text(row.disabled_reason.as_deref());
+        let weak = Rc::downgrade(self);
+        browse.connect_clicked(move |_| {
+            if let Some(view) = weak.upgrade() {
+                view.open_browser();
+            }
+        });
+        self.artists.insert(&browse, -1);
+        self.artists.show_all();
+    }
+
+    fn artist_cards(&self) -> Vec<Card> {
+        self.pending
+            .borrow()
+            .artist_cards()
+            .into_iter()
+            .map(|card| Card {
+                key: card.art.title.clone(),
+                marked: card.selected,
+                primary: if card.selected { "Remove" } else { "Choose" }.to_owned(),
+                blocked: card.disabled_reason,
+                can_secondary: card.art.details_url.is_some(),
+                art: card.art,
+            })
+            .collect()
+    }
+
+    /// Cards are built when the browser is first wanted, not when the window
+    /// opens, because that is when their thumbnails get decoded.
+    fn open_browser(&self) {
+        let cards = self.artist_cards();
+        let first_chosen = cards.iter().find(|card| card.marked).map(|c| c.key.clone());
+        self.browser.set_cards(cards, first_chosen, false);
+        self.inner.set_visible_child_name("browser");
+        self.back.set_visible(true);
+    }
+
+    fn show_rows(&self) {
+        self.inner.set_visible_child_name("rows");
+        self.back.set_visible(false);
     }
 
     fn redraw_preview(&self) {
@@ -765,6 +965,8 @@ impl SettingsView {
         clear(flow);
         for chip in chips {
             let button = chip_button(&chip.label, chip.selected);
+            button.set_sensitive(chip.disabled_reason.is_none());
+            button.set_tooltip_text(chip.disabled_reason.as_deref());
             let (weak, value) = (Rc::downgrade(self), chip.value);
             button.connect_clicked(move |_| {
                 if let Some(view) = weak.upgrade() {
@@ -795,16 +997,19 @@ impl SettingsView {
                         value: Border::Black,
                         label: "Black".to_owned(),
                         selected: border == Border::Black,
+                        disabled_reason: None,
                     },
                     Chip {
                         value: Border::Auto,
                         label: "Automatic".to_owned(),
                         selected: border == Border::Auto,
+                        disabled_reason: None,
                     },
                     Chip {
                         value: Border::Custom { rgb: custom },
                         label: "Custom".to_owned(),
                         selected: matches!(border, Border::Custom { .. }),
+                        disabled_reason: None,
                     },
                 ];
                 self.fill(&flow, chips, |p, v: &Border| p.set_border(*v));
@@ -833,11 +1038,13 @@ impl SettingsView {
                         value: BlurVariant::Backdrop,
                         label: "Behind the picture".to_owned(),
                         selected: variant == BlurVariant::Backdrop,
+                        disabled_reason: None,
                     },
                     Chip {
                         value: BlurVariant::WholeImage,
                         label: "Whole picture".to_owned(),
                         selected: variant == BlurVariant::WholeImage,
+                        disabled_reason: None,
                     },
                 ];
                 self.fill(&flow, chips, |p, v: &BlurVariant| p.set_blur_variant(*v));

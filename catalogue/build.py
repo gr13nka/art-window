@@ -19,8 +19,28 @@ row. To add an artist, add one entry to `catalogue/artists.json`:
 [...]}`, where `categories` are Commons category names (without the
 "Category:" prefix) walked recursively for that artist's paintings.
 
+An artist with fewer than `MIN_PER_CHOICE` rows in the finished file has its
+`artist` column blanked (the rows stay; the byline still names the painter),
+because that column is what puts an *Artist* chip in every app's settings. The
+run ends with a report of thin spots: rows per (source, region), per region
+(all six, zeros included), per named artist, the artists just blanked, and —
+when `cargo` is on the PATH — the desktop app's own region x subject x shape
+counts from `cargo run -- --catalogue`.
+
+Every painter whose artist column survives that rule also gets an entry in
+`catalogue/dist/artists/` (written by `showcase.py` after the TSV, from the combined
+rows, so it runs under any `--only`): `<slug>.jpg`, the painter's `showcase`
+painting from `artists.json` at no more than 1400 px, and `index.tsv`
+(`name region about showcase title byline file`, sorted by name; `name`,
+`title` and `byline` are copied from the TSV so they match it exactly). The
+desktop's artist browser compiles these in; Android bundles them with the rest
+of `dist/` as assets, and iOS as a folder resource. A painter who keeps the
+chip but lacks `about`, `showcase`, or a showcase that is one of their own rows
+fails the build.
+
 Usage:
     python3 catalogue/build.py [--only met,nga,cma,smk,wmc] [--refresh] [--csv PATH]
+                               [--no-app-report]
 
 Everything each source downloads is cached under
 `~/.cache/art-window/catalogue/<source>/`, so an interrupted run — or the
@@ -52,12 +72,19 @@ if _repo_root not in sys.path:
 import argparse  # noqa: E402
 import datetime  # noqa: E402
 import re  # noqa: E402
+import shutil  # noqa: E402
+import subprocess  # noqa: E402
 
-from catalogue import geometry, http, regions  # noqa: E402
+from catalogue import geometry, http, regions, showcase  # noqa: E402
 from catalogue.sources import cleveland, commons, met, nga, smk  # noqa: E402
 
 SOURCE_MODULES = {"met": met, "nga": nga, "cma": cleveland, "smk": smk, "wmc": commons}
 SOURCE_ORDER = ("met", "nga", "cma", "smk", "wmc")
+
+# Mirrors `MIN_POOL` in `src/art/museums.rs` on purpose, the same way the word
+# lists are duplicated across platforms: a filter choice with fewer paintings
+# than this is not worth offering.
+MIN_PER_CHOICE = 20
 
 TEXT_FIELDS = ("image_url", "details_url", "title", "byline", "origin")
 
@@ -134,6 +161,65 @@ def _write(rows: list[dict], dist_path: str, snapshot_dates: dict[str, str]) -> 
             f.write("\t".join(fields) + "\n")
 
 
+def _blank_thin_artists(rows: list[dict]) -> dict[str, int]:
+    """Blanks the `artist` column of every row whose artist has fewer than
+    `MIN_PER_CHOICE` rows in `rows`, and returns `{artist: count}` for the
+    artists it blanked. The artist column is what puts an *Artist* chip in
+    every app's settings, and a chip that leads to three paintings is the bug
+    `MIN_PER_CHOICE` exists to prevent. `rows` must be the combined set — fresh
+    plus kept from disk — so an artist's count is the file's, not this run's."""
+    counts: dict[str, int] = {}
+    for row in rows:
+        if row.get("artist"):
+            counts[row["artist"]] = counts.get(row["artist"], 0) + 1
+    thin = {name: n for name, n in counts.items() if n < MIN_PER_CHOICE}
+    for row in rows:
+        if row.get("artist") in thin:
+            row["artist"] = ""
+    return thin
+
+
+def _print_report(combined: list[dict], blanked: dict[str, int], app_report: bool) -> None:
+    by_source_region: dict[tuple[str, str], int] = {}
+    by_region = dict.fromkeys(regions.REGIONS, 0)
+    by_artist: dict[str, int] = {}
+    for row in combined:
+        key = (row["source"], row["region"])
+        by_source_region[key] = by_source_region.get(key, 0) + 1
+        by_region[row["region"]] += 1
+        if row.get("artist"):
+            by_artist[row["artist"]] = by_artist.get(row["artist"], 0) + 1
+
+    def flag(count: int) -> str:
+        return f"  <-- under {MIN_PER_CHOICE}" if count < MIN_PER_CHOICE else ""
+
+    for (source, region), count in sorted(by_source_region.items()):
+        print(f"  {source:4s} {region:14s} {count}")
+    print("\nPer region:")
+    for region in regions.REGIONS:
+        print(f"  {region:14s} {by_region[region]}{flag(by_region[region])}")
+    print("\nPer named artist:")
+    for name, count in sorted(by_artist.items()):
+        print(f"  {name:32s} {count}{flag(count)}")
+    if blanked:
+        print(f"\nArtist column blanked (under {MIN_PER_CHOICE} rows):")
+        for name, count in sorted(blanked.items()):
+            print(f"  {name:32s} {count}")
+
+    command = "cargo run --quiet -- --catalogue"
+    if not app_report:
+        return
+    if shutil.which("cargo") is None:
+        print(f"\nApp-side report: cargo not found; run `{command}` from the repo root.")
+        return
+    print("\nApp-side report (what the desktop app sees):", flush=True)
+    result = subprocess.run(command.split(), cwd=_repo_root, capture_output=True, text=True)
+    if result.returncode != 0:
+        print(f"App-side report unavailable (cargo exited {result.returncode}); run `{command}` by hand.")
+    else:
+        print(result.stdout, end="")
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument(
@@ -145,6 +231,10 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--csv", dest="csv_path", default=None,
         help="local MetObjects.csv path (met only; downloaded to ~/.cache/art-window/MetObjects.csv if omitted)",
+    )
+    parser.add_argument(
+        "--no-app-report", action="store_true",
+        help="skip the closing `cargo run -- --catalogue` report of the desktop app's own counts",
     )
     args = parser.parse_args(argv)
 
@@ -188,18 +278,15 @@ def main(argv: list[str] | None = None) -> None:
 
     kept = _read_existing_rows(dist_path, keep_sources=set(SOURCE_MODULES) - requested)
     combined = accepted + kept
+    blanked = _blank_thin_artists(combined)
     combined.sort(key=lambda r: (r["source"], r["id"]))
     _write(combined, dist_path, snapshot_dates)
+    showcase.write(combined, os.path.join(_repo_root, "catalogue", "dist", "artists"), args.refresh)
 
     print(f"\nWrote {len(combined)} rows to {dist_path} "
           f"({len(accepted)} freshly fetched, {len(kept)} kept from disk)")
     print(f"Dropped: {dropped_region} unknown region, {dropped_size} under {geometry.MIN_LONG_SIDE}px long side")
-    counts: dict[tuple[str, str], int] = {}
-    for row in combined:
-        key = (row["source"], row["region"])
-        counts[key] = counts.get(key, 0) + 1
-    for (source, region), count in sorted(counts.items()):
-        print(f"  {source:4s} {region:14s} {count}")
+    _print_report(combined, blanked, app_report=not args.no_app_report)
 
 
 if __name__ == "__main__":

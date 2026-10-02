@@ -193,12 +193,23 @@ the way the choices on the right would hang it:
   painting over a blurred copy of itself, or shows only the blur.
 - **Shape** — *Screen-shaped* keeps paintings close to your main display's
   proportions; *Near square* also allows squarer ones.
-- **Origin**, **Subject** (landscape, seascape, still life) and **Artist** — pick
-  any number in each; nothing picked means any. Options with nothing left to
-  offer are hidden.
+- **Origin** and **Subject** (landscape, seascape, still life) — pick any number
+  in each; nothing picked means any. A choice that would leave fewer than twenty
+  paintings is greyed, and clicking it says which of the other choices is in the
+  way.
+- **Artist** — the row lists the painters you have chosen; click one to take it
+  out. *Any artist* (or *Add*) opens a browser like the favourites one: each
+  painter is shown by their best-known painting, with *Choose* and a *Read more*
+  link to their Wikipedia article. *Back* returns to the settings. A chosen
+  painter wins over **Shape** and **Origin**, which grey out while one is chosen,
+  and the twenty-painting minimum does not apply to them; **Subject** and **Hide
+  religious scenes** still narrow what arrives.
 - **Hide religious scenes.**
 
-**Apply changes** saves them. A new style re-hangs the painting on the desktop at
+**Apply changes** saves them, and stays greyed while fewer than twenty paintings
+match — a smaller selection is the same few pictures coming round again. Filters
+saved by an earlier version that fall short are widened by as little as it takes
+when the next painting is picked, and the tab says so. A new style re-hangs the painting on the desktop at
 once; filters take effect from the next painting. Filters need `source =
 "museums"` — the Met's live search and a folder of your own pictures cannot be
 filtered this way.
@@ -228,6 +239,7 @@ art-window --if-due   # the same, but only if the local day is unsettled
 art-window --where    # print config, state, cache and favourites locations
 art-window --check    # diagnose GNOME integration (Linux only)
 art-window --quit     # stop the running instance (Linux and Windows)
+art-window --catalogue  # count the paintings behind every filter combination
 ```
 
 On Windows the one-shot commands print to the terminal they are run from.
@@ -302,7 +314,13 @@ spells it out. Regenerate the list with:
 ```sh
 python3 catalogue/build.py            # all four museums; the Met pass alone takes ~3 h, resumable
 python3 catalogue/build.py --only nga,cma,smk  # skip the Met for a quick rebuild of the rest
+python3 catalogue/build.py --only wmc  # the painters named in catalogue/artists.json
 ```
+
+The build ends with the number of paintings per region and per artist, then
+`art-window --catalogue`'s table of every region, subject and shape together,
+with anything under twenty marked. A marked cell is a choice the settings tab
+will grey; the cure is more painters in `catalogue/artists.json`.
 
 One painting a day is the whole schedule and there is nothing to tune. A
 `refresh_hours` left over from an older version is accepted and ignored so an

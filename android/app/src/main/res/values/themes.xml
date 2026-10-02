@@ -1,0 +1,12 @@
+<resources>
+    <!-- The window a screen shows before Compose has drawn anything. The colour mirrors
+         Background in Theme.kt, which is the palette's only owner; this file cannot read it. -->
+    <style name="Theme.ArtWindow" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/art_background</item>
+        <item name="android:colorBackground">@color/art_background</item>
+        <item name="android:statusBarColor">@color/art_background</item>
+        <item name="android:navigationBarColor">@color/art_background</item>
+        <item name="android:colorPrimary">@color/art_background</item>
+        <item name="android:colorAccent">@color/art_accent</item>
+    </style>
+</resources>
