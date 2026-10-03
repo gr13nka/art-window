@@ -113,7 +113,7 @@ impl Favourites {
     /// desktop is never rubbish. That exception is what lets [`Favourites::forget`]
     /// drop the very picture on screen — the row leaves the menu at once, the file
     /// waits until the desktop is pointing somewhere else.
-    pub fn discard_all_but(&self, keep: &Path) {
+    pub fn discard_all_but(&self, keep: Option<&Path>) {
         let index = self.dir.join(INDEX);
         let Ok(entries) = std::fs::read_dir(&self.dir) else {
             return;
@@ -121,7 +121,7 @@ impl Favourites {
         for entry in entries.flatten() {
             let path = entry.path();
             let claimed = self.kept.iter().any(|k| k.art.path == path);
-            if path.is_file() && path != keep && path != index && !claimed {
+            if path.is_file() && Some(path.as_path()) != keep && path != index && !claimed {
                 let _ = std::fs::remove_file(path);
             }
         }

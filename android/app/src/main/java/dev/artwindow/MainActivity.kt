@@ -79,7 +79,7 @@ class MainActivity : ComponentActivity() {
             navigationBarStyle = SystemBarStyle.dark(BACKGROUND_ARGB),
         )
 
-        RotationJob.scheduleDaily(applicationContext)
+        RotationJob.scheduleWatcher(applicationContext)
         if (State(applicationContext).isDue(Day.today())) {
             RotationJob.scheduleNow(applicationContext, force = false)
         }

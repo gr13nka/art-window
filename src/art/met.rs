@@ -7,10 +7,10 @@
 //!
 //! <https://metmuseum.github.io/>
 //!
-//! The Android app keeps its own copy of these rules in
-//! `android/app/src/main/java/dev/artwindow/Met.kt` rather than calling into this
-//! module — see `docs/android.md`. A change to the search query, the `User-Agent`,
-//! or the `met-{id}.{ext}` filename convention belongs in both files.
+//! No other platform searches the Met live any more — the phone apps draw only
+//! from the prebuilt catalogue — so the search query and the `User-Agent` are
+//! this file's alone. The `met-{id}.{ext}` filename is still read by Android's
+//! `Museums.kt`, as the name of a download made before the catalogue existed.
 
 use super::http;
 use super::{pick_index, Artwork, Source};
@@ -32,7 +32,7 @@ const MAX_SEARCH_RESULTS: usize = 10_000;
 
 /// How many objects to try before giving up. Records occasionally lack a usable
 /// `primaryImage` despite the `hasImages` filter.
-const CANDIDATES: usize = 8;
+const MAX_ATTEMPTS: usize = 8;
 
 /// How long the whole of a fetch may take before it gives up and leaves the day for
 /// the next attempt.
@@ -179,7 +179,7 @@ impl Source for Met {
         let mut last_error = None;
         let deadline = Instant::now() + BUDGET;
 
-        for attempt in 0..CANDIDATES {
+        for attempt in 0..MAX_ATTEMPTS {
             if Instant::now() >= deadline {
                 // Kept only if nothing more specific went wrong: a museum that
                 // refused is worth more to whoever reads the log than the clock
@@ -226,7 +226,7 @@ impl Source for Met {
             }
         }
 
-        Err(last_error.unwrap_or_else(|| anyhow!("no usable painting in {CANDIDATES} attempts")))
+        Err(last_error.unwrap_or_else(|| anyhow!("no usable painting in {MAX_ATTEMPTS} attempts")))
     }
 
     fn label(&self) -> &'static str {
@@ -236,13 +236,13 @@ impl Source for Met {
     /// Deletes yesterday's downloads, and only those: a file is this source's to
     /// remove exactly when `id_of` recognises its name. Anything else in the
     /// directory belongs to somebody else and is left alone.
-    fn discard_all_but(&self, keep: &Path) {
+    fn discard_all_but(&self, keep: Option<&Path>) {
         let Ok(entries) = std::fs::read_dir(&self.cache) else {
             return;
         };
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.is_file() && path != keep && id_of(&path).is_some() {
+            if path.is_file() && Some(path.as_path()) != keep && id_of(&path).is_some() {
                 let _ = std::fs::remove_file(path);
             }
         }

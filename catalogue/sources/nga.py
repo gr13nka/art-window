@@ -24,7 +24,7 @@ import csv
 import os
 from typing import Iterator
 
-from .. import geometry, http, regions
+from .. import geometry, http, regions, text
 
 RAW_BASE = "https://raw.githubusercontent.com/NationalGalleryOfArt/opendata/main/data"
 FILES = (
@@ -42,10 +42,6 @@ TERM_TYPES = {"Keyword", "Theme", "Style"}
 csv.field_size_limit(10_000_000)  # a handful of provenance fields run long
 
 
-def _collapse(text: str | None) -> str:
-    return " ".join((text or "").split())
-
-
 def _ensure_downloaded(client: http.PacedClient, raw_dir: str, refresh: bool) -> dict[str, str]:
     paths = {}
     for name in FILES:
@@ -55,13 +51,6 @@ def _ensure_downloaded(client: http.PacedClient, raw_dir: str, refresh: bool) ->
             client.download(f"{RAW_BASE}/{name}", path)
         paths[name] = path
     return paths
-
-
-def _byline(artist: str, date: str) -> str:
-    artist, date = artist.strip(), date.strip()
-    if artist and date:
-        return f"{artist}, {date}"
-    return artist or date
 
 
 def fetch(
@@ -82,8 +71,8 @@ def fetch(
             if not object_id:
                 continue
             candidates[object_id] = {
-                "title": _collapse(row.get("title")),
-                "byline": _byline(row.get("attribution") or "", row.get("displaydate") or ""),
+                "title": text.collapse(row.get("title")),
+                "byline": text.byline(row.get("attribution") or "", row.get("displaydate") or ""),
             }
 
     # 2. The primary open-access image and its real size, per candidate.
@@ -150,7 +139,7 @@ def fetch(
                 continue
             if row.get("termtype") not in TERM_TYPES:
                 continue
-            term = _collapse(row.get("term"))
+            term = text.collapse(row.get("term"))
             if term:
                 tags.setdefault(object_id, []).append(term)
 

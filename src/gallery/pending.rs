@@ -9,7 +9,7 @@
 
 use crate::art::museums::{self, Availability, FilterSection, Unavailable, MIN_POOL};
 use crate::art::{artists, Artwork};
-use crate::placement::Preview;
+use crate::placement::{self, Preview};
 use crate::settings::{
     BlurVariant, Border, Region, Settings, Shape, Style, Subject, DEFAULT_BLUR_STRENGTH,
     DEFAULT_CUSTOM_BORDER,
@@ -77,11 +77,14 @@ pub struct ArtistRow {
 
 /// One painter in the artist browser.
 pub struct ArtistCard {
-    /// The painter, dressed as a picture so that the shelf and preview each
-    /// window already has for favourites can show it unchanged: `title` is the
-    /// painter's name and what a click chooses, `byline` the painting they are
-    /// shown by and how much of their work there is, `details_url` where to read
-    /// about them.
+    /// Who this is: the shelf's key for the card, and what a click on it hands
+    /// to [`Pending::toggle_artist`].
+    pub name: String,
+    /// How the painter is shown, dressed as a picture so that the shelf and
+    /// preview each window already has for favourites can draw it unchanged:
+    /// `title` is the painter's name again, `byline` the painting they are
+    /// shown by and how much of their work there is, `details_url` where to
+    /// read about them. For display only — identity is `name`.
     pub art: Artwork,
     pub selected: bool,
     /// Present when choosing this painter should explain why it cannot be done.
@@ -104,7 +107,7 @@ pub struct Pending {
     picture: Option<(PathBuf, Preview)>,
     availability: Availability,
     /// Where the painters' pictures are unpacked — see [`Pending::artist_cards`].
-    pictures: PathBuf,
+    artist_pictures: PathBuf,
 }
 
 impl Pending {
@@ -118,7 +121,7 @@ impl Pending {
             blur: (BlurVariant::Backdrop, DEFAULT_BLUR_STRENGTH),
             picture: None,
             availability: Availability::default(),
-            pictures: std::env::temp_dir(),
+            artist_pictures: std::env::temp_dir(),
         };
         pending.remember_options();
         pending.refresh();
@@ -153,16 +156,77 @@ impl Pending {
     /// Says where the painters' pictures may be unpacked: the cache, which the
     /// window is told and this model is not built with. Until it is said they go
     /// to the system's temporary directory, which is as disposable.
-    pub fn keep_pictures_in(&mut self, dir: &Path) {
-        self.pictures = dir.to_path_buf();
+    pub fn unpack_artists_into(&mut self, dir: &Path) {
+        self.artist_pictures = dir.to_path_buf();
     }
 
-    /// The staged style drawn `width` pixels across at the screen's shape, or
-    /// `None` while there is no picture to draw.
+    /// The staged style and framing drawn `width` pixels across at the screen's
+    /// shape, or `None` while there is no picture to draw.
     pub fn preview(&self, width: u32) -> Option<RgbaImage> {
-        self.picture
-            .as_ref()
-            .map(|(_, p)| p.render(&self.staged.style, self.aspect, width))
+        self.picture.as_ref().map(|(path, p)| {
+            p.render(
+                &self.staged.style,
+                self.staged.framing.for_painting(path),
+                self.aspect,
+                width,
+            )
+        })
+    }
+
+    /// Whether the picture in the preview can be moved about: there is one, and
+    /// the staged style has a sharp picture to move.
+    pub fn can_frame(&self) -> bool {
+        self.picture.is_some() && placement::frame_base(&self.staged.style).is_some()
+    }
+
+    /// What to say under the preview while it can be dragged, so that it is not
+    /// a secret.
+    pub fn frame_hint(&self) -> Option<&'static str> {
+        self.can_frame().then_some("Drag and scroll to frame it")
+    }
+
+    /// The pointer dragged the preview `(dx, dy)`, right and down, where the
+    /// preview is `preview_width` across in the same units. The painting follows
+    /// it exactly, along whichever axes it overflows, and stops at its edges.
+    pub fn drag(&mut self, dx: f64, dy: f64, preview_width: f64) {
+        self.reframe(1.0, (0.0, 0.0), (dx, dy), preview_width);
+    }
+
+    /// The preview was scrolled or pinched: the painting grows by `factor` about
+    /// the point `(x, y)` from the preview's top-left corner, in the units
+    /// `preview_width` is in, so that what is under the pointer stays under it.
+    pub fn zoom_about(&mut self, factor: f64, x: f64, y: f64, preview_width: f64) {
+        self.reframe(factor, (x, y), (0.0, 0.0), preview_width);
+    }
+
+    /// Every gesture ends here, in the terms [`placement::reframe`] is written
+    /// in: a screen the size of the preview and a painting the shape of this one.
+    /// The pan is recorded as this painting's, which is what makes the next one
+    /// arrive centred.
+    fn reframe(&mut self, factor: f64, at: (f64, f64), by: (f64, f64), preview_width: f64) {
+        let Some(base) = placement::frame_base(&self.staged.style) else {
+            return;
+        };
+        let Some((path, preview)) = &self.picture else {
+            return;
+        };
+        if !preview_width.is_finite() || preview_width < 1.0 {
+            return;
+        }
+        let screen = Preview::canvas(self.aspect, preview_width.round() as u32);
+        let before = self.staged.framing.for_painting(path);
+        let after = placement::reframe(
+            preview.size(),
+            screen,
+            base,
+            before,
+            factor as f32,
+            (at.0 as f32, at.1 as f32),
+            (by.0 as f32, by.1 as f32),
+        );
+        if after != before {
+            self.staged.framing.set(after, path);
+        }
     }
 
     pub fn aspect(&self) -> f64 {
@@ -254,6 +318,45 @@ impl Pending {
             Border::Custom { rgb } => rgb,
             _ => DEFAULT_CUSTOM_BORDER,
         }
+    }
+
+    /// The choices under *Borders*, in the order they are shown. *Custom* carries
+    /// the colour a click on it restores — the one last picked, or the default.
+    pub fn border_chips(&self) -> Vec<Chip<Border>> {
+        let custom = Border::Custom {
+            rgb: self.custom_colour(),
+        };
+        [
+            (Border::Black, "Black"),
+            (Border::Auto, "Automatic"),
+            (custom, "Custom"),
+        ]
+        .into_iter()
+        .map(|(value, label)| Chip {
+            value,
+            label: label.to_owned(),
+            // Which kind of border, whatever the colour: any custom colour
+            // lights the one *Custom* chip.
+            selected: std::mem::discriminant(&self.border) == std::mem::discriminant(&value),
+            disabled_reason: None,
+        })
+        .collect()
+    }
+
+    /// The choices under *Blur*, in the order they are shown.
+    pub fn blur_chips(&self) -> Vec<Chip<BlurVariant>> {
+        [
+            (BlurVariant::Backdrop, "Behind the picture"),
+            (BlurVariant::WholeImage, "Whole picture"),
+        ]
+        .into_iter()
+        .map(|(value, label)| Chip {
+            value,
+            label: label.to_owned(),
+            selected: self.blur.0 == value,
+            disabled_reason: None,
+        })
+        .collect()
     }
 
     pub fn set_blur_variant(&mut self, variant: BlurVariant) {
@@ -384,6 +487,7 @@ impl Pending {
                     None => artist.title.clone(),
                 };
                 ArtistCard {
+                    name: artist.name.clone(),
                     art: Artwork {
                         title: artist.name.clone(),
                         byline: format!(
@@ -395,7 +499,7 @@ impl Pending {
                         details_url: Some(artist.about.clone()),
                         // A picture that cannot be unpacked is an empty frame
                         // with the painter's name under it, not a missing row.
-                        path: artists::picture(artist, &self.pictures).unwrap_or_default(),
+                        path: artists::picture(artist, &self.artist_pictures).unwrap_or_default(),
                     },
                     selected,
                     disabled_reason: self.artist_reason(
@@ -562,6 +666,64 @@ mod tests {
         Pending::new(Settings::default(), true, 16.0 / 10.0)
     }
 
+    /// A model with a 2:1 picture in its preview, and the folder to delete after.
+    fn with_picture(name: &str) -> (Pending, PathBuf, PathBuf) {
+        let dir = std::env::temp_dir().join(format!("art-window-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("museums-nga-1.png");
+        RgbaImage::from_pixel(400, 200, image::Rgba([200, 100, 50, 255]))
+            .save(&path)
+            .unwrap();
+        let mut p = pending();
+        p.set_picture(Some(&path));
+        (p, path, dir)
+    }
+
+    #[test]
+    fn dragging_the_preview_is_a_change_to_apply_and_belongs_to_that_painting() {
+        let (mut p, path, dir) = with_picture("drag");
+        p.set_style(StyleKind::Zoom);
+        let unframed = p.staged().clone();
+        assert!(p.can_frame() && p.frame_hint().is_some());
+
+        // A 2:1 picture covers a 16:10 screen with room to move across only.
+        p.drag(-40.0, -40.0, 300.0);
+        let framing = &p.staged().framing;
+        assert_ne!(*p.staged(), unframed);
+        assert!(p.can_apply());
+        assert!(framing.pan_x > 0.5 && framing.pan_y == 0.5);
+        assert_eq!(framing.painting.as_deref(), Some("museums-nga-1.png"));
+
+        // Tomorrow's painting is centred, at the zoom that was chosen.
+        p.zoom_about(2.0, 150.0, 90.0, 300.0);
+        let other = p
+            .staged()
+            .framing
+            .for_painting(Path::new("museums-nga-2.png"));
+        assert_eq!((other.zoom, other.pan_x, other.pan_y), (2.0, 0.5, 0.5));
+        assert_eq!(p.staged().framing.for_painting(&path).zoom, 2.0);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_style_with_no_sharp_picture_cannot_be_framed() {
+        let (mut p, _, dir) = with_picture("unframed");
+        p.set_style(StyleKind::Stretch);
+        let before = p.staged().clone();
+        assert!(!p.can_frame() && p.frame_hint().is_none());
+        p.drag(50.0, 50.0, 300.0);
+        p.zoom_about(2.0, 10.0, 10.0, 300.0);
+        assert_eq!(*p.staged(), before);
+
+        // Nor can anything, with no picture to move.
+        let mut empty = pending();
+        empty.set_style(StyleKind::Zoom);
+        assert!(!empty.can_frame());
+        empty.zoom_about(2.0, 10.0, 10.0, 300.0);
+        assert_eq!(empty.staged().framing, crate::settings::Framing::default());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     #[test]
     fn nothing_to_apply_until_something_changes() {
         let mut p = pending();
@@ -584,6 +746,31 @@ mod tests {
                 colour: Border::Custom { rgb: [9, 8, 7] }
             }
         );
+    }
+
+    #[test]
+    fn exactly_one_style_option_is_lit_and_custom_restores_its_colour() {
+        let lit = |p: &Pending| -> Vec<String> {
+            let on = |c: &Chip<Border>| c.selected;
+            p.border_chips()
+                .iter()
+                .filter(|c| on(c))
+                .map(|c| c.label.clone())
+                .collect()
+        };
+        let mut p = pending();
+        assert_eq!(lit(&p), ["Black"]);
+        p.set_border(Border::Auto);
+        assert_eq!(lit(&p), ["Automatic"]);
+
+        p.set_border(Border::Custom { rgb: [9, 8, 7] });
+        assert_eq!(lit(&p), ["Custom"]);
+        assert_eq!(p.border_chips()[2].value, Border::Custom { rgb: [9, 8, 7] });
+
+        p.set_blur_variant(BlurVariant::WholeImage);
+        let blurs = p.blur_chips();
+        assert!(!blurs[0].selected && blurs[1].selected);
+        assert_eq!(blurs[1].value, BlurVariant::WholeImage);
     }
 
     #[test]
@@ -624,11 +811,12 @@ mod tests {
     fn every_painter_on_the_shelf_can_be_chosen_by_the_name_it_shows() {
         let dir = std::env::temp_dir().join("art-window-test-artists");
         let mut p = pending();
-        p.keep_pictures_in(&dir);
+        p.unpack_artists_into(&dir);
         let cards = p.artist_cards();
         assert_eq!(cards.len(), museums::artists().len());
         for card in &cards {
-            assert!(museums::artists().contains(&card.art.title));
+            assert!(museums::artists().contains(&card.name));
+            assert_eq!(card.art.title, card.name);
             assert!(card.art.path.is_file(), "{} has no picture", card.art.title);
             assert!(card.art.details_url.is_some());
         }
@@ -681,7 +869,7 @@ mod tests {
     #[test]
     fn a_painters_card_names_only_subject_and_content() {
         let mut p = pending();
-        p.keep_pictures_in(&std::env::temp_dir().join("art-window-test-artists-idle"));
+        p.unpack_artists_into(&std::env::temp_dir().join("art-window-test-artists-idle"));
         p.toggle_region(Region::Oceania);
         p.set_shape(Shape::NearSquare);
         for card in p.artist_cards() {

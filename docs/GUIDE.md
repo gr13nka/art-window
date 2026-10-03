@@ -191,6 +191,11 @@ the way the choices on the right would hang it:
   a colour taken from the painting's edge, or a colour of your own. *Zoom*
   fills the screen and crops. *Stretch* fills it and distorts. *Blur* sets the
   painting over a blurred copy of itself, or shows only the blur.
+  Drag the preview to choose which part of the painting shows, and scroll (or
+  pinch on a trackpad) to zoom in up to three times. The zoom stays for every
+  painting; the position is remembered for that one painting, so the next
+  arrives centred. *Stretch*, and a blur with no picture over it, cannot be
+  moved.
 - **Shape** — *Screen-shaped* keeps paintings close to your main display's
   proportions; *Near square* also allows squarer ones.
 - **Origin** and **Subject** (landscape, seascape, still life) — pick any number

@@ -1,8 +1,16 @@
 package dev.artwindow
 
 import android.content.Context
+import android.util.Log
 import java.io.File
 import java.time.LocalDate
+
+/**
+ * The one preferences file this app keeps. [State] and [WallpaperPreferencesStore] both
+ * write into it, each under keys of its own, so neither may clear the file, and a
+ * new key in either has to be one the other does not use.
+ */
+internal const val PREFS_NAME = "art_window"
 
 /**
  * What survives the process: the day the last picture settled on, the picture fetched
@@ -35,7 +43,7 @@ class State(context: Context) {
             putLong(KEY_SETTLED_DAY, today.toEpochDay())
             putArtwork("", artwork)
             putArtwork(SHOWN_PREFIX, artwork)
-        }.commit()
+        }.commit().also(::noteIfLost)
     }
 
     /** Records a hand-picked picture without replacing the source picture for the day. */
@@ -43,7 +51,16 @@ class State(context: Context) {
         prefs.edit().apply {
             if (isDue(today)) putLong(KEY_SETTLED_DAY, today.toEpochDay())
             putArtwork(SHOWN_PREFIX, artwork)
-        }.commit()
+        }.commit().also(::noteIfLost)
+    }
+
+    /**
+     * A write that did not reach the disk leaves the day looking owed, or the old picture
+     * looking shown, at the next launch. Nothing here can put that right, so it is said
+     * where a later puzzle can be traced back to it.
+     */
+    private fun noteIfLost(written: Boolean) {
+        if (!written) Log.w(LOG_TAG, "recording the picture failed; the last state stands")
     }
 
     private fun readArtwork(prefix: String): Artwork? {
@@ -68,7 +85,6 @@ class State(context: Context) {
     }
 
     private companion object {
-        const val PREFS_NAME = "art_window"
         const val KEY_SETTLED_DAY = "settled_day"
         const val KEY_TITLE = "title"
         const val KEY_BYLINE = "byline"

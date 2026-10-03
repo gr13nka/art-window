@@ -143,13 +143,30 @@ impl Config {
 
 impl State {
     pub fn load(path: &Path) -> Self {
-        // State is a convenience, not a record of consequence. If it is missing or
-        // corrupt the worst outcome is repeating a painting, so start fresh rather
-        // than refusing to run.
-        std::fs::read_to_string(path)
-            .ok()
-            .and_then(|t| serde_json::from_str(&t).ok())
-            .unwrap_or_default()
+        // Starting fresh rather than refusing to run: a painting may come round
+        // again and the meeting backgrounds are switched off until asked for again,
+        // neither of which is worth a program that will not start. Missing is the
+        // ordinary first run; unreadable is said aloud, because the next save writes
+        // over the only evidence of it.
+        let text = match std::fs::read_to_string(path) {
+            Ok(text) => text,
+            Err(e) => {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    eprintln!(
+                        "art-window: reading {}: {e}; starting fresh",
+                        path.display()
+                    );
+                }
+                return Self::default();
+            }
+        };
+        serde_json::from_str(&text).unwrap_or_else(|e| {
+            eprintln!(
+                "art-window: {} will not parse ({e}); starting fresh",
+                path.display()
+            );
+            Self::default()
+        })
     }
 
     /// Records `artwork` as the picture of the day, fresh from the rotation.
@@ -194,11 +211,29 @@ impl State {
         self.save(path)
     }
 
+    /// Written beside itself and renamed into place, so a crash or a full disk
+    /// part-way through leaves the last good file rather than half of a new one —
+    /// which [`State::load`] would read as no state at all.
+    /// The day's own picture, when there is a way back to it: one was fetched, the
+    /// desktop is showing something else, and the file is still there.
+    ///
+    /// The file is checked for because a source can be changed, or a cache emptied,
+    /// between the picture being fetched and anyone asking for it again; an offer
+    /// that can only fail is worse than no offer.
+    pub fn way_back(&self) -> Option<&Artwork> {
+        self.fetched
+            .as_ref()
+            .filter(|art| Some(&art.path) != self.shown.as_ref().map(|shown| &shown.path))
+            .filter(|art| art.path.exists())
+    }
+
     fn save(&self, path: &Path) -> Result<()> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        std::fs::write(path, serde_json::to_string_pretty(self)?)
+        let unfinished = path.with_extension("json.tmp");
+        std::fs::write(&unfinished, serde_json::to_string_pretty(self)?)
+            .and_then(|()| std::fs::rename(&unfinished, path))
             .with_context(|| format!("writing {}", path.display()))
     }
 
@@ -226,4 +261,44 @@ pub(crate) fn now_secs() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("art-window-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn saving_replaces_the_file_whole_and_leaves_nothing_beside_it() {
+        let dir = scratch("state-save");
+        let path = dir.join("state.json");
+        std::fs::write(&path, "left over from before").unwrap();
+
+        let mut state = State::default();
+        state.record_backdrop(App::ZoomUs, None, &path).unwrap();
+
+        assert!(serde_json::from_str::<State>(&std::fs::read_to_string(&path).unwrap()).is_ok());
+        let left: Vec<_> = std::fs::read_dir(&dir).unwrap().flatten().collect();
+        assert_eq!(left.len(), 1, "only state.json should remain");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_missing_or_unreadable_state_starts_fresh() {
+        let dir = scratch("state-load");
+        let path = dir.join("state.json");
+        assert!(State::load(&path).is_due());
+
+        std::fs::write(&path, "{ \"shown\": ").unwrap();
+        let state = State::load(&path);
+        assert!(state.shown.is_none());
+        assert!(state.backdrops.is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }

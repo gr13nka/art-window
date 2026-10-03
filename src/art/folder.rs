@@ -79,5 +79,5 @@ impl Source for Folder {
 
     /// Nothing. This source writes no files, so it owns none to throw away — and a
     /// folder of the user's own pictures is the last place to go deleting things.
-    fn discard_all_but(&self, _keep: &Path) {}
+    fn discard_all_but(&self, _keep: Option<&Path>) {}
 }

@@ -12,7 +12,7 @@
 use super::{Control, Pending, Pick, Snapshot, StyleKind, Tab};
 use crate::art::Artwork;
 use crate::favourites::Favourites;
-use crate::settings::{BlurVariant, Border};
+use crate::settings::Border;
 use anyhow::{anyhow, Result};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, NSObject};
@@ -916,6 +916,14 @@ const PREVIEW_MIN: f64 = 300.0;
 const PREVIEW_MAX: f64 = 560.0;
 /// Breathing room under the preview, matching its top and side margins.
 const PREVIEW_BOTTOM: f64 = OUTER;
+/// The line under the preview that says it can be framed. Always reserved, shown or
+/// not, so the card does not jump when a style that cannot be framed is chosen.
+const HINT_H: f64 = 20.0;
+/// How far a scroll moves the zoom, per point of a trackpad's fine deltas and per
+/// notch of a wheel's coarse ones. A wheel reports whole lines, so it needs the
+/// larger step to feel like the same gesture.
+const ZOOM_PER_POINT: f64 = 0.01;
+const ZOOM_PER_NOTCH: f64 = 0.08;
 /// The air on either side of the line between two sections.
 const SECTION_GAP: f64 = OUTER;
 /// Between one row and the next, and between a section's title and its first row.
@@ -1212,11 +1220,41 @@ impl Pane {
     }
 }
 
+/// What the person did to the preview, in points: `dx`, `dy` and the zoom's centre
+/// are measured from the card's top left with y growing downwards, and `width` is
+/// the card's drawn width, which is the scale the model needs to turn them into a
+/// framing.
+#[derive(Clone, Copy)]
+enum Gesture {
+    Drag {
+        dx: f64,
+        dy: f64,
+        width: f64,
+    },
+    Zoom {
+        factor: f64,
+        x: f64,
+        y: f64,
+        width: f64,
+    },
+}
+
+type Report = Rc<dyn Fn(Gesture)>;
+
 struct CanvasIvars {
     image: RefCell<Option<Retained<NSImage>>>,
     /// How wide the card is drawn; the picture is scaled down to it.
     card_w: Cell<f64>,
     none_yet: Retained<NSTextField>,
+    hint: Retained<NSTextField>,
+    /// Whether the model can frame the picture at all. When it cannot, a scroll over
+    /// the preview belongs to whatever it scrolled before.
+    framing: Cell<bool>,
+    /// Where the pointer was at the last drag event, while a drag that began on the
+    /// card is under way. The view has no handle to the tab, so it reports through
+    /// this hook like `Pane` does.
+    dragging: Cell<Option<NSPoint>>,
+    on_gesture: RefCell<Option<Report>>,
 }
 
 define_class!(
@@ -1227,6 +1265,66 @@ define_class!(
     struct Canvas;
 
     impl Canvas {
+        /// A drag starts on the first click, as on the shelf: the window is hardly
+        /// ever the active one.
+        #[unsafe(method(acceptsFirstMouse:))]
+        fn accepts_first_mouse(&self, _event: Option<&NSEvent>) -> bool {
+            true
+        }
+
+        #[unsafe(method(mouseDown:))]
+        fn mouse_down(&self, event: &NSEvent) {
+            let at = self.convertPoint_fromView(event.locationInWindow(), None);
+            let on_card = self.over_card(at);
+            self.ivars().dragging.set(on_card.then_some(at));
+        }
+
+        #[unsafe(method(mouseDragged:))]
+        fn mouse_dragged(&self, event: &NSEvent) {
+            let Some(last) = self.ivars().dragging.get() else {
+                return;
+            };
+            let at = self.convertPoint_fromView(event.locationInWindow(), None);
+            self.ivars().dragging.set(Some(at));
+            // The view counts y upwards and the model downwards.
+            self.report(Gesture::Drag {
+                dx: at.x - last.x,
+                dy: last.y - at.y,
+                width: self.ivars().card_w.get(),
+            });
+        }
+
+        #[unsafe(method(mouseUp:))]
+        fn mouse_up(&self, _event: &NSEvent) {
+            self.ivars().dragging.set(None);
+        }
+
+        #[unsafe(method(scrollWheel:))]
+        fn scroll_wheel(&self, event: &NSEvent) {
+            let at = self.convertPoint_fromView(event.locationInWindow(), None);
+            if !self.ivars().framing.get() || !self.over_card(at) {
+                // Not ours: the column or the window scrolls as it always did.
+                let _: () = unsafe { msg_send![super(self), scrollWheel: event] };
+                return;
+            }
+            let step = if event.hasPreciseScrollingDeltas() {
+                ZOOM_PER_POINT
+            } else {
+                ZOOM_PER_NOTCH
+            };
+            self.zoom(at, (event.scrollingDeltaY() * step).exp());
+        }
+
+        #[unsafe(method(magnifyWithEvent:))]
+        fn magnify(&self, event: &NSEvent) {
+            let at = self.convertPoint_fromView(event.locationInWindow(), None);
+            if !self.ivars().framing.get() || !self.over_card(at) {
+                let _: () = unsafe { msg_send![super(self), magnifyWithEvent: event] };
+                return;
+            }
+            self.zoom(at, 1.0 + event.magnification());
+        }
+
         #[unsafe(method(drawRect:))]
         fn draw_rect(&self, _dirty: NSRect) {
             let card = self.card();
@@ -1271,31 +1369,75 @@ impl Canvas {
     fn new(mtm: MainThreadMarker) -> Retained<Self> {
         let none_yet = text_label(mtm, "No picture yet", 13.0, 0.0, Tone::Muted);
         none_yet.setAlignment(NSTextAlignment::Center);
+        let hint = text_label(mtm, "", 12.0, 0.0, Tone::Muted);
+        hint.setHidden(true);
         let this = Self::alloc(mtm).set_ivars(CanvasIvars {
             image: RefCell::new(None),
             card_w: Cell::new(PREVIEW_MIN),
             none_yet,
+            hint,
+            framing: Cell::new(false),
+            dragging: Cell::new(None),
+            on_gesture: RefCell::new(None),
         });
         let canvas: Retained<Self> = unsafe { msg_send![super(this), initWithFrame: NSRect::ZERO] };
         canvas.addSubview(&canvas.ivars().none_yet);
+        canvas.addSubview(&canvas.ivars().hint);
         canvas
+    }
+
+    fn over_card(&self, at: NSPoint) -> bool {
+        let card = self.card();
+        at.x >= card.origin.x
+            && at.x <= card.origin.x + card.size.width
+            && at.y >= card.origin.y
+            && at.y <= card.origin.y + card.size.height
+    }
+
+    fn report(&self, gesture: Gesture) {
+        let hook = self.ivars().on_gesture.borrow().clone();
+        if let Some(hook) = hook {
+            hook(gesture);
+        }
+    }
+
+    /// Zooms about `at`, a point of this view, which the model wants from the
+    /// card's top left.
+    fn zoom(&self, at: NSPoint, factor: f64) {
+        let card = self.card();
+        self.report(Gesture::Zoom {
+            factor,
+            x: at.x - card.origin.x,
+            y: card.origin.y + card.size.height - at.y,
+            width: card.size.width,
+        });
+    }
+
+    /// Says whether the picture can be framed, and the line that tells the person so.
+    fn set_framing(&self, can_frame: bool, hint: Option<&str>) {
+        self.ivars().framing.set(can_frame);
+        let hint_view = &self.ivars().hint;
+        hint_view.setHidden(hint.is_none());
+        if let Some(hint) = hint {
+            hint_view.setStringValue(&NSString::from_str(hint));
+        }
     }
 
     /// Where the card itself sits in the view.
     fn card(&self) -> NSRect {
         let height = self.bounds().size.height;
         NSRect::new(
-            NSPoint::new(OUTER, PREVIEW_BOTTOM),
+            NSPoint::new(OUTER, PREVIEW_BOTTOM + HINT_H),
             NSSize::new(
                 self.ivars().card_w.get(),
-                (height - OUTER - PREVIEW_BOTTOM).max(0.0),
+                (height - OUTER - PREVIEW_BOTTOM - HINT_H).max(0.0),
             ),
         )
     }
 
     /// Sizes the view to a card of `card` size, hung from the top of `above`.
     fn place(&self, above: f64, card: NSSize) {
-        let total = OUTER + card.height + PREVIEW_BOTTOM;
+        let total = OUTER + card.height + HINT_H + PREVIEW_BOTTOM;
         self.ivars().card_w.set(card.width);
         self.setFrame(NSRect::new(
             NSPoint::new(0.0, above - total),
@@ -1310,6 +1452,10 @@ impl Canvas {
                 card.origin.y + (card.size.height - line) / 2.0,
             ),
             NSSize::new(card.size.width, line),
+        ));
+        self.ivars().hint.setFrame(NSRect::new(
+            NSPoint::new(card.origin.x, PREVIEW_BOTTOM),
+            NSSize::new(card.size.width, 16.0),
         ));
         self.setNeedsDisplay(true);
     }
@@ -1842,6 +1988,20 @@ impl Ui {
                 ui.arrange();
             }
         }));
+        let weak = Rc::downgrade(&ui);
+        *ui.canvas.ivars().on_gesture.borrow_mut() = Some(Rc::new(move |gesture| {
+            if let Some(ui) = weak.upgrade() {
+                ui.change_light(|p| match gesture {
+                    Gesture::Drag { dx, dy, width } => p.drag(dx, dy, width),
+                    Gesture::Zoom {
+                        factor,
+                        x,
+                        y,
+                        width,
+                    } => p.zoom_about(factor, x, y, width),
+                });
+            }
+        }));
         ui.rebuild();
         ui
     }
@@ -1929,7 +2089,7 @@ impl Ui {
             .artist_cards()
             .into_iter()
             .map(|card| Card {
-                key: card.art.title.clone(),
+                key: card.name,
                 art: card.art,
                 chosen: card.selected,
                 blocked: card.disabled_reason,
@@ -1942,7 +2102,7 @@ impl Ui {
     fn adopt(self: &Rc<Self>, snapshot: &Snapshot) {
         {
             let mut pending = self.pending.borrow_mut();
-            pending.keep_pictures_in(&snapshot.pictures);
+            pending.unpack_artists_into(&snapshot.artist_pictures);
             pending.adopt(&snapshot.settings, snapshot.filters_apply, snapshot.aspect);
             pending.set_picture(snapshot.shown.as_ref().map(|art| art.path.as_path()));
         }
@@ -2120,29 +2280,21 @@ impl Ui {
         match p.style_kind() {
             StyleKind::Borders => {
                 let border = p.border();
-                blocks.push(self.row(
-                    "Borders",
-                    vec![
-                        self.chip("Black", border == Border::Black, None, |ui| {
-                            ui.change(|p| p.set_border(Border::Black))
-                        }),
-                        self.chip("Automatic", border == Border::Auto, None, |ui| {
-                            ui.change(|p| p.set_border(Border::Auto))
-                        }),
-                        self.chip(
-                            "Custom",
-                            matches!(border, Border::Custom { .. }),
-                            None,
-                            |ui| {
-                                ui.change(|p| {
-                                    let rgb = p.custom_colour();
-                                    p.set_border(Border::Custom { rgb })
+                blocks.push(
+                    self.row(
+                        "Borders",
+                        p.border_chips()
+                            .into_iter()
+                            .map(|c| {
+                                let border = c.value;
+                                self.chip(&c.label, c.selected, None, move |ui| {
+                                    ui.change(|p| p.set_border(border))
                                 })
-                            },
-                        ),
-                    ],
-                    true,
-                ));
+                            })
+                            .collect(),
+                        true,
+                    ),
+                );
                 if matches!(border, Border::Custom { .. }) {
                     let [r, g, b] = p.custom_colour();
                     let well = NSColorWell::initWithFrame(
@@ -2164,25 +2316,22 @@ impl Ui {
                 }
             }
             StyleKind::Blur => {
-                let (variant, strength) = p.blur();
-                blocks.push(self.row(
-                    "Mode",
-                    vec![
-                        self.chip(
-                            "Behind the picture",
-                            variant == BlurVariant::Backdrop,
-                            None,
-                            |ui| ui.change(|p| p.set_blur_variant(BlurVariant::Backdrop)),
-                        ),
-                        self.chip(
-                            "Whole picture",
-                            variant == BlurVariant::WholeImage,
-                            None,
-                            |ui| ui.change(|p| p.set_blur_variant(BlurVariant::WholeImage)),
-                        ),
-                    ],
-                    true,
-                ));
+                let (_, strength) = p.blur();
+                blocks.push(
+                    self.row(
+                        "Mode",
+                        p.blur_chips()
+                            .into_iter()
+                            .map(|c| {
+                                let variant = c.value;
+                                self.chip(&c.label, c.selected, None, move |ui| {
+                                    ui.change(|p| p.set_blur_variant(variant))
+                                })
+                            })
+                            .collect(),
+                        true,
+                    ),
+                );
                 let target: &AnyObject = &self.actions;
                 let slider = unsafe {
                     NSSlider::sliderWithValue_minValue_maxValue_target_action(
@@ -2360,7 +2509,7 @@ impl Ui {
         let wide = ((size.width - OUTER * 3.0) / 2.0).clamp(PREVIEW_MIN, PREVIEW_MAX);
         // A tall picture in a short window gives up width rather than reaching
         // down into the bar.
-        let room = (size.height - BAR - 1.0 - OUTER - PREVIEW_BOTTOM).max(1.0);
+        let room = (size.height - BAR - 1.0 - OUTER - HINT_H - PREVIEW_BOTTOM).max(1.0);
         let card_w = wide.min(room * aspect);
         self.canvas
             .place(size.height, NSSize::new(card_w, card_w / aspect));
@@ -2386,6 +2535,7 @@ impl Ui {
             .preview((PREVIEW_MAX * RETINA) as u32)
             .and_then(|pixels| preview_image(&pixels));
         self.canvas.set_image(image);
+        self.canvas.set_framing(p.can_frame(), p.frame_hint());
         self.arrange();
 
         self.apply.setEnabled(p.can_apply());

@@ -71,7 +71,7 @@ class TvActivity : ComponentActivity() {
             hide(WindowInsetsCompat.Type.systemBars())
         }
 
-        RotationJob.scheduleDaily(applicationContext)
+        RotationJob.scheduleWatcher(applicationContext)
         if (State(applicationContext).isDue(Day.today())) {
             RotationJob.scheduleNow(applicationContext, force = false)
         }

@@ -583,6 +583,15 @@ struct SettingsView {
     religious: gtk::Switch,
     canvas: gtk::DrawingArea,
     empty: gtk::Label,
+    /// Under the preview while it can be framed, so that dragging it is not a secret.
+    hint: gtk::Label,
+    /// Where the pointer was at the last event of a drag in progress, in the
+    /// canvas's coordinates; the model is told the difference.
+    drag_from: Cell<Option<(f64, f64)>>,
+    /// Owned here because a gesture is released with its last reference. Its scale
+    /// counts from where the pinch began, so the previous one is kept to difference.
+    pinch: gtk::GestureZoom,
+    pinch_scale: Cell<f64>,
     surface: Rc<RefCell<Option<gtk::cairo::Surface>>>,
     note: gtk::Label,
     apply: gtk::Button,
@@ -613,7 +622,7 @@ impl SettingsView {
         add_class(&card, "aw-previewcard");
         card.set_valign(gtk::Align::Start);
         card.set_margin_top(12);
-        card.set_margin_bottom(30);
+        card.set_margin_bottom(8);
         card.set_margin_start(12);
         card.set_margin_end(12);
         let canvas = gtk::DrawingArea::new();
@@ -625,7 +634,29 @@ impl SettingsView {
         overlay.add_overlay(&empty);
         overlay.set_overlay_pass_through(&empty, true);
         card.pack_start(&overlay, false, false, 0);
-        rows.pack_start(&card, false, false, 0);
+        // The hint sits under the card, in the room the card's margin leaves for
+        // its shadow. `no_show_all` because `show_all` would otherwise reveal it
+        // while there is nothing to say.
+        let hint = gtk::Label::new(None);
+        add_class(&hint, "aw-secondary");
+        hint.set_margin_bottom(22);
+        hint.set_no_show_all(true);
+        hint.set_visible(false);
+        let left = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        left.set_valign(gtk::Align::Start);
+        left.pack_start(&card, false, false, 0);
+        left.pack_start(&hint, false, false, 0);
+        rows.pack_start(&left, false, false, 0);
+        canvas.add_events(
+            gdk::EventMask::BUTTON_PRESS_MASK
+                | gdk::EventMask::BUTTON_RELEASE_MASK
+                | gdk::EventMask::BUTTON1_MOTION_MASK
+                | gdk::EventMask::SCROLL_MASK
+                | gdk::EventMask::SMOOTH_SCROLL_MASK
+                | gdk::EventMask::TOUCH_MASK
+                | gdk::EventMask::TOUCHPAD_GESTURE_MASK,
+        );
+        let pinch = gtk::GestureZoom::new(&canvas);
 
         let surface = Rc::new(RefCell::new(None::<gtk::cairo::Surface>));
         let drawn = surface.clone();
@@ -756,6 +787,10 @@ impl SettingsView {
             religious,
             canvas,
             empty,
+            hint,
+            drag_from: Cell::new(None),
+            pinch,
+            pinch_scale: Cell::new(1.0),
             surface,
             note,
             apply,
@@ -817,6 +852,8 @@ impl SettingsView {
             }),
         );
 
+        self.connect_framing();
+
         let weak = Rc::downgrade(self);
         self.apply.connect_clicked(move |_| {
             if let Some(view) = weak.upgrade() {
@@ -826,10 +863,97 @@ impl SettingsView {
         });
     }
 
+    /// Dragging, scrolling and pinching the preview. Raw input goes to [`Pending`],
+    /// which decides whether there is anything to frame and how far it may move;
+    /// each event the model could use is stopped here so that it does not also
+    /// scroll the page behind the preview.
+    fn connect_framing(self: &Rc<Self>) {
+        let weak = Rc::downgrade(self);
+        self.canvas.connect_button_press_event(move |_, event| {
+            let Some(view) = weak.upgrade() else {
+                return glib::Propagation::Proceed;
+            };
+            let can_frame = view.pending.borrow().can_frame();
+            if event.button() != 1 || !can_frame {
+                return glib::Propagation::Proceed;
+            }
+            view.drag_from.set(Some(event.position()));
+            glib::Propagation::Stop
+        });
+        let weak = Rc::downgrade(self);
+        self.canvas
+            .connect_motion_notify_event(move |canvas, event| {
+                let Some(view) = weak.upgrade() else {
+                    return glib::Propagation::Proceed;
+                };
+                let Some((from_x, from_y)) = view.drag_from.get() else {
+                    return glib::Propagation::Proceed;
+                };
+                let (x, y) = event.position();
+                view.drag_from.set(Some((x, y)));
+                let width = canvas.allocated_width() as f64;
+                view.pending
+                    .borrow_mut()
+                    .drag(x - from_x, y - from_y, width);
+                view.redraw(Redraw::Light);
+                glib::Propagation::Stop
+            });
+        let weak = Rc::downgrade(self);
+        self.canvas.connect_button_release_event(move |_, _| {
+            if let Some(view) = weak.upgrade() {
+                view.drag_from.set(None);
+            }
+            glib::Propagation::Proceed
+        });
+
+        let weak = Rc::downgrade(self);
+        self.canvas.connect_scroll_event(move |_, event| {
+            let Some(view) = weak.upgrade() else {
+                return glib::Propagation::Proceed;
+            };
+            let can_frame = view.pending.borrow().can_frame();
+            let factor = match event.direction() {
+                gdk::ScrollDirection::Up => 1.1,
+                gdk::ScrollDirection::Down => 1.0 / 1.1,
+                gdk::ScrollDirection::Smooth => (-event.delta().1 * 0.1).exp(),
+                _ => return glib::Propagation::Proceed,
+            };
+            if !can_frame {
+                return glib::Propagation::Proceed;
+            }
+            let (x, y) = event.position();
+            view.zoom_preview(factor, x, y);
+            glib::Propagation::Stop
+        });
+
+        let weak = Rc::downgrade(self);
+        self.pinch.connect_begin(move |_, _| {
+            if let Some(view) = weak.upgrade() {
+                view.pinch_scale.set(1.0);
+            }
+        });
+        let weak = Rc::downgrade(self);
+        self.pinch.connect_scale_changed(move |gesture, scale| {
+            if let Some(view) = weak.upgrade() {
+                let (x, y) = gesture.bounding_box_center().unwrap_or_default();
+                let factor = scale / view.pinch_scale.replace(scale);
+                view.zoom_preview(factor, x, y);
+            }
+        });
+    }
+
+    /// `(x, y)` is where the pointer was on the canvas, which is where the model
+    /// measures from.
+    fn zoom_preview(self: &Rc<Self>, factor: f64, x: f64, y: f64) {
+        let width = self.canvas.allocated_width() as f64;
+        self.pending.borrow_mut().zoom_about(factor, x, y, width);
+        self.redraw(Redraw::Light);
+    }
+
     fn describe(self: &Rc<Self>, snapshot: &Snapshot) {
         {
             let mut pending = self.pending.borrow_mut();
-            pending.keep_pictures_in(&snapshot.pictures);
+            pending.unpack_artists_into(&snapshot.artist_pictures);
             pending.adopt(&snapshot.settings, snapshot.filters_apply, snapshot.aspect);
             pending.set_picture(snapshot.shown.as_ref().map(|art| art.path.as_path()));
         }
@@ -845,6 +969,9 @@ impl SettingsView {
         }
         self.apply.set_sensitive(pending.can_apply());
         self.note.set_text(&pending.note().unwrap_or_default());
+        let hint = pending.frame_hint();
+        self.hint.set_text(hint.unwrap_or_default());
+        self.hint.set_visible(hint.is_some());
         if matches!(what, Redraw::Light) {
             return;
         }
@@ -853,8 +980,9 @@ impl SettingsView {
         self.updating.set(true);
         self.religious.set_active(pending.hide_religious());
         self.updating.set(false);
-        let (border, (variant, strength), custom) =
+        let (border, (_, strength), custom) =
             (pending.border(), pending.blur(), pending.custom_colour());
+        let (borders, blurs) = (pending.border_chips(), pending.blur_chips());
         let (shapes, regions, subjects, artists) = (
             pending.shapes(),
             pending.regions(),
@@ -863,7 +991,7 @@ impl SettingsView {
         );
         drop(pending);
 
-        self.rebuild_style_options(kind, border, variant, strength, custom);
+        self.rebuild_style_options(kind, borders, blurs, border, strength, custom);
         self.fill(&self.shapes, shapes, |p, v: &Shape| p.set_shape(*v));
         self.fill(&self.regions, regions, |p, v: &Region| p.toggle_region(*v));
         self.fill(&self.subjects, subjects, |p, v: &Subject| {
@@ -902,7 +1030,7 @@ impl SettingsView {
             .artist_cards()
             .into_iter()
             .map(|card| Card {
-                key: card.art.title.clone(),
+                key: card.name,
                 marked: card.selected,
                 primary: if card.selected { "Remove" } else { "Choose" }.to_owned(),
                 blocked: card.disabled_reason,
@@ -983,8 +1111,9 @@ impl SettingsView {
     fn rebuild_style_options(
         self: &Rc<Self>,
         kind: StyleKind,
+        borders: Vec<Chip<Border>>,
+        blurs: Vec<Chip<BlurVariant>>,
         border: Border,
-        variant: BlurVariant,
         strength: u8,
         custom: [u8; 3],
     ) {
@@ -992,27 +1121,7 @@ impl SettingsView {
         let flow = chip_flow();
         match kind {
             StyleKind::Borders => {
-                let chips = vec![
-                    Chip {
-                        value: Border::Black,
-                        label: "Black".to_owned(),
-                        selected: border == Border::Black,
-                        disabled_reason: None,
-                    },
-                    Chip {
-                        value: Border::Auto,
-                        label: "Automatic".to_owned(),
-                        selected: border == Border::Auto,
-                        disabled_reason: None,
-                    },
-                    Chip {
-                        value: Border::Custom { rgb: custom },
-                        label: "Custom".to_owned(),
-                        selected: matches!(border, Border::Custom { .. }),
-                        disabled_reason: None,
-                    },
-                ];
-                self.fill(&flow, chips, |p, v: &Border| p.set_border(*v));
+                self.fill(&flow, borders, |p, v: &Border| p.set_border(*v));
                 self.style_options.pack_start(&flow, false, false, 0);
                 if matches!(border, Border::Custom { .. }) {
                     let [r, g, b] = custom.map(|c| c as f64 / 255.0);
@@ -1033,21 +1142,7 @@ impl SettingsView {
                 }
             }
             StyleKind::Blur => {
-                let chips = vec![
-                    Chip {
-                        value: BlurVariant::Backdrop,
-                        label: "Behind the picture".to_owned(),
-                        selected: variant == BlurVariant::Backdrop,
-                        disabled_reason: None,
-                    },
-                    Chip {
-                        value: BlurVariant::WholeImage,
-                        label: "Whole picture".to_owned(),
-                        selected: variant == BlurVariant::WholeImage,
-                        disabled_reason: None,
-                    },
-                ];
-                self.fill(&flow, chips, |p, v: &BlurVariant| p.set_blur_variant(*v));
+                self.fill(&flow, blurs, |p, v: &BlurVariant| p.set_blur_variant(*v));
                 self.style_options.pack_start(&flow, false, false, 0);
 
                 let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);

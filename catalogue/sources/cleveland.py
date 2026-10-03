@@ -15,19 +15,12 @@ for prose fields (`description`, `did_you_know`) that aren't tags at all.
 from typing import Iterator
 from urllib.parse import urlencode
 
-from .. import geometry, http, regions
+from .. import geometry, http, regions, text
 
 BASE = "https://openaccess-api.clevelandart.org/api/artworks/"
 PAGE_SIZE = 1000
 
 HOST_GAPS = {"openaccess-api.clevelandart.org": 1.0}
-
-
-def _byline(artist: str, date: str) -> str:
-    artist, date = artist.strip(), date.strip()
-    if artist and date:
-        return f"{artist}, {date}"
-    return artist or date
 
 
 def _creator_name(creators: list[dict]) -> str:
@@ -90,7 +83,7 @@ def fetch(
                 "image_url": image_url,
                 "details_url": artwork.get("url") or "",
                 "title": (artwork.get("title") or "").strip() or "Untitled",
-                "byline": _byline(_creator_name(creators), artwork.get("creation_date") or ""),
+                "byline": text.byline(_creator_name(creators), artwork.get("creation_date") or ""),
                 "origin": culture,
                 "tags": [],
             }

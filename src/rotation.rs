@@ -15,7 +15,7 @@
 use crate::art::{self, Artwork, Selection};
 use crate::config::{Config, Paths, State};
 use crate::desktop;
-use crate::settings::Style;
+use crate::settings::Settings;
 use anyhow::{Context, Result};
 use std::path::Path;
 
@@ -48,12 +48,12 @@ pub fn fetch(
 /// requires it.
 pub fn show(
     artwork: &Artwork,
-    style: &Style,
+    settings: &Settings,
     config: &Config,
     paths: &Paths,
     state: &mut State,
 ) -> Result<desktop::Pinned> {
-    let pinned = desktop::pin(&artwork.path, style, &paths.cache)?;
+    let pinned = hang(artwork, settings, paths)?;
     state.record_fetched(artwork, &paths.state)?;
     sweep(config, paths, state);
     Ok(pinned)
@@ -70,15 +70,26 @@ pub fn show(
 /// requires it.
 pub fn revisit(
     artwork: &Artwork,
-    style: &Style,
+    settings: &Settings,
     config: &Config,
     paths: &Paths,
     state: &mut State,
 ) -> Result<desktop::Pinned> {
-    let pinned = desktop::pin(&artwork.path, style, &paths.cache)?;
+    let pinned = hang(artwork, settings, paths)?;
     state.record_chosen(artwork, &paths.state)?;
     sweep(config, paths, state);
     Ok(pinned)
+}
+
+/// Hangs `artwork` the way the settings say: their style and their framing, and
+/// nothing of their filters, which chose the picture and have no say in placing it.
+fn hang(artwork: &Artwork, settings: &Settings, paths: &Paths) -> Result<desktop::Pinned> {
+    desktop::pin(
+        &artwork.path,
+        &settings.style,
+        &settings.framing,
+        &paths.cache,
+    )
 }
 
 /// Lets the source clear up after itself, sparing the day's picture.
@@ -93,9 +104,6 @@ pub fn revisit(
 /// another thread. Clearing up is its own business either way: it is the only thing
 /// that knows which files in the cache are its doing.
 fn sweep(config: &Config, paths: &Paths, state: &State) {
-    let todays = state
-        .fetched
-        .as_ref()
-        .map_or(Path::new(""), |art| art.path.as_path());
+    let todays = state.fetched.as_ref().map(|art| art.path.as_path());
     art::source_for(&config.source, &paths.cache, &Selection::default()).discard_all_but(todays);
 }

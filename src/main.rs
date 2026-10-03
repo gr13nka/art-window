@@ -27,15 +27,15 @@ use anyhow::Result;
 use config::{Config, Paths, State};
 
 fn main() -> Result<()> {
-    let mut mode = Mode::Tray;
+    let mut mode = RunMode::Tray;
     for arg in std::env::args().skip(1) {
         match arg.as_str() {
-            "--once" => mode = Mode::Once { only_if_due: false },
-            "--if-due" => mode = Mode::Once { only_if_due: true },
-            "--where" => mode = Mode::Where,
-            "--check" => mode = Mode::Check,
-            "--quit" => mode = Mode::Quit,
-            "--catalogue" => mode = Mode::Catalogue,
+            "--once" => mode = RunMode::Once { only_if_due: false },
+            "--if-due" => mode = RunMode::Once { only_if_due: true },
+            "--where" => mode = RunMode::Where,
+            "--check" => mode = RunMode::Check,
+            "--quit" => mode = RunMode::Quit,
+            "--catalogue" => mode = RunMode::Catalogue,
             "--help" | "-h" => {
                 usage();
                 return Ok(());
@@ -45,11 +45,11 @@ fn main() -> Result<()> {
     }
 
     #[cfg(windows)]
-    if !matches!(mode, Mode::Tray) {
+    if !matches!(mode, RunMode::Tray) {
         desktop::attach_console();
     }
 
-    if let Mode::Catalogue = mode {
+    if let RunMode::Catalogue = mode {
         // 16:10 rather than the screen's own shape: this mode must run without a
         // display, from a build script, and a fixed answer is comparable between
         // runs and machines.
@@ -57,7 +57,7 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    if let Mode::Quit = mode {
+    if let RunMode::Quit = mode {
         #[cfg(any(target_os = "linux", windows))]
         return desktop::quit_running();
         #[cfg(target_os = "macos")]
@@ -67,7 +67,7 @@ fn main() -> Result<()> {
     let paths = Paths::locate()?;
     Config::write_default_if_absent(&paths.config)?;
 
-    if let Mode::Where = mode {
+    if let RunMode::Where = mode {
         println!("config  {}", paths.config.display());
         println!("state   {}", paths.state.display());
         println!("choices {}", paths.settings.display());
@@ -84,7 +84,7 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    if let Mode::Check = mode {
+    if let RunMode::Check = mode {
         #[cfg(target_os = "linux")]
         {
             let state = State::load(&paths.state);
@@ -98,17 +98,17 @@ fn main() -> Result<()> {
     let mut state = State::load(&paths.state);
 
     match mode {
-        Mode::Where => unreachable!("handled above, before the config is read"),
-        Mode::Check => unreachable!("handled above, before the config is read"),
-        Mode::Quit => unreachable!("handled above, before paths are located"),
-        Mode::Catalogue => unreachable!("handled above, before paths are located"),
-        Mode::Tray => {
+        RunMode::Where => unreachable!("handled above, before the config is read"),
+        RunMode::Check => unreachable!("handled above, before the config is read"),
+        RunMode::Quit => unreachable!("handled above, before paths are located"),
+        RunMode::Catalogue => unreachable!("handled above, before paths are located"),
+        RunMode::Tray => {
             #[cfg(windows)]
             desktop::log_to(&paths.state.with_file_name("art-window.log"));
             let settings = settings::Settings::load(&paths.settings);
             tray::run(paths, config, settings, state)
         }
-        Mode::Once { only_if_due } => {
+        RunMode::Once { only_if_due } => {
             if only_if_due && !state.is_due() {
                 return Ok(());
             }
@@ -118,7 +118,7 @@ fn main() -> Result<()> {
                 screen_aspect: desktop::primary_aspect(),
             };
             let artwork = rotation::fetch(&config, &state, &paths.cache, &selection)?;
-            let pinned = rotation::show(&artwork, &settings.style, &config, &paths, &mut state)?;
+            let pinned = rotation::show(&artwork, &settings, &config, &paths, &mut state)?;
             // A one-shot command has no next redraw to wait for and nobody to
             // surprise: whoever typed it is watching a terminal and asked for the
             // wallpaper to change now. See `desktop::catch_up`.
@@ -139,7 +139,7 @@ fn main() -> Result<()> {
     }
 }
 
-enum Mode {
+enum RunMode {
     /// Live in the desktop session and rotate on a schedule.
     Tray,
     /// Rotate once and report, for a terminal or a script.

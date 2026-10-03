@@ -38,7 +38,7 @@ enum class ArtworkShape {
     }
 }
 
-enum class ArtworkRegion(val apiName: String) {
+enum class ArtworkRegion(val label: String) {
     EUROPE("Europe"),
     ASIA("Asia"),
     AFRICA("Africa"),
@@ -169,7 +169,6 @@ class WallpaperPreferencesStore(context: Context) {
         .commit()
 
     private companion object {
-        const val PREFS_NAME = "art_window"
         const val KEY_STYLE = "wallpaper_style"
         const val KEY_SHAPE = "artwork_shape"
         const val KEY_BLUR_VARIANT = "blur_variant"

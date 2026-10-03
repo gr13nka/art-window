@@ -43,11 +43,18 @@ on Windows (see `docs/windows-wallpaper.md`).
 
 Windows cannot be run from the development Mac, but it can be type-checked there:
 `rustup target add x86_64-pc-windows-msvc`, then `cargo check --target
-x86_64-pc-windows-msvc` using rustup's cargo rather than Homebrew's. `ring` needs
+x86_64-pc-windows-msvc` using rustup's cargo rather than Homebrew's — which means
+`~/.cargo/bin` first on `PATH`, not merely calling that `cargo` by its path: it
+finds `rustc` on `PATH`, and Homebrew's has no Windows `core` to offer. `ring` needs
 LLVM's `clang-cl` (`CC_x86_64_pc_windows_msvc=clang-cl`), plus stub `assert.h`,
 `string.h` and `stdlib.h` headers on `CFLAGS_x86_64_pc_windows_msvc`, because no
 MSVC CRT headers are installed. `build.rs` embeds the icon and manifest only on a
-Windows host.
+Windows host. `cargo clippy` takes the same target and environment, and a
+`CARGO_TARGET_DIR` of its own keeps it from fighting the host build for the lock.
+
+Neither Mac runs Docker, so `./linux/check-container.sh` cannot be run from
+either and the GNOME code is first compiled by CI's Linux job. Android and iOS
+build on `ios_macmini` through `./remote.sh` and `./ios/remote.sh`.
 
 The menu can be driven from a script, up to a point. Open it with
 
@@ -146,6 +153,7 @@ it before touching `src/desktop/macos/wallpaper.rs`.
   `cooling_off` included.
 - **Every failure path must set `cooling_off`.** The day is marked done only on
   success, so an error with no cooling-off period retries instantly and forever.
+  In the tray that is `Schedule::failed`.
 - **`state.last_success` advances only when the day is actually settled.** A failed
   network call must not consume the day; the next run retries. Two methods may move
   it and no others: `State::record_fetched` always, because a picture arrived, and
@@ -221,8 +229,12 @@ it before touching `src/desktop/macos/wallpaper.rs`.
 - **Only the tail of the event loop starts a fetch.** A click cannot spawn one where
   it is answered — the tail is what decides whether the loop then waits, holds or
   ticks, and a worker started behind its back leaves it deciding against a stale
-  `fetching`. So *Next picture* raises `asked_for_next` and the tail reads it,
-  jumping both the cooling-off period and the schedule. The row is greyed while a
+  `fetching`. `tray::Schedule` holds that state — `fetching`, `cooling_off`,
+  `superseded`, `asked_for_next` — and its `step` is the one question the tail
+  asks; the arms above only tell it what happened. So *Next picture* raises
+  `asked_for_next` and the tail reads it, jumping both the cooling-off period and
+  the schedule, and a request made while a download is in the air is spent rather
+  than kept for later. The row is greyed while a
   download is in the air rather than the request being queued: two workers racing
   for the desktop would leave the loser writing into a cache the sweep had already
   been run for.
@@ -292,14 +304,23 @@ it before touching `src/desktop/macos/wallpaper.rs`.
   a portrait screen itself, so a stale preference cannot turn a picture on a TV
   or an iPad's square canvas. The in-app picture, thumbnails and the iOS widget
   stay upright.
-- **Framing on a phone is numbers, and one geometry reads them.** Pinch and drag
-  on the Settings preview set a zoom (1 to 3, a style option that outlives the
-  painting) and a pan per axis (0 to 1, belonging to the one painting named
-  beside it, so the next painting is centred with nobody resetting anything).
-  `Screen.frame` on Android and `Framing.rect` on iOS place the painting for the
-  renderer at screen size and for the preview at its own, which is the only reason
-  the two agree. The preview is a static backdrop with the sharp painting drawn
-  over it, so a gesture redraws and never re-renders. Three things were learnt the
+- **Framing is numbers, and one geometry reads them.** Pinch and drag on a
+  phone's Settings preview — drag and scroll on the desktop's — set a zoom (1 to
+  3, a style option that outlives the painting) and a pan per axis (0 to 1,
+  belonging to the one painting named beside it, so the next painting is centred
+  with nobody resetting anything). `Screen.frame` on Android, `Framing.rect` on
+  iOS and `placement::frame` on the desktop place the painting for the renderer
+  at screen size and for the preview at its own, which is the only reason the two
+  agree; the three are copies kept in step by the same test cases, like the word
+  lists. Zoom, Borders and Blur behind the picture can be framed; Stretch and a
+  blur of the whole picture have no sharp picture to move. Android ignores
+  framing on a landscape screen, which is its TV; the desktop is always one and
+  frames regardless. On the desktop the gestures are `Pending::drag` and
+  `zoom_about`, the pan is read only through `Framing::for_painting`, and a
+  framed painting is composed like a blur — see the pixel rule below. On a
+  phone the preview is a static backdrop with the sharp painting drawn over it,
+  so a gesture redraws and never re-renders; the desktop re-renders a small
+  copy, with the blurred backdrop kept between steps. Three things were learnt the
   hard way on Android: re-rendering the preview per touch event lurches; starting
   each event from the position rounded to a pixel loses a slow drag in one
   direction; and the event that lifts the last finger has an unspecified centroid,
@@ -320,7 +341,8 @@ it before touching `src/desktop/macos/wallpaper.rs`.
   settings tab that is the favourites browser again — the same shelf and preview,
   told different words for its two buttons. `Pending::artist_cards` hands each
   painter over as an `Artwork` precisely so that nothing about showing one had to
-  be written a second time. The pictures are `catalogue/dist/artists/`, written by
+  be written a second time; that `Artwork` is for drawing only, and the card's
+  `name` is who was clicked. The pictures are `catalogue/dist/artists/`, written by
   `catalogue/showcase.py` from the `showcase` and `about` in `artists.json` and
   compiled in by `build.rs`; `art::artists::picture` unpacks one into the cache as
   `artist-{slug}.jpg`, because every window makes thumbnails from a path. That
@@ -347,11 +369,19 @@ it before touching `src/desktop/macos/wallpaper.rs`.
   called from `desktop::pin`, translates the style into the OS's own placement —
   fit plus a margin colour, fill, stretch — which is also what keeps mismatched
   monitors right, since each display places the picture itself. It reads pixels
-  for exactly two things: the edge colour of *Automatic* borders, and *Blur*, the
-  one style no desktop offers, composed at the main display's size into
+  for exactly three things: the edge colour of *Automatic* borders; *Blur*, the
+  one style no desktop offers; and a painting framed away from where its style
+  would centre it, since a desktop can crop to the middle but cannot be told
+  which part to show. The last two are composed at the main display's size into
   `rendered-{a,b}.jpg` in the cache (alternating, because macOS caches by path;
   the other is never deleted, because a Space waiting on a redraw may still name
-  it). `placement::Preview` draws the settings tab's preview with the same code.
+  it). `placement::Preview` draws the settings tab's preview through the same
+  geometry, but with a sampler of its own over halved copies of the painting,
+  because it is redrawn for every step of a drag. The release profile is
+  `opt-level = "z"`, and the `image` crate's generic resizing is compiled into
+  this crate at that level whatever the crate itself is built with: a tenth of a
+  second a frame, measured. `image` alone is built at `opt-level = 3`, which is
+  what composing a wallpaper on *Apply* runs on.
   Galleries decode thumbnails through AppKit, GdkPixbuf or the shell and keep one
   full preview plus keyed thumbnails. The panel glyph is still ASCII art in
   `tray.rs`.

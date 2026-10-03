@@ -5,10 +5,14 @@
 //! presence concerned only with what the user asked for, not where it is running.
 
 use crate::placement;
-use crate::settings::Style;
+use crate::settings::{Framing, Style};
 use anyhow::Result;
 use std::path::Path;
 
+/// The GApplication id, and one link in a chain that breaks silently if any of
+/// it is changed alone: the `/dev/artwindow` object path `--quit` calls
+/// (`linux::quit_running`), the autostart file name (`linux/login.rs`), and the
+/// file name, `Icon` and `StartupWMClass` of `linux/dev.artwindow.desktop.in`.
 #[cfg(target_os = "linux")]
 pub const APP_ID: &str = "dev.artwindow";
 #[cfg(target_os = "linux")]
@@ -61,9 +65,10 @@ pub fn catch_up() {
 }
 
 /// Shows `path` on every display placed as `style` says — fitted over coloured
-/// margins, zoomed, stretched, or over a blur of itself — and holds that placement
-/// against the things that would otherwise reset it. A style that needs a picture
-/// composed for it (see [`placement::resolve`]) draws one into `scratch`.
+/// margins, zoomed, stretched, or over a blur of itself — moved about as `framing`
+/// says, and holds that placement against the things that would otherwise reset
+/// it. A picture that has to be composed (see [`placement::resolve`]) is drawn
+/// into `scratch`.
 ///
 /// Re-asserting the placement is deliberately not the caller's job. A caller that
 /// had to remember it would eventually forget, which is exactly the bug this
@@ -75,11 +80,11 @@ pub fn catch_up() {
 /// A backend may require this to run on the main thread. macOS does, because
 /// AppKit will only enumerate displays there; the GNOME backend has no such
 /// affinity.
-pub fn pin(path: &Path, style: &Style, scratch: &Path) -> Result<Pinned> {
+pub fn pin(path: &Path, style: &Style, framing: &Framing, scratch: &Path) -> Result<Pinned> {
     let path = path
         .canonicalize()
         .map_err(|e| anyhow::anyhow!("cannot read artwork at {}: {e}", path.display()))?;
-    let mut hang = placement::resolve(&path, style, primary_screen(), scratch)?;
+    let mut hang = placement::resolve(&path, style, framing, primary_screen(), scratch)?;
     hang.path = hang
         .path
         .canonicalize()

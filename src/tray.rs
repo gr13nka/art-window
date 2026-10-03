@@ -25,14 +25,14 @@
 //! the event loop's own queue, where the main thread hangs it. Nothing is shared
 //! between the two; the worker gets copies and returns a value.
 
-use crate::art::{Artwork, Selection, SourceSpec};
+use crate::art::{Artwork, Selection};
 use crate::backdrop::{App, Backdrop, Slot};
 use crate::config::{now_secs, Config, Paths, State};
 use crate::desktop::{self, Pinned};
 use crate::favourites::Favourites;
 use crate::gallery::{Control, Gallery, Pick, Tab};
 use crate::rotation;
-use crate::settings::{Settings, Style};
+use crate::settings::Settings;
 use crate::wake;
 use anyhow::{anyhow, Result};
 use std::path::{Path, PathBuf};
@@ -87,7 +87,7 @@ const PATIENCE: u32 = 5;
 const SETTLE: Duration = Duration::from_secs(5);
 
 /// Something that needs the main thread's attention.
-enum Wake {
+enum Notice {
     /// A menu item was clicked. Forwarded rather than acted on where it arrives,
     /// because that is one of AppKit's own callbacks and no place to do work.
     Menu(MenuEvent),
@@ -98,9 +98,10 @@ enum Wake {
     TrayHost(bool),
     /// The worker finished, for better or worse.
     Fetched(Result<Artwork>),
-    /// The machine came back from sleep. Carries nothing, and its arm does nothing:
-    /// the clock at the tail of the loop is re-read after every event, which is the
-    /// whole reason it lives there rather than in an arm of its own.
+    /// The machine came back from sleep. Carries nothing, and its arm asks for
+    /// nothing: the clock at the tail of the loop is re-read after every event,
+    /// which is the whole reason it lives there rather than in an arm of its own.
+    /// All the arm does is note that the desktop is being redrawn anyway.
     Woke,
     /// A display was attached, detached or rearranged. On macOS the Spaces that
     /// move between screens arrive showing the Dock's default picture.
@@ -237,7 +238,12 @@ impl Owed {
     /// the state. Each asking spends one of [`PATIENCE`], and an error ends them:
     /// a picture that cannot be put up at all is not made puttable by asking twice
     /// more.
-    fn press(&mut self, shown: Option<&Artwork>, style: &Style, scratch: &Path) -> Result<()> {
+    fn press(
+        &mut self,
+        shown: Option<&Artwork>,
+        settings: &Settings,
+        scratch: &Path,
+    ) -> Result<()> {
         match self.at {
             Some(at) if at <= now_secs() => self.at = None,
             _ => return Ok(()),
@@ -245,7 +251,7 @@ impl Owed {
         let Some(art) = shown else { return Ok(()) };
 
         self.tries = self.tries.saturating_sub(1);
-        let pinned = desktop::pin(&art.path, style, scratch)?;
+        let pinned = desktop::pin(&art.path, &settings.style, &settings.framing, scratch)?;
         self.remember_visibility(pinned, &art.path);
         if pinned == Pinned::InPart && self.tries > 0 {
             self.at = Some(now_secs() + RE_PIN.as_secs());
@@ -274,7 +280,9 @@ impl Owed {
         }
     }
 
-    fn caught_up(&mut self) {
+    /// Drops the redraw debt because the desktop has just been redrawn by other
+    /// means than [`Owed::catch_up`].
+    fn forget_unseen(&mut self) {
         self.unseen = None;
     }
 
@@ -284,13 +292,116 @@ impl Owed {
     }
 }
 
+/// When the next picture is fetched, and what becomes of one already on its way.
+///
+/// The loop tells this what happened — a row was clicked, the worker came back, a
+/// picture went up by hand — and asks it one question, at the tail and nowhere
+/// else: [`Schedule::step`]. Only that answer starts a download, which is what
+/// keeps there from ever being two.
+struct Schedule {
+    /// A download is in the air.
+    fetching: bool,
+    /// Unix seconds until which a failed attempt is cooling off; cleared by success.
+    /// Wall clock rather than an `Instant` for the reason in the module comment: a
+    /// fifteen-minute countdown started before the lid closed still owes fifteen
+    /// minutes of *waking* time the next morning, which is the very complaint the
+    /// schedule exists to answer.
+    cooling_off: Option<u64>,
+    /// Set when a picture goes up by hand while a download is still in the air, so
+    /// that the download does not land on top of a choice just made.
+    superseded: bool,
+    /// Set when the Next picture row is clicked. A click asks for a fetch rather
+    /// than starting one, so the clock is wound the same way whoever did the asking.
+    asked_for_next: bool,
+}
+
+/// What the tail of the loop should do about the next picture.
+#[derive(Debug, PartialEq, Eq)]
+enum Step {
+    /// A download is in the air, and its worker will wake the loop.
+    Wait,
+    /// Start a download now. The schedule already counts it as in the air.
+    Fetch,
+    /// Nothing to start. Carries the seconds a cooling-off period still has to
+    /// run, when there is one.
+    Idle(Option<u64>),
+}
+
+impl Schedule {
+    const fn idle() -> Self {
+        Self {
+            fetching: false,
+            cooling_off: None,
+            superseded: false,
+            asked_for_next: false,
+        }
+    }
+
+    fn fetching(&self) -> bool {
+        self.fetching
+    }
+
+    fn ask_for_next(&mut self) {
+        self.asked_for_next = true;
+    }
+
+    /// The worker came back. Answers whether what it brought should be hung: not
+    /// when a picture went up by hand while it was in the air, because hanging it
+    /// now would undo a choice just made.
+    fn landed(&mut self) -> bool {
+        self.fetching = false;
+        !std::mem::take(&mut self.superseded)
+    }
+
+    fn succeeded(&mut self) {
+        self.cooling_off = None;
+    }
+
+    /// Every failure path has to come through here: the day is marked done only on
+    /// success, so a failure with no cooling-off is retried at once and for ever.
+    fn failed(&mut self, now: u64) {
+        self.cooling_off = Some(now + RETRY.as_secs());
+    }
+
+    /// A picture went up by hand. Nothing is owed that this has not just answered,
+    /// and a download already in the air would only undo it.
+    fn chosen_by_hand(&mut self) {
+        self.cooling_off = None;
+        self.superseded = self.fetching;
+    }
+
+    /// Decides what happens next, given whether the day still owes a picture.
+    ///
+    /// Being asked jumps both queues: somebody looking at a picture they do not
+    /// like is not waiting out a museum's bad afternoon, and is plainly not
+    /// waiting for tomorrow. The request is spent whatever the answer, so that one
+    /// made while a download was in the air cannot start a second the moment the
+    /// first lands.
+    fn step(&mut self, now: u64, is_due: impl FnOnce() -> bool) -> Step {
+        let asked = std::mem::take(&mut self.asked_for_next);
+        if self.fetching {
+            return Step::Wait;
+        }
+        let cooling_off = self
+            .cooling_off
+            .and_then(|until| until.checked_sub(now))
+            .filter(|left| *left > 0);
+        if asked || (cooling_off.is_none() && is_due()) {
+            self.fetching = true;
+            Step::Fetch
+        } else {
+            Step::Idle(cooling_off)
+        }
+    }
+}
+
 /// Runs until the user picks Quit.
 pub fn run(paths: Paths, config: Config, mut settings: Settings, mut state: State) -> Result<()> {
     #[cfg(target_os = "linux")]
     {
         glib::set_prgname(Some(desktop::APP_ID));
     }
-    let mut builder = EventLoopBuilder::<Wake>::with_user_event();
+    let mut builder = EventLoopBuilder::<Notice>::with_user_event();
     #[cfg(target_os = "linux")]
     builder.with_app_id(desktop::APP_ID);
     #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
@@ -320,7 +431,7 @@ pub fn run(paths: Paths, config: Config, mut settings: Settings, mut state: Stat
     let _instance = {
         let quit_proxy = proxy.clone();
         match desktop::claim_instance(move || {
-            let _ = quit_proxy.send_event(Wake::Chose(Wanted::Quit));
+            let _ = quit_proxy.send_event(Notice::Chose(Wanted::Quit));
         })? {
             Some(instance) => instance,
             None => return Ok(()),
@@ -329,7 +440,7 @@ pub fn run(paths: Paths, config: Config, mut settings: Settings, mut state: Stat
 
     let menu_proxy = proxy.clone();
     MenuEvent::set_event_handler(Some(move |event| {
-        let _ = menu_proxy.send_event(Wake::Menu(event));
+        let _ = menu_proxy.send_event(Notice::Menu(event));
     }));
 
     #[cfg(target_os = "linux")]
@@ -339,7 +450,7 @@ pub fn run(paths: Paths, config: Config, mut settings: Settings, mut state: Stat
         // ordering and one owner.
         let host_proxy = proxy.clone();
         match desktop::watch_tray_host(move |present| {
-            let _ = host_proxy.send_event(Wake::TrayHost(present));
+            let _ = host_proxy.send_event(Notice::TrayHost(present));
         }) {
             Ok(watch) => Some(watch),
             Err(error) => {
@@ -358,7 +469,7 @@ pub fn run(paths: Paths, config: Config, mut settings: Settings, mut state: Stat
     // the notifications, which is what the binding is holding them open against.
     let wake_proxy = proxy.clone();
     let _woken = match wake::watch(move || {
-        let _ = wake_proxy.send_event(Wake::Woke);
+        let _ = wake_proxy.send_event(Notice::Woke);
     }) {
         Ok(watch) => Some(watch),
         Err(error) => {
@@ -371,7 +482,7 @@ pub fn run(paths: Paths, config: Config, mut settings: Settings, mut state: Stat
     // Held the same way and for the same reason as the wake watch above.
     let rearranged_proxy = proxy.clone();
     let _rearranged = wake::displays(move || {
-        let _ = rearranged_proxy.send_event(Wake::Rearranged);
+        let _ = rearranged_proxy.send_event(Notice::Rearranged);
     })
     .unwrap_or_else(|error| {
         // Losing it costs only the rescue after an unplug; the next wake or login
@@ -388,10 +499,10 @@ pub fn run(paths: Paths, config: Config, mut settings: Settings, mut state: Stat
     let control_proxy = proxy.clone();
     let mut ui = Ui::new(
         move |pick| {
-            let _ = pick_proxy.send_event(Wake::Chose(pick.into()));
+            let _ = pick_proxy.send_event(Notice::Chose(pick.into()));
         },
         move |control| {
-            let _ = control_proxy.send_event(Wake::Chose(control.into()));
+            let _ = control_proxy.send_event(Notice::Chose(control.into()));
         },
         paths.cache.clone(),
         &state.backdrops,
@@ -417,7 +528,7 @@ pub fn run(paths: Paths, config: Config, mut settings: Settings, mut state: Stat
         .collect();
     // Only the museum catalogue knows a painting's region, subject, artist or
     // size; the window says so rather than offering filters that do nothing.
-    let filters_apply = matches!(config.source, SourceSpec::Museums);
+    let filters_apply = config.source.honours_filters();
     ui.gallery
         .set_settings(&settings, filters_apply, &favourites);
     ui.describe(&state, &favourites);
@@ -436,20 +547,9 @@ pub fn run(paths: Paths, config: Config, mut settings: Settings, mut state: Stat
     let mut window_requested = false;
     #[cfg(target_os = "linux")]
     let indicator_available = desktop::appindicator_available();
-    let mut fetching = false;
-    // Unix seconds until which a failed attempt is cooling off; cleared by success.
-    // Wall clock rather than an `Instant` for the reason in the module comment: a
-    // fifteen-minute countdown started before the lid closed still owes fifteen
-    // minutes of *waking* time the next morning, which is the very complaint the
-    // schedule exists to answer.
-    let mut cooling_off: Option<u64> = None;
-    // Set when a kept picture goes up while a download is still in the air, so that
-    // the download does not land on top of a choice just made.
-    let mut superseded = false;
-    // Set when the Next picture row is clicked. A fetch is started at the tail of
-    // the loop and nowhere else, so a click asks for one rather than doing it: the
-    // clock is then wound the same way whoever did the asking.
-    let mut asked_for_next = false;
+    // When the next picture is fetched. A fetch is started at the tail of the loop
+    // and nowhere else; everything above it only tells this what happened.
+    let mut schedule = Schedule::idle();
     // What the desktop still owes, and when to ask it again.
     let mut owed = Owed::settled();
 
@@ -490,7 +590,7 @@ pub fn run(paths: Paths, config: Config, mut settings: Settings, mut state: Stat
                             return;
                         }
                     }
-                    wake_run_loop();
+                    nudge_run_loop();
                 }
 
                 #[cfg(target_os = "linux")]
@@ -499,7 +599,7 @@ pub fn run(paths: Paths, config: Config, mut settings: Settings, mut state: Stat
                         let quit = gio::SimpleAction::new(desktop::QUIT_ACTION, None);
                         let quit_proxy = proxy.clone();
                         quit.connect_activate(move |_, _| {
-                            let _ = quit_proxy.send_event(Wake::Chose(Wanted::Quit));
+                            let _ = quit_proxy.send_event(Notice::Chose(Wanted::Quit));
                         });
                         target.gtk_app().add_action(&quit);
                         quit_action_added = true;
@@ -542,18 +642,18 @@ pub fn run(paths: Paths, config: Config, mut settings: Settings, mut state: Stat
                 Wanted::Nothing
             }
 
-            Event::UserEvent(Wake::Menu(click)) => ui.handle(&click),
+            Event::UserEvent(Notice::Menu(click)) => ui.handle(&click),
 
-            Event::UserEvent(Wake::Chose(wanted)) => wanted,
+            Event::UserEvent(Notice::Chose(wanted)) => wanted,
 
             #[cfg(target_os = "linux")]
-            Event::UserEvent(Wake::TrayHost(present)) => {
+            Event::UserEvent(Notice::TrayHost(present)) => {
                 if present && indicator_available {
                     if tray.is_none() {
                         match build_tray(&ui.menu) {
                             Ok(built) => {
                                 tray = Some(built);
-                                wake_run_loop();
+                                nudge_run_loop();
                             }
                             Err(error) => report(&error),
                         }
@@ -590,30 +690,29 @@ pub fn run(paths: Paths, config: Config, mut settings: Settings, mut state: Stat
                 Wanted::Nothing
             }
 
-            Event::UserEvent(Wake::Fetched(result)) => {
-                fetching = false;
+            Event::UserEvent(Notice::Fetched(result)) => {
                 ui.set_fetching(false);
                 // Dropped on the floor when a kept picture went up while this was
                 // in the air: hanging it now would undo a choice just made. The
                 // file stays where it is, for the next rotation to overwrite or
                 // sweep away. Skipped rather than returned from, because the clock
                 // below still has to be wound.
-                if !std::mem::take(&mut superseded) {
+                if schedule.landed() {
                     match result.and_then(|artwork| {
-                        rotation::show(&artwork, &settings.style, &config, &paths, &mut state)
+                        rotation::show(&artwork, &settings, &config, &paths, &mut state)
                             .map(|pinned| (artwork, pinned))
                     }) {
                         Ok((artwork, pinned)) => {
-                            cooling_off = None;
+                            schedule.succeeded();
                             owed.took(pinned, &artwork.path);
                             // Where a favourite dropped while it was on the desktop
                             // finally goes.
-                            favourites.discard_all_but(&artwork.path);
+                            favourites.discard_all_but(Some(&artwork.path));
                             ui.describe(&state, &favourites);
                         }
                         Err(e) => {
                             report(&e);
-                            cooling_off = Some(now_secs() + RETRY.as_secs());
+                            schedule.failed(now_secs());
                             ui.set_status("Last attempt failed — will retry");
                         }
                     }
@@ -624,7 +723,7 @@ pub fn run(paths: Paths, config: Config, mut settings: Settings, mut state: Stat
             // Nothing to do but arrive: the clock below is what this is for. The
             // screen is coming back with it, which makes this one of the two
             // moments a blanked desktop costs nothing.
-            Event::UserEvent(Wake::Woke) => {
+            Event::UserEvent(Notice::Woke) => {
                 redrawing = true;
                 Wanted::Nothing
             }
@@ -635,7 +734,7 @@ pub fn run(paths: Paths, config: Config, mut settings: Settings, mut state: Stat
             // said — once the rearranging has settled. Not a redraw, though: the
             // user is looking straight at the screen, so the Spaces out of sight
             // wait for the next wake as they always do.
-            Event::UserEvent(Wake::Rearranged) => {
+            Event::UserEvent(Notice::Rearranged) => {
                 owed.owe_after(SETTLE);
                 Wanted::Nothing
             }
@@ -649,7 +748,7 @@ pub fn run(paths: Paths, config: Config, mut settings: Settings, mut state: Stat
         match wanted {
             Wanted::Nothing => {}
 
-            Wanted::Next => asked_for_next = true,
+            Wanted::Next => schedule.ask_for_next(),
 
             Wanted::Gallery | Wanted::Settings => {
                 #[cfg(target_os = "linux")]
@@ -667,22 +766,28 @@ pub fn run(paths: Paths, config: Config, mut settings: Settings, mut state: Stat
             }
 
             // Filters wait for the next picture — the one on the desktop was chosen
-            // under the old ones and is still a fair choice. A new style does not
-            // wait: the person pressing Apply is looking at the preview of exactly
+            // under the old ones and is still a fair choice. A new style, or the
+            // picture moved about under the same one, does not wait: the person pressing Apply is looking at the preview of exactly
             // this picture hung that way, and expects to see it. Only the Space in
             // front of them, though; the rest catch up at the next redraw, as every
             // other change does.
-            Wanted::Apply(chosen) => match chosen.save(&paths.settings) {
+            Wanted::Apply(staged) => match staged.save(&paths.settings) {
                 Ok(()) => {
-                    let restyled = chosen.style != settings.style;
-                    settings = chosen;
+                    let restyled =
+                        staged.style != settings.style || staged.framing != settings.framing;
+                    settings = staged;
                     ui.gallery
                         .set_settings(&settings, filters_apply, &favourites);
                     for (_, backdrop) in &backdrops {
                         backdrop.set_filters(&settings.filters);
                     }
                     if let Some(art) = state.shown.as_ref().filter(|_| restyled) {
-                        match desktop::pin(&art.path, &settings.style, &paths.cache) {
+                        match desktop::pin(
+                            &art.path,
+                            &settings.style,
+                            &settings.framing,
+                            &paths.cache,
+                        ) {
                             Ok(pinned) => owed.took(pinned, &art.path),
                             Err(error) => {
                                 report(&error);
@@ -714,14 +819,15 @@ pub fn run(paths: Paths, config: Config, mut settings: Settings, mut state: Stat
             // the next redraw is not what it means.
             Wanted::Reapply => {
                 if let Some(art) = &state.shown {
-                    match desktop::pin(&art.path, &settings.style, &paths.cache) {
+                    match desktop::pin(&art.path, &settings.style, &settings.framing, &paths.cache)
+                    {
                         Ok(pinned) => {
                             owed.took(pinned, &art.path);
                             if pinned != Pinned::InPart {
                                 // Explicitly disruptive: even an unchanged store may
                                 // be newer than the Dock's in-memory copy.
                                 desktop::catch_up();
-                                owed.caught_up();
+                                owed.forget_unseen();
                             }
                         }
                         Err(error) => {
@@ -799,12 +905,7 @@ pub fn run(paths: Paths, config: Config, mut settings: Settings, mut state: Stat
 
             Wanted::Forget(key) => match favourites.forget(&key) {
                 Ok(()) => {
-                    // An empty path names no file, which is the right thing to
-                    // spare when nothing is on the desktop.
-                    let on_desktop = state
-                        .shown
-                        .as_ref()
-                        .map_or(Path::new(""), |art| art.path.as_path());
+                    let on_desktop = state.shown.as_ref().map(|art| art.path.as_path());
                     favourites.discard_all_but(on_desktop);
                     ui.describe(&state, &favourites);
                 }
@@ -816,14 +917,11 @@ pub fn run(paths: Paths, config: Config, mut settings: Settings, mut state: Stat
         }
 
         if let Some(art) = chosen {
-            match rotation::revisit(&art, &settings.style, &config, &paths, &mut state) {
+            match rotation::revisit(&art, &settings, &config, &paths, &mut state) {
                 Ok(pinned) => {
-                    // Nothing is owed that this has not just answered, and a
-                    // download already in the air would only undo it.
-                    cooling_off = None;
-                    superseded = fetching;
+                    schedule.chosen_by_hand();
                     owed.took(pinned, &art.path);
-                    favourites.discard_all_but(&art.path);
+                    favourites.discard_all_but(Some(&art.path));
                     ui.describe(&state, &favourites);
                 }
                 Err(e) => {
@@ -838,15 +936,17 @@ pub fn run(paths: Paths, config: Config, mut settings: Settings, mut state: Stat
         // what it wants asking for and when. Not while a download is in the air,
         // though: that picture is about to be replaced, and the loop would be
         // pressing for a painting nobody will see.
-        if !fetching {
-            if let Err(e) = owed.press(state.shown.as_ref(), &settings.style, &paths.cache) {
+        if !schedule.fetching() {
+            if let Err(e) = owed.press(state.shown.as_ref(), &settings, &paths.cache) {
                 report(&e);
                 ui.set_status("Could not re-apply the wallpaper");
             }
         }
 
         // A desktop that is being redrawn anyway can be shown what was written for
-        // the Spaces out of sight, at no cost anyone will notice.
+        // the Spaces out of sight, at no cost anyone will notice. After the pressing
+        // above and never before it: at the start of a session it is that asking
+        // which leaves something written to show.
         if redrawing {
             owed.catch_up();
         }
@@ -854,34 +954,30 @@ pub fn run(paths: Paths, config: Config, mut settings: Settings, mut state: Stat
         // When to wake up next. Recomputed after every event rather than scheduled
         // once, so that a click, a finished download and a tick all leave the clock
         // in the same, correct place.
-        let cooling_off = cooling_off
-            .and_then(|until| until.checked_sub(now_secs()))
-            .filter(|left| *left > 0);
-        *control_flow = if fetching {
-            // The worker will wake us.
-            ControlFlow::Wait
-        } else if std::mem::take(&mut asked_for_next) || (cooling_off.is_none() && state.is_due()) {
-            // Being asked jumps both queues. Somebody looking at a picture they do
-            // not like is not waiting out a museum's bad afternoon, and is plainly
-            // not waiting for tomorrow; the request is taken either way, so that one
-            // made while a download was in the air cannot start a second later on.
-            ui.set_fetching(true);
-            // Measured here because only the main thread may ask about screens.
-            let selection = Selection {
-                filters: settings.filters.clone(),
-                screen_aspect: desktop::primary_aspect(),
-            };
-            spawn_fetch(&config, &state, &paths, selection, proxy.clone());
-            fetching = true;
-            ControlFlow::Wait
-        } else if let Some(left) = [cooling_off, owed.left()].into_iter().flatten().min() {
-            // The nearer of the two standing deadlines. Either may be further off
-            // than the tick — a cooling-off period is three of them — and waiting
-            // the whole of it is right: the tick asks a question these two have
-            // already answered.
-            ControlFlow::WaitUntil(Instant::now() + Duration::from_secs(left))
-        } else {
-            ControlFlow::WaitUntil(Instant::now() + TICK)
+        *control_flow = match schedule.step(now_secs(), || state.is_due()) {
+            Step::Wait => ControlFlow::Wait,
+            Step::Fetch => {
+                ui.set_fetching(true);
+                // Measured here because only the main thread may ask about screens.
+                let selection = Selection {
+                    filters: settings.filters.clone(),
+                    screen_aspect: desktop::primary_aspect(),
+                };
+                spawn_fetch(&config, &state, &paths, selection, proxy.clone());
+                ControlFlow::Wait
+            }
+            Step::Idle(cooling_off) => {
+                // The nearer of the two standing deadlines. Either may be further
+                // off than the tick — a cooling-off period is three of them — and
+                // waiting the whole of it is right: the tick asks a question these
+                // two have already answered.
+                match [cooling_off, owed.left()].into_iter().flatten().min() {
+                    Some(left) => {
+                        ControlFlow::WaitUntil(Instant::now() + Duration::from_secs(left))
+                    }
+                    None => ControlFlow::WaitUntil(Instant::now() + TICK),
+                }
+            }
         };
     })
 }
@@ -892,14 +988,14 @@ fn spawn_fetch(
     state: &State,
     paths: &Paths,
     selection: Selection,
-    proxy: EventLoopProxy<Wake>,
+    proxy: EventLoopProxy<Notice>,
 ) {
     let config = config.clone();
     let state = state.clone();
     let cache = paths.cache.clone();
     std::thread::spawn(move || {
         let fetched = rotation::fetch(&config, &state, &cache, &selection);
-        let _ = proxy.send_event(Wake::Fetched(fetched));
+        let _ = proxy.send_event(Notice::Fetched(fetched));
     });
 }
 
@@ -935,7 +1031,7 @@ struct Ui {
     keep: MenuItem,
     /// Opens the window the kept pictures can be looked at in. Greyed while there
     /// is nothing kept, since an empty window says less than a greyed row does.
-    favourites: MenuItem,
+    favourites_row: MenuItem,
     /// Opens the same window on the filters and placement styles.
     settings: MenuItem,
     /// That window. Shut, until one of these rows is clicked.
@@ -955,7 +1051,7 @@ impl Ui {
     fn new(
         on_pick: impl Fn(Pick) + 'static,
         on_control: impl Fn(Control) + 'static,
-        pictures: PathBuf,
+        artist_pictures: PathBuf,
         backdrops: &[Slot],
     ) -> Result<Self> {
         let ui = Self {
@@ -965,9 +1061,9 @@ impl Ui {
             open: MenuItem::new("Open in browser", false, None),
             next: MenuItem::new("Next picture", true, None),
             keep: MenuItem::new("Add to favourites", false, None),
-            favourites: MenuItem::new("Favourites…", false, None),
+            favourites_row: MenuItem::new("Favourites…", false, None),
             settings: MenuItem::new("Settings…", true, None),
-            gallery: Gallery::new(on_pick, on_control, pictures),
+            gallery: Gallery::new(on_pick, on_control, artist_pictures),
             today: MenuItem::new(NO_WAY_BACK, false, None),
             reapply: MenuItem::new("Re-apply wallpaper", false, None),
             login: CheckMenuItem::new("Start at login", true, desktop::starts_at_login(), None),
@@ -992,7 +1088,7 @@ impl Ui {
             &rule_a,
             &ui.next,
             &ui.keep,
-            &ui.favourites,
+            &ui.favourites_row,
             &ui.today,
             &rule_b,
             &ui.settings,
@@ -1031,23 +1127,14 @@ impl Ui {
             }
         }
         self.gallery.describe(state, favourites);
-        self.favourites.set_enabled(!favourites.is_empty());
+        self.favourites_row.set_enabled(!favourites.is_empty());
         self.offer_the_way_back(state);
     }
 
-    /// Points the way-back row at the day's picture, when there is one to go back
-    /// to and the desktop is not already showing it.
-    ///
-    /// The file is checked for because a source can be changed, or a cache emptied,
-    /// between the picture being fetched and anyone asking for it again; a row that
-    /// only ever reports a failure is worse than a row that is plainly unavailable.
+    /// Points the way-back row at the day's picture, when [`State::way_back`] says
+    /// there is one to go back to.
     fn offer_the_way_back(&self, state: &State) {
-        let todays = state
-            .fetched
-            .as_ref()
-            .filter(|art| Some(&art.path) != state.shown.as_ref().map(|s| &s.path))
-            .filter(|art| art.path.exists());
-        match todays {
+        match state.way_back() {
             Some(art) => {
                 self.today
                     .set_text(format!("Back to {}", shorten(&art.title)));
@@ -1125,7 +1212,7 @@ impl Ui {
     fn handle(&self, click: &MenuEvent) -> Wanted {
         if click.id == self.keep.id() {
             return Wanted::Keep;
-        } else if click.id == self.favourites.id() {
+        } else if click.id == self.favourites_row.id() {
             return Wanted::Gallery;
         } else if click.id == self.settings.id() {
             return Wanted::Settings;
@@ -1231,7 +1318,7 @@ fn glyph() -> Result<Icon> {
 
 /// Nudges the run loop so a status item created from inside it appears at once.
 #[cfg(target_os = "macos")]
-fn wake_run_loop() {
+fn nudge_run_loop() {
     if let Some(main) = objc2_core_foundation::CFRunLoop::main() {
         main.wake_up();
     }
@@ -1240,7 +1327,7 @@ fn wake_run_loop() {
 /// GTK's main context and the Win32 message loop are already turning; neither
 /// needs an AppKit-style nudge.
 #[cfg(not(target_os = "macos"))]
-fn wake_run_loop() {}
+fn nudge_run_loop() {}
 
 /// The menu carries the short version; this is where the whole chain goes. Under
 /// the launchd agent it lands in `~/Library/Logs/ArtWindow.log`; on Windows,
@@ -1285,6 +1372,73 @@ mod tests {
             Wanted::from(Pick::Read("https://example.org".into())),
             Wanted::Read(url) if url == "https://example.org"
         ));
+    }
+
+    #[test]
+    fn a_day_that_is_owed_starts_one_download_and_then_waits() {
+        let mut schedule = Schedule::idle();
+        assert_eq!(schedule.step(100, || true), Step::Fetch);
+        assert_eq!(schedule.step(101, || true), Step::Wait);
+
+        assert!(schedule.landed());
+        schedule.succeeded();
+        assert_eq!(schedule.step(102, || false), Step::Idle(None));
+    }
+
+    #[test]
+    fn a_failure_cools_off_before_the_day_is_asked_about_again() {
+        let mut schedule = Schedule::idle();
+        assert_eq!(schedule.step(100, || true), Step::Fetch);
+        assert!(schedule.landed());
+        schedule.failed(100);
+
+        let left = RETRY.as_secs() - 10;
+        assert_eq!(
+            schedule.step(110, || panic!("not asked while cooling off")),
+            Step::Idle(Some(left))
+        );
+        assert_eq!(schedule.step(100 + RETRY.as_secs(), || true), Step::Fetch);
+    }
+
+    #[test]
+    fn being_asked_for_the_next_picture_jumps_the_cooling_off_and_the_day() {
+        let mut schedule = Schedule::idle();
+        schedule.failed(100);
+        schedule.ask_for_next();
+        assert_eq!(schedule.step(101, || false), Step::Fetch);
+    }
+
+    #[test]
+    fn a_request_made_mid_download_does_not_start_a_second_one() {
+        let mut schedule = Schedule::idle();
+        assert_eq!(schedule.step(100, || true), Step::Fetch);
+        schedule.ask_for_next();
+        assert_eq!(schedule.step(101, || false), Step::Wait);
+
+        assert!(schedule.landed());
+        schedule.succeeded();
+        assert_eq!(schedule.step(102, || false), Step::Idle(None));
+    }
+
+    #[test]
+    fn a_picture_chosen_by_hand_drops_the_download_in_the_air() {
+        let mut schedule = Schedule::idle();
+        assert_eq!(schedule.step(100, || true), Step::Fetch);
+        schedule.chosen_by_hand();
+        assert!(!schedule.landed());
+
+        // And only that one: the next download is hung as usual.
+        assert_eq!(schedule.step(101, || true), Step::Fetch);
+        assert!(schedule.landed());
+    }
+
+    #[test]
+    fn a_picture_chosen_by_hand_ends_a_cooling_off() {
+        let mut schedule = Schedule::idle();
+        schedule.failed(100);
+        schedule.chosen_by_hand();
+        assert_eq!(schedule.step(101, || true), Step::Fetch);
+        assert!(schedule.landed(), "nothing was in the air to supersede");
     }
 
     #[test]

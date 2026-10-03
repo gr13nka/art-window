@@ -130,7 +130,7 @@ final class Museums: @unchecked Sendable {
     }
 
     private func artwork(for entry: CatalogueEntry, file: URL) -> Artwork {
-        let caption = [entry.date, entry.culture].filter { !$0.isEmpty }.joined(separator: " · ")
+        let caption = [entry.byline, entry.culture].filter { !$0.isEmpty }.joined(separator: " · ")
         return Artwork(
             fileName: file.lastPathComponent,
             folder: .cache,

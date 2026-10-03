@@ -62,6 +62,13 @@ impl SourceSpec {
             path => Self::Folder(expand_tilde(path)),
         }
     }
+
+    /// Whether this source narrows its choice by a [`Selection`]'s filters, or
+    /// only accepts and ignores them. What the settings window asks before
+    /// offering filters that would do nothing.
+    pub fn honours_filters(&self) -> bool {
+        matches!(self, Self::Museums)
+    }
 }
 
 impl<'de> Deserialize<'de> for SourceSpec {
@@ -136,8 +143,9 @@ pub trait Source {
     ///
     /// Called once the wallpaper is up, so `keep` is the file on the desktop and
     /// removing it would leave a blank one. Only whoever wrote a file may decide it
-    /// is rubbish; a source that writes nothing implements this as nothing.
-    fn discard_all_but(&self, keep: &Path);
+    /// is rubbish; a source that writes nothing implements this as nothing. `None`
+    /// spares nothing, for when there is no such file.
+    fn discard_all_but(&self, keep: Option<&Path>);
 }
 
 /// Picks one of `len` items, which must not be none.

@@ -51,7 +51,9 @@ pub(crate) fn extension_from_url(url: &str) -> &str {
         .unwrap_or("jpg")
 }
 
-/// Downloads `url` to `dest`, capped at [`MAX_IMAGE_BYTES`].
+/// Downloads `url` to `dest`, refusing anything over [`MAX_IMAGE_BYTES`]. On
+/// refusal nothing is left at `dest`, whether or not the server said how much was
+/// coming.
 ///
 /// Creates `dest`'s parent directory if needed; the cache it writes into is swept
 /// daily and cannot be relied on to exist.
@@ -80,8 +82,17 @@ pub(crate) fn download(agent: &ureq::Agent, url: &str, dest: &Path) -> Result<()
     }
     let mut file =
         std::fs::File::create(dest).with_context(|| format!("creating {}", dest.display()))?;
-    let mut reader = response.body_mut().as_reader().take(MAX_IMAGE_BYTES);
-    std::io::copy(&mut reader, &mut file).with_context(|| format!("writing {}", dest.display()))?;
+    // One byte past the limit, so a body with no declared length that runs over
+    // is told apart from one that ends exactly on it — and is an error rather than
+    // a painting cut off part-way down.
+    let mut reader = response.body_mut().as_reader().take(MAX_IMAGE_BYTES + 1);
+    let written = std::io::copy(&mut reader, &mut file)
+        .with_context(|| format!("writing {}", dest.display()))?;
+    if written > MAX_IMAGE_BYTES {
+        drop(file);
+        let _ = std::fs::remove_file(dest);
+        return Err(anyhow!("image is over the {MAX_IMAGE_BYTES}-byte limit"));
+    }
 
     Ok(())
 }

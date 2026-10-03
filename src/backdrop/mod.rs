@@ -372,7 +372,7 @@ impl Worker {
         // The rendered copy is all that is wanted now, or nothing is, if the
         // render failed. A `Folder` source implements this as nothing, so a
         // person's own pictures are safe.
-        source.discard_all_but(Path::new(""));
+        source.discard_all_but(None);
         artwork
     }
 }

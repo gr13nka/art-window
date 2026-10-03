@@ -20,7 +20,7 @@ public struct CatalogueEntry: Hashable, Identifiable, Sendable {
     public let pageURL: URL?
     public let title: String
     /// The TSV's `byline` column: "Gilbert Stuart, 1789", or just a date.
-    public let date: String
+    public let byline: String
     /// The TSV's `origin` column: "Japan, Edo period (1615–1868)".
     public let culture: String
     public let artist: String?
@@ -83,7 +83,7 @@ public final class Catalogue: @unchecked Sendable {
         return CatalogueEntry(
             source: f[0], objectId: f[1], region: region, width: width, height: height,
             imageURL: imageURL, pageURL: f[6].isEmpty ? nil : URL(string: f[6]),
-            title: f[7], date: f[8], culture: f[9],
+            title: f[7], byline: f[8], culture: f[9],
             artist: f.count > 11 && !f[11].isEmpty ? f[11] : nil,
             tags: f[10].isEmpty ? [] : f[10].components(separatedBy: "|")
         )

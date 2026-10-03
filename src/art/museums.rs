@@ -36,7 +36,7 @@ const CATALOGUE_TEXT: &str = include_str!("../../catalogue/dist/paintings.tsv");
 /// How many entries to try before giving up. A download can fail for reasons that
 /// have nothing to do with the catalogue being wrong — a dead link, a host that is
 /// briefly unreachable — so a source with thousands of candidates simply moves on.
-const CANDIDATES: usize = 3;
+const MAX_ATTEMPTS: usize = 3;
 
 /// One of the museums — or Wikimedia Commons — a row in the catalogue can name.
 ///
@@ -749,8 +749,7 @@ pub fn report(aspect: f64) -> String {
                     r.label().to_owned(),
                     Filters {
                         regions: vec![r],
-                        subjects: Vec::new(),
-                        ..Filters::default()
+                        ..Filters::any()
                     },
                 )
             })
@@ -765,8 +764,7 @@ pub fn report(aspect: f64) -> String {
                     a.clone(),
                     Filters {
                         artists: vec![a.clone()],
-                        subjects: Vec::new(),
-                        ..Filters::default()
+                        ..Filters::any()
                     },
                 )
             })
@@ -865,7 +863,7 @@ impl Source for Museums {
         }
 
         let mut last_error = None;
-        for attempt in 0..CANDIDATES {
+        for attempt in 0..MAX_ATTEMPTS {
             let entry = pool[pick_index(pool.len(), attempt as u64)];
             match self.download(entry) {
                 Ok(path) => {
@@ -889,7 +887,7 @@ impl Source for Museums {
             }
         }
 
-        Err(last_error.unwrap_or_else(|| anyhow!("no usable painting in {CANDIDATES} attempts")))
+        Err(last_error.unwrap_or_else(|| anyhow!("no usable painting in {MAX_ATTEMPTS} attempts")))
     }
 
     fn label(&self) -> &'static str {
@@ -900,13 +898,13 @@ impl Source for Museums {
     /// remove exactly when `key_of` recognises its name. Anything else in the
     /// directory — including a `met-{id}.{ext}` left by the other source — belongs
     /// to somebody else and is left alone.
-    fn discard_all_but(&self, keep: &Path) {
+    fn discard_all_but(&self, keep: Option<&Path>) {
         let Ok(entries) = std::fs::read_dir(&self.cache) else {
             return;
         };
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.is_file() && path != keep && key_of(&path).is_some() {
+            if path.is_file() && Some(path.as_path()) != keep && key_of(&path).is_some() {
                 let _ = std::fs::remove_file(path);
             }
         }

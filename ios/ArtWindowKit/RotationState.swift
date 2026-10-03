@@ -1,5 +1,5 @@
-// Port of android/app/src/main/java/dev/artwindow/RotationState.kt, with the desktop's
-// `cooling_off` (state.rs) added — Android leans on WorkManager's own back-off instead.
+// Port of android/app/src/main/java/dev/artwindow/State.kt, with the desktop's
+// `cooling_off` (src/tray.rs) added — Android leans on its job scheduler instead.
 
 import Foundation
 
@@ -94,8 +94,13 @@ public final class StateStore: @unchecked Sendable {
         defer { lock.unlock() }
         var state = read()
         change(&state)
-        if let data = try? JSONEncoder().encode(state) {
-            try? data.write(to: url, options: .atomic)
+        // A write that fails leaves the day looking owed, or the old picture looking
+        // shown, the next time any of the three processes reads the file. Nothing here
+        // can put that right, so it is said where a later puzzle can be traced back to it.
+        do {
+            try JSONEncoder().encode(state).write(to: url, options: .atomic)
+        } catch {
+            NSLog("ArtWindow: recording state failed, the last state stands: %@", String(describing: error))
         }
     }
 

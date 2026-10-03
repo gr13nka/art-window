@@ -14,7 +14,7 @@ import kotlin.concurrent.thread
  * Runs one [Rotation.turn] in the background, on the OS's own schedule, so a
  * picture can arrive without the app ever being opened.
  *
- * Two job ids, because they answer different questions. [DAILY_JOB_ID] just asks "is
+ * Two job ids, because they answer different questions. [WATCH_JOB_ID] just asks "is
  * a picture owed yet" once an hour on Wi-Fi — cheap, because [Rotation.turn] itself
  * does nothing on the hours a picture is not due. [NOW_JOB_ID] is *Next picture*, or
  * a picture already due at launch, jumping the queue on whatever network is at hand.
@@ -38,17 +38,17 @@ class RotationJob : JobService() {
     override fun onStopJob(params: JobParameters): Boolean = false
 
     companion object {
-        private const val DAILY_JOB_ID = 1
+        private const val WATCH_JOB_ID = 1
         private const val NOW_JOB_ID = 2
         private const val EXTRA_FORCE = "force"
-        private const val DAILY_INTERVAL_MS = 60 * 60 * 1000L
+        private const val WATCH_INTERVAL_MS = 60 * 60 * 1000L
 
         /** Ensures the hourly watcher exists. Safe to call on every launch: a job already pending is left alone. */
-        fun scheduleDaily(context: Context) {
+        fun scheduleWatcher(context: Context) {
             val scheduler = context.getSystemService(JobScheduler::class.java)
-            if (scheduler.getPendingJob(DAILY_JOB_ID) != null) return
-            val job = JobInfo.Builder(DAILY_JOB_ID, ComponentName(context, RotationJob::class.java))
-                .setPeriodic(DAILY_INTERVAL_MS)
+            if (scheduler.getPendingJob(WATCH_JOB_ID) != null) return
+            val job = JobInfo.Builder(WATCH_JOB_ID, ComponentName(context, RotationJob::class.java))
+                .setPeriodic(WATCH_INTERVAL_MS)
                 .setRequiredNetworkType(JobInfo.NETWORK_TYPE_UNMETERED)
                 .setPersisted(true)
                 .build()

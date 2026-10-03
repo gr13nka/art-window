@@ -19,7 +19,7 @@ import csv
 import os
 from typing import Iterator
 
-from .. import http, regions
+from .. import http, regions, text
 
 API = "https://collectionapi.metmuseum.org/public/collection/v1"
 CSV_URL = "https://media.githubusercontent.com/media/metmuseum/openaccess/master/MetObjects.csv"
@@ -101,13 +101,6 @@ def _iter_candidate_ids(csv_path: str) -> Iterator[int]:
                 continue
 
 
-def _byline(artist: str, date: str) -> str:
-    artist, date = artist.strip(), date.strip()
-    if artist and date:
-        return f"{artist}, {date}"
-    return artist or date
-
-
 def _read_dimensions(client: http.PacedClient, image_url: str) -> tuple[int, int] | None:
     for end in (RANGE_INITIAL - 1, RANGE_FALLBACK - 1):
         data = client.get_range(image_url, 0, end)
@@ -151,7 +144,7 @@ def _fetch_one(client: http.PacedClient, object_id: int) -> dict:
 
     return {
         "title": (obj.get("title") or "").strip(),
-        "byline": _byline(obj.get("artistDisplayName") or "", obj.get("objectDate") or ""),
+        "byline": text.byline(obj.get("artistDisplayName") or "", obj.get("objectDate") or ""),
         "origin": (obj.get("country") or obj.get("culture") or "").strip(),
         "region": region,
         "width": width,

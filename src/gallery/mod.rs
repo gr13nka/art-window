@@ -46,9 +46,10 @@ use windows as platform;
 
 /// What somebody asked of a picture in the window.
 ///
-/// Both name a picture by its [`Favourites`] key rather than by where it sat, for
-/// the same reason the menu ids did: the list can be rebuilt between the click and
-/// the answer, and a position would by then mean a different painting.
+/// `Show` and `Forget` name a picture by its [`Favourites`] key rather than by
+/// where it sat, for the same reason the menu ids did: the list can be rebuilt
+/// between the click and the answer, and a position would by then mean a different
+/// painting.
 pub enum Pick {
     /// Hang this one on the desktop.
     Show(String),
@@ -101,7 +102,7 @@ struct Snapshot {
     /// fills this in, so the platform never has to ask.
     aspect: f64,
     /// Where the painters' pictures are unpacked to — see [`Pending::artist_cards`].
-    pictures: PathBuf,
+    artist_pictures: PathBuf,
 }
 
 /// The window of kept pictures — shut most of the time, and then not there at all.
@@ -135,7 +136,7 @@ impl Gallery {
     pub fn new(
         on_pick: impl Fn(Pick) + 'static,
         on_control: impl Fn(Control) + 'static,
-        pictures: PathBuf,
+        artist_pictures: PathBuf,
     ) -> Self {
         Self {
             on_pick: Rc::new(on_pick),
@@ -144,7 +145,7 @@ impl Gallery {
                 starts_at_login: desktop::starts_at_login(),
                 filters_apply: true,
                 aspect: desktop::primary_aspect(),
-                pictures,
+                artist_pictures,
                 ..Snapshot::default()
             },
             open: None,
@@ -207,12 +208,7 @@ impl Gallery {
     /// Updates everything shared by the tray and combined Linux window.
     pub fn describe(&mut self, state: &State, favourites: &Favourites) {
         self.snapshot.shown = state.shown.clone();
-        self.snapshot.today = state
-            .fetched
-            .as_ref()
-            .filter(|art| Some(&art.path) != state.shown.as_ref().map(|shown| &shown.path))
-            .filter(|art| art.path.exists())
-            .cloned();
+        self.snapshot.today = state.way_back().cloned();
         self.snapshot.can_keep = state
             .shown
             .as_ref()

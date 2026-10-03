@@ -33,11 +33,11 @@ use windows::Win32::Graphics::Gdi::{
     CreateFontIndirectW, CreateFontW, CreatePen, CreateRectRgn, CreateRoundRectRgn,
     CreateSolidBrush, DeleteDC, DeleteObject, DrawTextW, EndPaint, FillRect, GetDC, GetObjectW,
     GetStockObject, GetSysColorBrush, GetTextExtentPoint32W, InvalidateRect, ReleaseDC, RoundRect,
-    SelectClipRgn, SelectObject, SetBkMode, SetBrushOrgEx, SetStretchBltMode, SetTextColor,
-    StretchBlt, BITMAP, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, BLACK_BRUSH, CLEARTYPE_QUALITY,
-    CLIP_DEFAULT_PRECIS, COLOR_BTNFACE, COLOR_WINDOW, DEFAULT_CHARSET, DIB_RGB_COLORS,
-    DRAW_TEXT_FORMAT, DT_CENTER, DT_END_ELLIPSIS, DT_LEFT, DT_NOPREFIX, DT_RIGHT, DT_SINGLELINE,
-    DT_VCENTER, FW_BOLD, HALFTONE, HBITMAP, HBRUSH, HDC, HFONT, HGDIOBJ, LOGFONTW,
+    ScreenToClient, SelectClipRgn, SelectObject, SetBkMode, SetBrushOrgEx, SetStretchBltMode,
+    SetTextColor, StretchBlt, BITMAP, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, BLACK_BRUSH,
+    CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, COLOR_BTNFACE, COLOR_WINDOW, DEFAULT_CHARSET,
+    DIB_RGB_COLORS, DRAW_TEXT_FORMAT, DT_CENTER, DT_END_ELLIPSIS, DT_LEFT, DT_NOPREFIX, DT_RIGHT,
+    DT_SINGLELINE, DT_VCENTER, FW_BOLD, HALFTONE, HBITMAP, HBRUSH, HDC, HFONT, HGDIOBJ, LOGFONTW,
     OUT_DEFAULT_PRECIS, PAINTSTRUCT, PS_NULL, PS_SOLID, SRCCOPY, TRANSPARENT,
 };
 use windows::Win32::System::Com::{CoInitializeEx, IBindCtx, COINIT_APARTMENTTHREADED};
@@ -410,7 +410,9 @@ struct Inner {
     stale: Cell<bool>,
     /// How far the settings column is scrolled, in pixels.
     scroll: Cell<i32>,
-    dragging: Cell<bool>,
+    /// What the pointer is holding while the button is down, so that a move is
+    /// routed to the slider or to the framing and never to both.
+    dragging: Cell<Drag>,
     fonts: Fonts,
     on_pick: Rc<dyn Fn(Pick)>,
 }
@@ -848,6 +850,16 @@ impl Inner {
 // `Inner::build` says what is on the page and where; painting walks the result and
 // a click walks it again, so what is drawn and what can be pressed cannot part ways.
 
+/// What the pointer is holding with the button down.
+#[derive(Clone, Copy, PartialEq)]
+enum Drag {
+    None,
+    Slider,
+    /// Panning the painting in the preview; the last point the pointer was seen at,
+    /// since the model wants the distance moved and not where it now is.
+    Frame(i32, i32),
+}
+
 /// What pressing an item means.
 #[derive(Clone)]
 enum Act {
@@ -865,6 +877,8 @@ enum Act {
     CloseBrowser,
     Religious,
     Slider,
+    /// Drag to pan the painting in the preview; only given while it can be framed.
+    Frame,
     Apply,
 }
 
@@ -878,6 +892,8 @@ enum Kind {
     Slider(u8),
     Switch(String, bool),
     Preview,
+    /// The line under the preview that says it can be dragged and scrolled.
+    Hint(String),
     Note(String),
     Apply(String),
 }
@@ -1204,10 +1220,26 @@ impl Inner {
                     bottom: pad + preview_h.max(1),
                 },
                 kind: Kind::Preview,
-                act: None,
+                act: pending.can_frame().then_some(Act::Frame),
                 enabled: true,
                 scrolls: false,
             });
+            if let Some(hint) = pending.frame_hint() {
+                // Below the preview's shadow, which reaches about 25 points down.
+                let top = pad + preview_h.max(1) + self.px(32);
+                fixed.push(Item {
+                    rect: RECT {
+                        left: pad,
+                        top,
+                        right: pad + preview_w,
+                        bottom: top + self.px(18),
+                    },
+                    kind: Kind::Hint(hint.to_owned()),
+                    act: None,
+                    enabled: true,
+                    scrolls: false,
+                });
+            }
         }
         let label = "Apply changes";
         let apply_w = text_width(hdc, fonts.apply, label) + 2 * self.px(20);
@@ -1303,26 +1335,11 @@ impl Inner {
                 let border = pending.border();
                 let custom = pending.custom_colour();
                 col.chips(
-                    vec![
-                        (
-                            "Black".into(),
-                            border == Border::Black,
-                            Act::Border(Border::Black),
-                            true,
-                        ),
-                        (
-                            "Automatic".into(),
-                            border == Border::Auto,
-                            Act::Border(Border::Auto),
-                            true,
-                        ),
-                        (
-                            "Custom".into(),
-                            matches!(border, Border::Custom { .. }),
-                            Act::Border(Border::Custom { rgb: custom }),
-                            true,
-                        ),
-                    ],
+                    pending
+                        .border_chips()
+                        .into_iter()
+                        .map(|c| (c.label, c.selected, Act::Border(c.value), true))
+                        .collect(),
                     true,
                 );
                 if matches!(border, Border::Custom { .. }) {
@@ -1340,22 +1357,13 @@ impl Inner {
             }
             StyleKind::Blur => {
                 col.y += col.px(12);
-                let (variant, strength) = pending.blur();
+                let (_, strength) = pending.blur();
                 col.chips(
-                    vec![
-                        (
-                            "Behind the picture".into(),
-                            variant == BlurVariant::Backdrop,
-                            Act::Blur(BlurVariant::Backdrop),
-                            true,
-                        ),
-                        (
-                            "Whole picture".into(),
-                            variant == BlurVariant::WholeImage,
-                            Act::Blur(BlurVariant::WholeImage),
-                            true,
-                        ),
-                    ],
+                    pending
+                        .blur_chips()
+                        .into_iter()
+                        .map(|c| (c.label, c.selected, Act::Blur(c.value), true))
+                        .collect(),
                     true,
                 );
                 col.y += col.px(10);
@@ -1564,7 +1572,7 @@ impl Inner {
             .artist_cards()
             .into_iter()
             .map(|card| Card {
-                key: card.art.title.clone(),
+                key: card.name,
                 art: card.art,
                 on: card.selected,
                 note: card.disabled_reason,
@@ -1662,10 +1670,16 @@ impl Inner {
         drop(built);
         match act {
             Act::Slider => {
-                self.dragging.set(true);
+                self.dragging.set(Drag::Slider);
                 // SAFETY: capture is released on button-up.
                 unsafe { SetCapture(self.page) };
                 self.slide(x);
+                return;
+            }
+            Act::Frame => {
+                self.dragging.set(Drag::Frame(x, y));
+                // SAFETY: capture is released on button-up.
+                unsafe { SetCapture(self.page) };
                 return;
             }
             Act::Apply => {
@@ -1701,6 +1715,66 @@ impl Inner {
             }
         }
         self.changed();
+    }
+
+    /// The preview's rectangle on the page, which does not scroll with the column.
+    fn preview_rect(&self) -> Option<RECT> {
+        let fonts = PageFonts::new(|s| self.px(s));
+        let built = self.with_page_dc(|dc| self.build(dc, &fonts));
+        built
+            .items
+            .iter()
+            .find(|item| matches!(item.kind, Kind::Preview))
+            .map(|item| item.rect)
+    }
+
+    /// Pans the painting by what the pointer moved since it was last seen.
+    fn frame_drag(&self, x: i32, y: i32) {
+        let Drag::Frame(last_x, last_y) = self.dragging.get() else {
+            return;
+        };
+        self.dragging.set(Drag::Frame(x, y));
+        let Some(preview) = self.preview_rect() else {
+            return;
+        };
+        self.pending.borrow_mut().drag(
+            (x - last_x) as f64,
+            (y - last_y) as f64,
+            (preview.right - preview.left) as f64,
+        );
+        self.changed();
+    }
+
+    /// Zooms the painting about the pointer when it is over a preview that can be
+    /// framed, and says whether it did; otherwise the wheel is the column's.
+    /// `screen` is where the wheel message put the pointer, which unlike the button
+    /// messages is in screen coordinates.
+    fn zoom_at(&self, delta: i32, screen: (i32, i32)) -> bool {
+        if !self.pending.borrow().can_frame() {
+            return false;
+        }
+        let mut at = windows::Win32::Foundation::POINT {
+            x: screen.0,
+            y: screen.1,
+        };
+        // SAFETY: `at` is a POINT, and the page is one of our own windows.
+        if !unsafe { ScreenToClient(self.page, &mut at) }.as_bool() {
+            return false;
+        }
+        let Some(preview) = self.preview_rect() else {
+            return false;
+        };
+        if !inside(&preview, at.x, at.y) {
+            return false;
+        }
+        self.pending.borrow_mut().zoom_about(
+            1.1f64.powf(delta as f64 / 120.0),
+            (at.x - preview.left) as f64,
+            (at.y - preview.top) as f64,
+            (preview.right - preview.left) as f64,
+        );
+        self.changed();
+        true
     }
 
     /// Moves the strength to where the pointer is along the track.
@@ -1909,6 +1983,14 @@ impl Inner {
                     }
                 }
             }
+            Kind::Hint(text) => draw_text(
+                dc,
+                text,
+                r,
+                fonts.note,
+                MUTED,
+                DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS,
+            ),
             Kind::Note(text) => draw_text(
                 dc,
                 text,
@@ -2068,18 +2150,26 @@ unsafe extern "system" fn surface_proc(
                 }
                 return LRESULT(0);
             }
-            WM_MOUSEMOVE if !strip && inner.dragging.get() => {
-                inner.slide(mouse(lparam).0);
+            WM_MOUSEMOVE if !strip && inner.dragging.get() != Drag::None => {
+                let (x, y) = mouse(lparam);
+                match inner.dragging.get() {
+                    Drag::Slider => inner.slide(x),
+                    Drag::Frame(..) => inner.frame_drag(x, y),
+                    Drag::None => {}
+                }
                 return LRESULT(0);
             }
-            WM_LBUTTONUP if inner.dragging.get() => {
-                inner.dragging.set(false);
+            WM_LBUTTONUP if inner.dragging.get() != Drag::None => {
+                inner.dragging.set(Drag::None);
                 // SAFETY: releases the capture taken on button-down.
                 let _ = unsafe { ReleaseCapture() };
                 return LRESULT(0);
             }
             WM_MOUSEWHEEL if !strip => {
-                inner.wheel(wheel_delta(wparam));
+                let delta = wheel_delta(wparam);
+                if !inner.zoom_at(delta, mouse(lparam)) {
+                    inner.wheel(delta);
+                }
                 return LRESULT(0);
             }
             WM_NCDESTROY => {
@@ -2156,7 +2246,10 @@ unsafe extern "system" fn subclass_proc(
         // The wheel goes to whichever window has the keyboard, which is never the
         // page; it arrives here, and means the settings column when that is up.
         WM_MOUSEWHEEL if inner.tab.get() == Tab::Settings && !inner.browsing.get() => {
-            inner.wheel(wheel_delta(wparam));
+            let delta = wheel_delta(wparam);
+            if !inner.zoom_at(delta, mouse(lparam)) {
+                inner.wheel(delta);
+            }
             return LRESULT(0);
         }
         // tao's class has no background brush and only paints one when the program
@@ -2462,7 +2555,7 @@ impl Content {
             picture: RefCell::new(None),
             stale: Cell::new(true),
             scroll: Cell::new(0),
-            dragging: Cell::new(false),
+            dragging: Cell::new(Drag::None),
             fonts,
             on_pick,
         });
@@ -2513,7 +2606,7 @@ impl Content {
     pub fn describe(&self, snapshot: &Snapshot, favourites: &Favourites) {
         {
             let mut pending = self.inner.pending.borrow_mut();
-            pending.keep_pictures_in(&snapshot.pictures);
+            pending.unpack_artists_into(&snapshot.artist_pictures);
             pending.adopt(&snapshot.settings, snapshot.filters_apply, snapshot.aspect);
             pending.set_picture(snapshot.shown.as_ref().map(|art| art.path.as_path()));
         }

@@ -1,4 +1,4 @@
-// Port of the desktop's `paths.rs` and `day.rs` (there is no Kotlin counterpart for the
+// Port of the desktop's `Paths` (src/config.rs) and `day.rs` (there is no Kotlin counterpart for the
 // container: Android keeps everything in one private app directory).
 
 import Foundation

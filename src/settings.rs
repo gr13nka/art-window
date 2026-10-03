@@ -20,6 +20,114 @@ use std::path::Path;
 pub struct Settings {
     pub filters: Filters,
     pub style: Style,
+    pub framing: Framing,
+}
+
+/// The furthest a painting may be zoomed past the size its style gives it — the
+/// same number as Android's `Screen.MAX_ZOOM`.
+pub const MAX_ZOOM: f32 = 3.0;
+/// The pan that centres a painting.
+pub const CENTRED: f32 = 0.5;
+
+/// How the painting has been moved about under its style, as the window's preview
+/// is dragged and scrolled.
+///
+/// Two things with two lifetimes, kept as the phone apps keep them. The zoom is a
+/// taste and outlives the painting. The pan is a decision about one painting — which
+/// part of *this* picture to look at — so it is recorded with that painting's file
+/// name and means nothing for any other, which is how tomorrow's arrives centred
+/// with nobody resetting anything. Read only through [`Framing::for_painting`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Framing {
+    pub zoom: f32,
+    pub pan_x: f32,
+    pub pan_y: f32,
+    /// The file name of the one painting the pan belongs to. A name and not a
+    /// path, because a favourite is a copy that keeps its name and should keep
+    /// its framing with it.
+    pub painting: Option<String>,
+}
+
+impl Default for Framing {
+    fn default() -> Self {
+        Self {
+            zoom: 1.0,
+            pan_x: CENTRED,
+            pan_y: CENTRED,
+            painting: None,
+        }
+    }
+}
+
+/// One painting's framing, already decided: a zoom from 1 to [`MAX_ZOOM`], and
+/// where the screen's window sits on the painting along each axis it overflows —
+/// 0 puts the painting's left or top edge at the screen's, 1 its right or bottom.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Frame {
+    pub zoom: f32,
+    pub pan_x: f32,
+    pub pan_y: f32,
+}
+
+impl Default for Frame {
+    fn default() -> Self {
+        Self {
+            zoom: 1.0,
+            pan_x: CENTRED,
+            pan_y: CENTRED,
+        }
+    }
+}
+
+impl Frame {
+    /// Whether this is no framing at all: the painting as its style alone hangs it.
+    pub fn is_plain(self) -> bool {
+        self == Self::default()
+    }
+}
+
+impl Framing {
+    /// The framing `path` is hung with: the zoom always, the pan only if it was
+    /// set for this painting.
+    ///
+    /// Everything stored is brought into range here, so a file edited by hand, or
+    /// a number that was once not a number, cannot reach the geometry.
+    pub fn for_painting(&self, path: &Path) -> Frame {
+        let within = |v: f32, low: f32, high: f32, otherwise: f32| {
+            if v.is_finite() {
+                v.clamp(low, high)
+            } else {
+                otherwise
+            }
+        };
+        let name = path.file_name().and_then(|name| name.to_str());
+        let mine = self.painting.is_some() && self.painting.as_deref() == name;
+        Frame {
+            zoom: within(self.zoom, 1.0, MAX_ZOOM, 1.0),
+            pan_x: if mine {
+                within(self.pan_x, 0.0, 1.0, CENTRED)
+            } else {
+                CENTRED
+            },
+            pan_y: if mine {
+                within(self.pan_y, 0.0, 1.0, CENTRED)
+            } else {
+                CENTRED
+            },
+        }
+    }
+
+    /// Records `frame` as chosen for the painting at `path`.
+    pub fn set(&mut self, frame: Frame, path: &Path) {
+        self.zoom = frame.zoom;
+        self.pan_x = frame.pan_x;
+        self.pan_y = frame.pan_y;
+        self.painting = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(str::to_owned);
+    }
 }
 
 /// Which of the museum catalogue's paintings may be picked.
@@ -38,7 +146,23 @@ pub struct Filters {
     pub shape: Shape,
 }
 
+impl Filters {
+    /// No narrowing at all — every painting in the catalogue.
+    ///
+    /// Not the same as [`Filters::default`], which is the program as it was before
+    /// the settings existed and so asks for landscapes. Anything that means "start
+    /// from nothing and narrow one section" wants this one.
+    pub fn any() -> Self {
+        Self {
+            subjects: Vec::new(),
+            ..Self::default()
+        }
+    }
+}
+
 impl Default for Filters {
+    /// What an install that has never opened the settings gets: landscapes, of any
+    /// shape, from anywhere. See [`Filters::any`] for no filtering.
     fn default() -> Self {
         Self {
             regions: Vec::new(),
@@ -131,7 +255,8 @@ impl Subject {
 pub enum Shape {
     /// Shaped like the screen, give or take [`MAX_TRIM`].
     Screen,
-    /// The screen's shape, or anything between it and a 4:5 upright.
+    /// Anything between a 4:5 upright and the screen's shape, the screen's end
+    /// allowed the same [`MAX_TRIM`] as [`Shape::Screen`].
     NearSquare,
     #[default]
     Any,
@@ -270,9 +395,60 @@ mod tests {
                 variant: BlurVariant::WholeImage,
                 strength: 70,
             },
+            framing: Framing {
+                zoom: 2.5,
+                pan_x: 0.25,
+                pan_y: 1.0,
+                painting: Some("museums-nga-1.jpg".to_owned()),
+            },
         };
         let text = serde_json::to_string(&s).unwrap();
         assert_eq!(serde_json::from_str::<Settings>(&text).unwrap(), s);
+    }
+
+    #[test]
+    fn the_pan_belongs_to_one_painting_and_the_zoom_outlives_it() {
+        let mut framing = Framing::default();
+        let chosen = Frame {
+            zoom: 2.0,
+            pan_x: 0.1,
+            pan_y: 0.9,
+        };
+        framing.set(chosen, Path::new("/cache/museums-nga-1.jpg"));
+
+        // The favourite's copy has the same name in another folder.
+        assert_eq!(
+            framing.for_painting(Path::new("/favourites/museums-nga-1.jpg")),
+            chosen
+        );
+        assert_eq!(
+            framing.for_painting(Path::new("/cache/museums-nga-2.jpg")),
+            Frame {
+                zoom: 2.0,
+                ..Frame::default()
+            }
+        );
+    }
+
+    #[test]
+    fn stored_framing_is_brought_into_range_before_it_is_used() {
+        let framing = Framing {
+            zoom: 40.0,
+            pan_x: f32::NAN,
+            pan_y: -3.0,
+            painting: Some("a.jpg".to_owned()),
+        };
+        assert_eq!(
+            framing.for_painting(Path::new("a.jpg")),
+            Frame {
+                zoom: MAX_ZOOM,
+                pan_x: CENTRED,
+                pan_y: 0.0,
+            }
+        );
+        assert!(Framing::default()
+            .for_painting(Path::new("a.jpg"))
+            .is_plain());
     }
 
     #[test]
@@ -280,6 +456,7 @@ mod tests {
         let s: Settings = serde_json::from_str(r#"{"style":{"kind":"zoom"}}"#).unwrap();
         assert_eq!(s.style, Style::Zoom);
         assert_eq!(s.filters, Filters::default());
+        assert_eq!(s.framing, Framing::default());
     }
 
     #[test]

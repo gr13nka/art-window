@@ -16,20 +16,13 @@ is closest to English, or the first if none is tagged that way.
 from typing import Iterator
 from urllib.parse import urlencode
 
-from .. import geometry, http, regions
+from .. import geometry, http, regions, text
 
 BASE = "https://api.smk.dk/api/v1/art/search/"
 FILTERS = "[public_domain:true],[has_image:true],[object_names:maleri]"
 PAGE_SIZE = 2000
 
 HOST_GAPS = {"api.smk.dk": 1.0}
-
-
-def _byline(name: str, period: str) -> str:
-    name, period = name.strip(), period.strip()
-    if name and period:
-        return f"{name}, {period}"
-    return name or period
 
 
 def _title(titles: list[dict]) -> str:
@@ -125,7 +118,7 @@ def fetch(
                 "image_url": image_url,
                 "details_url": item.get("frontend_url") or "",
                 "title": _title(item.get("titles") or []) or "Untitled",
-                "byline": _byline(name, period),
+                "byline": text.byline(name, period),
                 "origin": nationality,
                 "tags": _tags(item),
             }
