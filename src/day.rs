@@ -35,7 +35,7 @@ pub fn local(at: u64) -> i64 {
 /// both would misread the hour either side of a daylight-saving change as a day
 /// that has or has not turned over.
 #[cfg(target_os = "macos")]
-fn offset(at: u64) -> i64 {
+pub(crate) fn offset(at: u64) -> i64 {
     use objc2_foundation::{NSDate, NSTimeZone};
 
     let when = NSDate::dateWithTimeIntervalSince1970(at as f64);
@@ -45,7 +45,7 @@ fn offset(at: u64) -> i64 {
 /// GLib asks the system timezone database for the interval containing this UTC
 /// instant, so each side of a daylight-saving boundary gets its own real offset.
 #[cfg(target_os = "linux")]
-fn offset(at: u64) -> i64 {
+pub(crate) fn offset(at: u64) -> i64 {
     let zone = glib::TimeZone::local();
     offset_in(&zone, at)
 }
@@ -64,7 +64,7 @@ fn offset_in(zone: &glib::TimeZone, at: u64) -> i64 {
 /// under the zone's rules for *that* moment, and the gap between the two readings
 /// is the offset.
 #[cfg(windows)]
-fn offset(at: u64) -> i64 {
+pub(crate) fn offset(at: u64) -> i64 {
     use windows::Win32::System::Time::{
         GetDynamicTimeZoneInformation, DYNAMIC_TIME_ZONE_INFORMATION,
     };

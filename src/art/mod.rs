@@ -152,6 +152,12 @@ pub trait Source {
 ///
 /// `nth` distinguishes repeated picks within a single run — the same `nth` gives the
 /// same answer only by accident, which is all that choosing a painting requires.
+/// A file's name as the journal writes it: never the directory, which is the
+/// user's own business.
+pub(crate) fn file_name(path: &Path) -> &str {
+    path.file_name().and_then(|n| n.to_str()).unwrap_or("?")
+}
+
 pub(crate) fn pick_index(len: usize, nth: u64) -> usize {
     random_u64(nth) as usize % len
 }

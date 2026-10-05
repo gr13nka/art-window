@@ -15,9 +15,11 @@
 use crate::art::{self, Artwork, Selection};
 use crate::config::{Config, Paths, State};
 use crate::desktop;
+use crate::journal;
 use crate::settings::Settings;
 use anyhow::{Context, Result};
 use std::path::Path;
+use std::time::Instant;
 
 /// Downloads the next picture, avoiding whatever is on the desktop now.
 ///
@@ -31,9 +33,34 @@ pub fn fetch(
     selection: &Selection,
 ) -> Result<Artwork> {
     let source = art::source_for(&config.source, cache, selection);
-    source
+    journal::note!(
+        "fetch",
+        "start, source {:?}, filters {:?}, previous {}",
+        config.source,
+        selection.filters,
+        state
+            .shown
+            .as_ref()
+            .map_or("none".to_string(), |art| art.path.display().to_string())
+    );
+    let began = Instant::now();
+    let fetched = source
         .fetch(state.shown.as_ref())
-        .with_context(|| format!("fetching from {}", source.label()))
+        .with_context(|| format!("fetching from {}", source.label()));
+    let ms = began.elapsed().as_millis();
+    match &fetched {
+        Ok(art) => journal::note!(
+            "fetch",
+            "done in {ms} ms, title {:?}, path {}",
+            art.title,
+            art.path.display()
+        ),
+        Err(error) => {
+            journal::note!("fetch", "failed after {ms} ms");
+            journal::fault("fetch", error);
+        }
+    }
+    fetched
 }
 
 /// Puts the picture the rotation has just found on the desktop, as the day's.
@@ -53,7 +80,7 @@ pub fn show(
     paths: &Paths,
     state: &mut State,
 ) -> Result<desktop::Pinned> {
-    let pinned = hang(artwork, settings, paths)?;
+    let pinned = hang(artwork, settings, paths, "show")?;
     state.record_fetched(artwork, &paths.state)?;
     sweep(config, paths, state);
     Ok(pinned)
@@ -75,7 +102,7 @@ pub fn revisit(
     paths: &Paths,
     state: &mut State,
 ) -> Result<desktop::Pinned> {
-    let pinned = hang(artwork, settings, paths)?;
+    let pinned = hang(artwork, settings, paths, "revisit")?;
     state.record_chosen(artwork, &paths.state)?;
     sweep(config, paths, state);
     Ok(pinned)
@@ -83,13 +110,30 @@ pub fn revisit(
 
 /// Hangs `artwork` the way the settings say: their style and their framing, and
 /// nothing of their filters, which chose the picture and have no say in placing it.
-fn hang(artwork: &Artwork, settings: &Settings, paths: &Paths) -> Result<desktop::Pinned> {
-    desktop::pin(
+fn hang(
+    artwork: &Artwork,
+    settings: &Settings,
+    paths: &Paths,
+    why: &str,
+) -> Result<desktop::Pinned> {
+    journal::note!(
+        "rotation",
+        "{why} {}, style {:?}, framing {:?}",
+        artwork.path.display(),
+        settings.style,
+        settings.framing
+    );
+    let pinned = desktop::pin(
         &artwork.path,
         &settings.style,
         &settings.framing,
         &paths.cache,
-    )
+    );
+    match &pinned {
+        Ok(answer) => journal::note!("rotation", "{why} hung, {answer:?}"),
+        Err(error) => journal::fault("rotation", error),
+    }
+    pinned
 }
 
 /// Lets the source clear up after itself, sparing the day's picture.
@@ -105,5 +149,10 @@ fn hang(artwork: &Artwork, settings: &Settings, paths: &Paths) -> Result<desktop
 /// that knows which files in the cache are its doing.
 fn sweep(config: &Config, paths: &Paths, state: &State) {
     let todays = state.fetched.as_ref().map(|art| art.path.as_path());
+    journal::note!(
+        "rotation",
+        "sweep, sparing {}",
+        todays.map_or("nothing".to_string(), |path| path.display().to_string())
+    );
     art::source_for(&config.source, &paths.cache, &Selection::default()).discard_all_but(todays);
 }

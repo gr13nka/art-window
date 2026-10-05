@@ -10,7 +10,7 @@
 //!
 //! So the rest are written straight into the Dock's own database. That file is
 //! private to Apple and its shape could change, so a failure there is reported and
-//! stepped over rather than treated as fatal: the supported path has already put the
+//! stepped over rather than treated as fatal: the supported path still puts the
 //! picture on the Space the user is looking at. It is reported to the *caller* as
 //! well as to the log, because at login that failure is the ordinary case and
 //! somebody has to come back and ask again — see [`Pinned`].
@@ -25,6 +25,7 @@
 //! was going to be redrawn anyway.
 
 use crate::desktop::Pinned;
+use crate::journal;
 use crate::placement::{Hang, Mode};
 use anyhow::{anyhow, Context, Result};
 use objc2::rc::Retained;
@@ -37,7 +38,8 @@ use objc2_app_kit::{
 };
 use objc2_foundation::{NSDictionary, NSNumber, NSString, NSURL};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// Placement code the Dock stores for "scale to fit, letterbox the remainder".
 /// The same meaning as `NSImageScaling::ScaleProportionallyUpOrDown` with clipping
@@ -88,30 +90,57 @@ pub fn primary_screen() -> Option<(u32, u32)> {
 /// — and it is the difference between a login-time write landing and not.
 const DOCK_BUSY_WAIT: Duration = Duration::from_millis(500);
 
+/// The store first, AppKit second, and the order is the point. The Dock answers
+/// the AppKit call by writing the same store a moment later, and it does not wait
+/// for a lock: finding this program's transaction open, it gives the file up as
+/// corrupt and starts an empty one, which the next restart then publishes to every
+/// Space. So the transaction is committed and its connection closed before the
+/// Dock is asked for anything.
 pub fn pin(hang: &Hang) -> Result<Pinned> {
-    set_active_space(hang)?;
-
-    match spread_to_every_space(hang) {
-        Ok(true) => Ok(Pinned::AfterRedraw),
-        Ok(false) => Ok(Pinned::Everywhere),
-        Err(e) => {
-            eprintln!(
-                "note: only the active Space was updated; the Dock's wallpaper store was \
-                 not usable ({e})"
-            );
-            Ok(Pinned::InPart)
-        }
-    }
-}
-
-/// The supported route: AppKit, for whichever Space is in front right now.
-fn set_active_space(hang: &Hang) -> Result<()> {
     let mtm = MainThreadMarker::new().ok_or_else(|| {
         anyhow!(
             "wallpaper must be set from the main thread: AppKit enumerates displays nowhere else"
         )
     })?;
 
+    let began = Instant::now();
+    journal::note!(
+        "pin",
+        "path {}, mode {:?}, colour {:?}",
+        hang.path.display(),
+        hang.mode,
+        hang.colour
+    );
+    let spread = spread_to_every_space(hang);
+    // The connection is closed by now, which is the only moment the store may be
+    // looked at again.
+    store_health();
+    if let Err(e) = set_active_space(hang, mtm) {
+        journal::fault("pin", &e);
+        return Err(e);
+    }
+
+    let pinned = match spread {
+        Ok(true) => Pinned::AfterRedraw,
+        Ok(false) => Pinned::Everywhere,
+        Err(e) => {
+            journal::note!(
+                "pin",
+                "only the active Space was updated; the Dock's wallpaper store was not usable ({e:#})"
+            );
+            Pinned::InPart
+        }
+    };
+    journal::note!(
+        "pin",
+        "answered {pinned:?} in {} ms",
+        began.elapsed().as_millis()
+    );
+    Ok(pinned)
+}
+
+/// The supported route: AppKit, for whichever Space is in front right now.
+fn set_active_space(hang: &Hang, mtm: MainThreadMarker) -> Result<()> {
     let url = NSURL::fileURLWithPath(&NSString::from_str(&hang.path.to_string_lossy()));
     let options = desktop_image_options(hang);
     let workspace = NSWorkspace::sharedWorkspace();
@@ -120,6 +149,7 @@ fn set_active_space(hang: &Hang) -> Result<()> {
     if screens.is_empty() {
         return Err(anyhow!("no displays attached"));
     }
+    journal::note!("pin", "asking AppKit for {} screens", screens.len());
 
     for screen in screens.iter() {
         unsafe {
@@ -203,6 +233,7 @@ fn spread_to_every_space(hang: &Hang) -> Result<bool> {
     // owed — an unwritable store would be asked again, and this one would answer
     // the same way forever.
     if slots == 0 {
+        journal::note!("pin", "store has no slots, nothing to write");
         return Ok(false);
     }
 
@@ -221,6 +252,10 @@ fn spread_to_every_space(hang: &Hang) -> Result<bool> {
         |r| r.get(0),
     )?;
     if already == slots {
+        journal::note!(
+            "pin",
+            "store slots {slots}, already current {already}, written 0"
+        );
         return Ok(false);
     }
 
@@ -256,7 +291,44 @@ fn spread_to_every_space(hang: &Hang) -> Result<bool> {
         }
     }
     tx.commit()?;
+    journal::note!(
+        "pin",
+        "store slots {slots}, already current {already}, written {}",
+        slots - already
+    );
     Ok(true)
+}
+
+/// Writes one `dock` line on how the Dock's store looks, for reading a fault off
+/// afterwards. Read-only, and it never fails its caller: a store that cannot be
+/// read is itself the fact worth recording.
+fn store_health() {
+    let read = || -> Result<String> {
+        let store = dock_store()?;
+        let db = rusqlite::Connection::open_with_flags(
+            &store,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )?;
+        db.busy_timeout(DOCK_BUSY_WAIT)?;
+        let pictures: i64 = db.query_row("SELECT count(*) FROM pictures", [], |r| r.get(0))?;
+        let preferences: i64 =
+            db.query_row("SELECT count(*) FROM preferences", [], |r| r.get(0))?;
+        let corrupt = store.with_file_name("desktoppicture.db.corrupt");
+        let corrupt = match std::fs::metadata(&corrupt).and_then(|m| m.modified()) {
+            Ok(at) => format!(
+                "present, modified {}",
+                at.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()
+            ),
+            Err(_) => "absent".to_string(),
+        };
+        Ok(format!(
+            "pictures {pictures}, preferences {preferences}, corrupt copy {corrupt}"
+        ))
+    };
+    match read() {
+        Ok(line) => journal::note!("dock", "store {line}"),
+        Err(e) => journal::note!("dock", "store unreadable: {e:#}"),
+    }
 }
 
 /// `data` is a shared pool of values; rows are matched on type as well as content,
@@ -293,12 +365,32 @@ intern!(intern_real, f64);
 /// is blank until it has finished coming back — measured at around half a minute on
 /// the development machine, which is a long time to look at nothing having asked
 /// for a painting.
-pub fn catch_up() {
-    restart_dock();
+pub fn catch_up(reason: &str) {
+    restart_dock(reason);
 }
 
-fn restart_dock() {
-    let _ = std::process::Command::new("/usr/bin/killall")
+/// Wall-clock seconds of this program's last Dock restart; 0 for none yet.
+static LAST_RESTART: AtomicU64 = AtomicU64::new(0);
+
+fn restart_dock(reason: &str) {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let before = LAST_RESTART.swap(now, Ordering::Relaxed);
+    let since = if before == 0 {
+        "first restart".to_string()
+    } else {
+        format!("{} s since the last", now.saturating_sub(before))
+    };
+    let status = std::process::Command::new("/usr/bin/killall")
         .arg("Dock")
         .status();
+    match status {
+        Ok(status) => journal::note!("dock", "restart for {reason}, killall {status}, {since}"),
+        Err(e) => journal::note!(
+            "dock",
+            "restart for {reason}, killall not run: {e}, {since}"
+        ),
+    }
 }

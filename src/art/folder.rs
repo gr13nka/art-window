@@ -4,7 +4,8 @@
 //! The chosen file is used where it lies — copying it would duplicate a library
 //! the user already curates.
 
-use super::{pick_index, Artwork, Source};
+use super::{file_name, pick_index, Artwork, Source};
+use crate::journal;
 use anyhow::{anyhow, Context, Result};
 use std::path::{Path, PathBuf};
 
@@ -58,6 +59,12 @@ impl Source for Folder {
         }
 
         let path = images[pick_index(images.len(), 0)].clone();
+        journal::note!(
+            "fetch",
+            "folder: {} images, chose {}",
+            images.len(),
+            file_name(&path)
+        );
         let title = path
             .file_stem()
             .and_then(|s| s.to_str())

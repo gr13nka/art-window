@@ -13,14 +13,17 @@ pub(super) fn primary_screen() -> Option<(u32, u32)> {
     wallpaper::primary_screen()
 }
 
-pub(super) fn catch_up() {
-    wallpaper::catch_up();
+pub(super) fn catch_up(reason: &str) {
+    wallpaper::catch_up(reason);
 }
 
 pub(super) fn browse(url: &str) {
-    let _ = std::process::Command::new("/usr/bin/open")
+    if let Err(e) = std::process::Command::new("/usr/bin/open")
         .arg(url)
-        .status();
+        .status()
+    {
+        crate::journal::note!("desktop", "could not open {url}: {e}");
+    }
 }
 
 pub(super) fn starts_at_login() -> bool {

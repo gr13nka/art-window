@@ -46,8 +46,9 @@
 //! worker, a spare and a cache directory of its own, so two apps simply show
 //! different paintings and share nothing.
 
-use crate::art::{self, Artwork, Selection};
+use crate::art::{self, file_name, Artwork, Selection};
 use crate::config::{now_secs, Config};
+use crate::journal;
 use crate::settings::{Filters, Shape};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -139,6 +140,7 @@ impl Slot {
             App::ZoomUs => Place::ZoomUs(zoom_us::ZoomUs::adopt()?),
             App::MeetFirefox => Place::MeetFirefox(meet_firefox::MeetFirefox::adopt()?),
         };
+        journal::note!("backdrop", "{app:?}: slot adopted, {place:?}");
         Ok(Slot { place })
     }
 
@@ -245,14 +247,30 @@ impl Backdrop {
         filters: &Filters,
     ) -> Backdrop {
         let (sender, inbox) = mpsc::channel();
-        let cache = cache.join("backdrop").join(slot.app().directory());
+        let app = slot.app();
+        let cache = cache.join("backdrop").join(app.directory());
         let stage = slot.into_stage();
         // A painting read while this program was not running was most likely shown
         // by a meeting nobody was here to see end. Counting it as shown costs one
         // painting if that guess is wrong; not counting it shows a meeting a
         // painting twice.
         let shown = !fill_now && stage.read_since_hung();
+        journal::note!(
+            "backdrop",
+            "{app:?}: worker started, {}, {}",
+            if fill_now {
+                "slot to be filled at once"
+            } else {
+                "slot already holds a painting"
+            },
+            if shown {
+                "it was read while the program was away, counted as shown"
+            } else {
+                "not read since hung"
+            }
+        );
         let mut worker = Worker {
+            app,
             stage,
             fill_now,
             config: config.clone(),
@@ -266,9 +284,15 @@ impl Backdrop {
         thread::spawn(move || loop {
             let pace = if worker.shown { WATCH } else { POLL };
             match inbox.recv_timeout(pace) {
-                Ok(filters) => worker.filters = filters,
+                Ok(filters) => {
+                    journal::note!("backdrop", "{:?}: filters changed", worker.app);
+                    worker.filters = filters
+                }
                 Err(RecvTimeoutError::Timeout) => {}
-                Err(RecvTimeoutError::Disconnected) => return,
+                Err(RecvTimeoutError::Disconnected) => {
+                    journal::note!("backdrop", "{:?}: worker stopped", worker.app);
+                    return;
+                }
             }
             worker.tick();
         });
@@ -284,6 +308,8 @@ impl Backdrop {
 
 /// What the thread owns.
 struct Worker {
+    /// Only for the journal's sake: the stage is what knows the app.
+    app: App,
     stage: Box<dyn Stage>,
     fill_now: bool,
     config: Config,
@@ -311,7 +337,15 @@ impl Worker {
             // already holds a painting nobody has seen, and the next swap cannot
             // matter before a whole meeting has come and gone.
             match self.prepare() {
-                Ok(spare) => self.spare = Some(spare),
+                Ok(spare) => {
+                    journal::note!(
+                        "backdrop",
+                        "{:?}: spare ready, {}",
+                        self.app,
+                        file_name(&spare.path)
+                    );
+                    self.spare = Some(spare)
+                }
                 Err(e) => self.fail(&e),
             }
         }
@@ -319,20 +353,33 @@ impl Worker {
         // nothing is scanned while the app sits idle.
         if !self.shown {
             self.shown = self.stage.read_since_hung() && self.stage.live();
+            if self.shown {
+                journal::note!("backdrop", "{:?}: meeting live, painting shown", self.app);
+            }
         }
         // Not while the meeting runs: the app may read the file a second time just
         // after it begins, and a swap before that would open it with another
         // painting.
         let over = self.shown && !self.stage.live();
         if (over || self.fill_now) && self.spare.is_some() && !cooling {
+            if over {
+                journal::note!("backdrop", "{:?}: meeting over", self.app);
+            }
             match self.stage.hang(&self.spare_dir()) {
                 Ok(()) => {
+                    journal::note!(
+                        "backdrop",
+                        "{:?}: hung {}",
+                        self.app,
+                        self.spare.as_ref().map_or("?", |a| file_name(&a.path))
+                    );
                     self.last = self.spare.take();
                     self.shown = false;
                     self.fill_now = false;
                 }
                 Err(e) => {
                     if e.is::<Stale>() {
+                        journal::note!("backdrop", "{:?}: spare discarded, slot changed", self.app);
                         self.spare = None;
                     }
                     self.fail(&e);
@@ -344,7 +391,12 @@ impl Worker {
     /// Without a cooling-off a dead network, or a slot that has been deleted,
     /// would be tried again every two seconds for ever.
     fn fail(&mut self, error: &anyhow::Error) {
-        eprintln!("art-window: {error:#}");
+        journal::note!(
+            "backdrop",
+            "{:?}: FAILED: {error:#}; cooling off {} s",
+            self.app,
+            COOLING_OFF
+        );
         self.retry_at = now_secs() + COOLING_OFF;
     }
 

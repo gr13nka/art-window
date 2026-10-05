@@ -129,6 +129,14 @@ it before touching `src/desktop/macos/wallpaper.rs`.
   no next redraw to wait for and a terminal in front of it.
   The deferred debt names its picture: a later `InPart` clears an older picture's
   pending redraw, so catching up can never publish a superseded wallpaper.
+- **The Dock gives up its store when it loses the lock to this program.** It
+  renames the file to `desktoppicture.db.corrupt` and starts an empty one, and the
+  next restart publishes that to every Space. So `pin` commits the store *before*
+  it calls `NSWorkspace`, whose answer is the Dock writing the same file; the tail
+  of the loop neither presses nor restarts when a download is in the air or about
+  to start; and waking asks for a waiting write again (`Owed::recheck`) before the
+  restart that would show it. See
+  `docs/macos-wallpaper.md#the-dock-throws-the-store-away-when-it-loses-the-lock`.
 - **The macOS `pin` backend must run on the main thread.** `NSScreen::screens`
   demands a `MainThreadMarker`. It errors rather than trusting a doc comment. This is why
   `rotation` is split: `fetch` blocks for a couple of minutes and runs on a worker,
@@ -175,6 +183,17 @@ it before touching `src/desktop/macos/wallpaper.rs`.
   placement style; it is written only by *Apply changes*, and a missing or
   unparseable one means the defaults, which are the program as it was before the
   window existed (landscapes, any shape, fitted over black).
+- **Everything the program does is in the journal, and `journal` is the only
+  writer.** One file — `Paths::log`, `~/Library/Logs/ArtWindow.log` on macOS, which
+  is also where the launch agent sends stderr, so there is one file however the app
+  was started. `journal::note!` for a fact, `journal::fault` for a failure with its
+  causes; no `eprintln!` outside the command-line modes' own reports. Successes are
+  recorded as well as failures, because a fault is found by the ordinary line before
+  it — but only at a decision or an outcome, never per tick, per poll or per
+  catalogue row. Every Dock restart names its reason, and every pin leaves the
+  store's health. The file is appended to and cut back in place, never renamed,
+  because launchd holds it open. The topics are listed in
+  `docs/GUIDE.md#the-journal`.
 - **Config, state and cache are different data kinds.** `Paths::locate` uses the
   platform directories for each instead of putting them under one convenient
   root. This preserves the existing Application Support/Cache split on macOS and

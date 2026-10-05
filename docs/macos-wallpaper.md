@@ -157,6 +157,51 @@ passes `pragma integrity_check`, so its name is not evidence of what went wrong,
 an empty store is also the one case where `pin` is *supposed* to do nothing beyond
 the active Space, because `slots == 0` returns early by design.
 
+## The Dock throws the store away when it loses the lock
+
+Seen on 2026-10-04, and it took every wallpaper with it. The machine woke with a
+picture due. The loop restarted the Dock to publish yesterday's write, the new
+painting landed four seconds later, and `pin` asked AppKit for the active Space
+and opened its own transaction in the same breath. The Dock, answering that very
+call, logged
+
+```
+adding new desktop picture failed could not insert space - err=5
+errmsg=database is locked loc=-[DPPictureStorage setDictionary:…]:437
+```
+
+renamed the store to `desktoppicture.db.corrupt` — with this program's write
+safely inside it — and began an empty one. `pin` had reported success, so the
+next wake restarted the Dock and published a store with slots and no pictures.
+The day was settled and nothing was owed, so nothing put it back.
+
+Three rules come out of it:
+
+- **`pin` writes the store before it calls AppKit.** The transaction is committed
+  and the connection closed before the Dock is asked to write anything, so this
+  program is never the lock the Dock loses to.
+- **The Dock is not restarted ahead of a download.** When a redraw coincides with
+  a picture being due, the loop neither presses the old picture nor restarts: it
+  would publish a painting about to be replaced and leave the new one landing in
+  a Dock still building its store.
+- **A write waiting on a redraw is asked for again before the restart.** On
+  waking, `Owed::recheck` owes a `pin` first. If the store was replaced since,
+  the picture is written back into it; if it cannot be, `Pinned::InPart` calls
+  the restart off.
+
+To see whether it has happened, read the journal first
+(`~/Library/Logs/ArtWindow.log`, see the guide): every pin leaves a `[dock]` line
+with the store's slots, its preferences and the age of any
+`desktoppicture.db.corrupt`, and every restart leaves one with its reason. By hand
+it is a `desktoppicture.db.corrupt` with a recent modification time and
+`select count(*) from preferences` answering 0 in the live store. The Dock's own
+side of it is in the system log: `log show --predicate 'process == "Dock" AND
+subsystem == "com.apple.dock.desktoppicture"'`. *Re-apply the wallpaper* puts it
+right.
+
+Still open: *Next picture* clicked in the first minute after a restart lands in a
+young Dock, as a login-time write does.
+
 ## Unplugging a display
 
 Disconnecting an external monitor moves its Spaces onto the screens that remain,

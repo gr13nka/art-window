@@ -36,6 +36,7 @@
 //! camera is on. It is replaced when the camera is off again.
 
 use super::{arm, move_into_place, probe, read_since_armed, Stage, Stale};
+use crate::journal;
 use crate::placement;
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -130,6 +131,11 @@ impl Stage for MeetFirefox {
             (SPARE_THUMBNAIL, thumbnail, thumbnail_len),
         ] {
             let path = spare.join(name);
+            journal::note!(
+                "backdrop",
+                "MeetFirefox: {name} fitted to {} bytes, padded to {len}",
+                jpeg.len()
+            );
             fs::write(&path, pad_to(jpeg, len)?)
                 .with_context(|| format!("writing {}", path.display()))?;
         }

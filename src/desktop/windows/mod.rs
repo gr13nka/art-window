@@ -20,7 +20,14 @@ use windows::Win32::UI::WindowsAndMessaging::{
 pub(crate) use instance::Instance;
 
 pub(super) fn pin(hang: &crate::placement::Hang) -> Result<Pinned> {
-    wallpaper::pin(hang)
+    let pinned = wallpaper::pin(hang);
+    match &pinned {
+        Ok(result) => {
+            crate::journal::note!("pin", "path {}, answered {result:?}", hang.path.display())
+        }
+        Err(error) => crate::journal::fault("pin", error),
+    }
+    pinned
 }
 
 /// The primary display's size in physical pixels; the process is PerMonitorV2 DPI
@@ -34,7 +41,7 @@ pub(super) fn primary_screen() -> Option<(u32, u32)> {
 /// Nothing to publish: the shell service `pin` writes through repaints as it goes.
 /// If it turns out that other virtual desktops lag, this is where their redraw
 /// would be made — see the note at the top of `wallpaper.rs`.
-pub(super) fn catch_up() {}
+pub(super) fn catch_up(_reason: &str) {}
 
 pub(super) fn browse(url: &str) {
     let url = windows::core::HSTRING::from(url);

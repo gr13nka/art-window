@@ -17,6 +17,7 @@ mod day;
 mod desktop;
 mod favourites;
 mod gallery;
+mod journal;
 mod placement;
 mod rotation;
 mod settings;
@@ -73,6 +74,7 @@ fn main() -> Result<()> {
         println!("choices {}", paths.settings.display());
         println!("cache   {}", paths.cache.display());
         println!("kept    {}", paths.favourites.display());
+        println!("log     {}", paths.log.display());
         println!(
             "login   {}",
             if desktop::starts_at_login() {
@@ -94,8 +96,13 @@ fn main() -> Result<()> {
         anyhow::bail!("--check is available on Linux/GNOME only");
     }
 
-    let config = Config::load(&paths.config)?;
+    // Only the two modes that change the desktop keep a journal; the rest answer a
+    // question on a terminal and are done.
+    journal::open(&paths.log);
+    record_start(&mode, &paths);
+    let config = Config::load(&paths.config).inspect_err(|error| journal::fault("start", error))?;
     let mut state = State::load(&paths.state);
+    journal::note!("start", "source {:?}", config.source);
 
     match mode {
         RunMode::Where => unreachable!("handled above, before the config is read"),
@@ -104,7 +111,7 @@ fn main() -> Result<()> {
         RunMode::Catalogue => unreachable!("handled above, before paths are located"),
         RunMode::Tray => {
             #[cfg(windows)]
-            desktop::log_to(&paths.state.with_file_name("art-window.log"));
+            desktop::log_to(&paths.log);
             let settings = settings::Settings::load(&paths.settings);
             tray::run(paths, config, settings, state)
         }
@@ -123,7 +130,7 @@ fn main() -> Result<()> {
             // surprise: whoever typed it is watching a terminal and asked for the
             // wallpaper to change now. See `desktop::catch_up`.
             if pinned != desktop::Pinned::InPart {
-                desktop::catch_up();
+                desktop::catch_up("--once");
             }
 
             println!("{}", artwork.title);
@@ -137,6 +144,38 @@ fn main() -> Result<()> {
             Ok(())
         }
     }
+}
+
+/// What a reader of the journal needs before the first event: which build this is,
+/// how it came to be running, and where everything it touches lives.
+fn record_start(mode: &RunMode, paths: &Paths) {
+    journal::note!(
+        "start",
+        "art-window {} on {} {}, pid {}, {}",
+        env!("CARGO_PKG_VERSION"),
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+        std::process::id(),
+        match mode {
+            RunMode::Once { only_if_due: true } => "--if-due",
+            RunMode::Once { only_if_due: false } => "--once",
+            _ => "resident",
+        },
+    );
+    // launchd names the job it started: the login agent's label, or an
+    // `application.…` one for a copy opened from Finder.
+    if let Ok(job) = std::env::var("XPC_SERVICE_NAME") {
+        journal::note!("start", "started as {job}");
+    }
+    journal::note!(
+        "start",
+        "config {}, state {}, settings {}, cache {}, favourites {}",
+        paths.config.display(),
+        paths.state.display(),
+        paths.settings.display(),
+        paths.cache.display(),
+        paths.favourites.display(),
+    );
 }
 
 enum RunMode {

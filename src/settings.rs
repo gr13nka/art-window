@@ -11,6 +11,7 @@
 //! the window existed — landscapes, any shape, fitted over black — so a file that
 //! is missing, or that an older build cannot parse, changes nothing anyone sees.
 
+use crate::journal;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -348,18 +349,53 @@ impl Settings {
     /// nobody typed it, so there is nobody to tell about a typo, and the defaults
     /// are exactly what the program did before the file existed.
     pub fn load(path: &Path) -> Self {
-        std::fs::read_to_string(path)
-            .ok()
-            .and_then(|t| serde_json::from_str(&t).ok())
-            .unwrap_or_default()
+        let text = match std::fs::read_to_string(path) {
+            Ok(text) => text,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                journal::note!("settings", "no settings file, defaults");
+                return Self::default();
+            }
+            Err(e) => {
+                journal::note!(
+                    "settings",
+                    "FAILED: reading {}: {e}; defaults",
+                    path.display()
+                );
+                return Self::default();
+            }
+        };
+        match serde_json::from_str::<Self>(&text) {
+            Ok(settings) => {
+                journal::note!("settings", "loaded, {}", settings.describe());
+                settings
+            }
+            Err(e) => {
+                journal::note!(
+                    "settings",
+                    "FAILED: {} will not parse ({e}); defaults",
+                    path.display()
+                );
+                Self::default()
+            }
+        }
+    }
+
+    /// The choices in a line, for the journal.
+    fn describe(&self) -> String {
+        format!("filters {:?}, style {:?}", self.filters, self.style)
     }
 
     pub fn save(&self, path: &Path) -> Result<()> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        std::fs::write(path, serde_json::to_string_pretty(self)?)
-            .with_context(|| format!("writing {}", path.display()))
+        let saved = std::fs::write(path, serde_json::to_string_pretty(self)?)
+            .with_context(|| format!("writing {}", path.display()));
+        match &saved {
+            Ok(()) => journal::note!("settings", "saved, {}", self.describe()),
+            Err(error) => journal::fault("settings", error),
+        }
+        saved
     }
 }
 

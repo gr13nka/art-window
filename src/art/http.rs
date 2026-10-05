@@ -5,10 +5,12 @@
 //! streaming download keep that single behaviour in one place rather than two
 //! copies quietly drifting apart on a timeout or a size limit.
 
+use crate::journal;
 use anyhow::{anyhow, Context, Result};
+use serde::de::DeserializeOwned;
 use std::io::Read;
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// How long any one request may take. Generous enough for an original-resolution
 /// painting on a link that has just woken up with the rest of the machine, and no
@@ -51,6 +53,54 @@ pub(crate) fn extension_from_url(url: &str) -> &str {
         .unwrap_or("jpg")
 }
 
+/// `url` as the journal names it: host and path, and the query string only while
+/// it is short enough to be worth reading.
+fn named(url: &str) -> &str {
+    match url.split_once('?') {
+        Some((bare, query)) if query.len() > 80 => bare,
+        _ => url.strip_prefix("https://").unwrap_or(url),
+    }
+}
+
+/// Asks `url` for JSON and decodes it, recording the request in the journal.
+///
+/// `what` is the caller's own words for the failure, so the error says which
+/// question went unanswered rather than only which address.
+pub(crate) fn get_json<T: DeserializeOwned>(
+    agent: &ureq::Agent,
+    url: &str,
+    what: &str,
+) -> Result<T> {
+    let started = Instant::now();
+    let result = agent
+        .get(url)
+        .call()
+        .with_context(|| what.to_owned())
+        .and_then(|mut response| {
+            let status = response.status().as_u16();
+            let decoded = response
+                .body_mut()
+                .read_json()
+                .with_context(|| format!("reading {what}"));
+            journal::note!(
+                "fetch",
+                "GET {}, status {status}, {} ms",
+                named(url),
+                started.elapsed().as_millis()
+            );
+            decoded
+        });
+    if let Err(error) = &result {
+        journal::note!(
+            "fetch",
+            "GET {} failed after {} ms: {error:#}",
+            named(url),
+            started.elapsed().as_millis()
+        );
+    }
+    result
+}
+
 /// Downloads `url` to `dest`, refusing anything over [`MAX_IMAGE_BYTES`]. On
 /// refusal nothing is left at `dest`, whether or not the server said how much was
 /// coming.
@@ -58,6 +108,27 @@ pub(crate) fn extension_from_url(url: &str) -> &str {
 /// Creates `dest`'s parent directory if needed; the cache it writes into is swept
 /// daily and cannot be relied on to exist.
 pub(crate) fn download(agent: &ureq::Agent, url: &str, dest: &Path) -> Result<()> {
+    let started = Instant::now();
+    let result = fetch_to(agent, url, dest);
+    match &result {
+        Ok(bytes) => journal::note!(
+            "fetch",
+            "GET {}, {bytes} bytes, {} ms",
+            named(url),
+            started.elapsed().as_millis()
+        ),
+        Err(error) => journal::note!(
+            "fetch",
+            "GET {} failed after {} ms: {error:#}",
+            named(url),
+            started.elapsed().as_millis()
+        ),
+    }
+    result.map(|_| ())
+}
+
+/// The download itself; answers how many bytes were written.
+fn fetch_to(agent: &ureq::Agent, url: &str, dest: &Path) -> Result<u64> {
     let mut response = agent
         .get(url)
         .call()
@@ -94,5 +165,5 @@ pub(crate) fn download(agent: &ureq::Agent, url: &str, dest: &Path) -> Result<()
         return Err(anyhow!("image is over the {MAX_IMAGE_BYTES}-byte limit"));
     }
 
-    Ok(())
+    Ok(written)
 }

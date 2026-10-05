@@ -22,7 +22,8 @@
 //! (`docs/ios.md`). A word-list change belongs in all three.
 
 use super::http;
-use super::{pick_index, Artwork, Selection, Source};
+use super::{file_name, pick_index, Artwork, Selection, Source};
+use crate::journal;
 use crate::settings::{Filters, Region, Shape, Subject};
 use anyhow::{anyhow, Result};
 use std::path::{Path, PathBuf};
@@ -856,6 +857,17 @@ impl Source for Museums {
             screen_aspect: self.selection.screen_aspect,
         };
         let pool = candidates(catalogue(), &selection, avoid);
+        let relaxed = relaxed_sections(&self.selection.filters, &selection.filters);
+        journal::note!(
+            "fetch",
+            "museums: {} candidates, {}",
+            pool.len(),
+            if relaxed.is_empty() {
+                "no filter relaxed".to_owned()
+            } else {
+                format!("relaxed {}", relaxed.join(", "))
+            }
+        );
         if pool.is_empty() {
             return Err(anyhow!(
                 "no paintings in the catalogue match the chosen filters"
@@ -867,6 +879,14 @@ impl Source for Museums {
             let entry = pool[pick_index(pool.len(), attempt as u64)];
             match self.download(entry) {
                 Ok(path) => {
+                    journal::note!(
+                        "fetch",
+                        "museums: chose {}-{}, {:?}, file {}",
+                        entry.source.key(),
+                        entry.id,
+                        entry.title,
+                        file_name(&path)
+                    );
                     return Ok(Artwork {
                         title: if entry.title.trim().is_empty() {
                             "Untitled".to_owned()
@@ -881,9 +901,17 @@ impl Source for Museums {
                             Some(entry.details_url.clone())
                         },
                         path,
-                    })
+                    });
                 }
-                Err(e) => last_error = Some(e),
+                Err(e) => {
+                    journal::note!(
+                        "fetch",
+                        "museums: download of {}-{} failed, trying another",
+                        entry.source.key(),
+                        entry.id
+                    );
+                    last_error = Some(e)
+                }
             }
         }
 
@@ -905,10 +933,32 @@ impl Source for Museums {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_file() && Some(path.as_path()) != keep && key_of(&path).is_some() {
-                let _ = std::fs::remove_file(path);
+                match std::fs::remove_file(&path) {
+                    Ok(()) => journal::note!("sweep", "museums: deleted {}", file_name(&path)),
+                    Err(e) => journal::note!(
+                        "sweep",
+                        "museums: could not delete {}: {e}",
+                        file_name(&path)
+                    ),
+                }
             }
         }
     }
+}
+
+/// The names of the sections `after` has lost relative to `before`, for the
+/// journal.
+fn relaxed_sections(before: &Filters, after: &Filters) -> Vec<&'static str> {
+    [
+        ("shape", before.shape != after.shape),
+        ("origin", before.regions != after.regions),
+        ("subject", before.subjects != after.subjects),
+        ("artist", before.artists != after.artists),
+        ("content", before.hide_religious != after.hide_religious),
+    ]
+    .into_iter()
+    .filter_map(|(name, changed)| changed.then_some(name))
+    .collect()
 }
 
 #[cfg(test)]

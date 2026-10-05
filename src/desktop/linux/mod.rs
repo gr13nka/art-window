@@ -13,8 +13,16 @@ use std::path::Path;
 /// GNOME keeps one wallpaper and this backend reads it back before returning, so
 /// there is no half-measure to report: it either took or it errored.
 pub(super) fn pin(hang: &Hang) -> Result<Pinned> {
-    background::pin(hang)?;
-    Ok(Pinned::Everywhere)
+    match background::pin(hang) {
+        Ok(()) => {
+            crate::journal::note!("pin", "path {}, took and read back", hang.path.display());
+            Ok(Pinned::Everywhere)
+        }
+        Err(error) => {
+            crate::journal::fault("pin", &error);
+            Err(error)
+        }
+    }
 }
 
 /// The primary monitor's size in device pixels, or `None` with no display.
@@ -31,10 +39,12 @@ pub(super) fn primary_screen() -> Option<(u32, u32)> {
 
 /// Nothing to publish: GNOME Shell watches the settings this backend writes, so a
 /// picture is visible everywhere the moment `pin` returns.
-pub(super) fn catch_up() {}
+pub(super) fn catch_up(_reason: &str) {}
 
 pub(super) fn browse(url: &str) {
-    let _ = std::process::Command::new("xdg-open").arg(url).status();
+    if let Err(e) = std::process::Command::new("xdg-open").arg(url).status() {
+        crate::journal::note!("desktop", "could not open {url}: {e}");
+    }
 }
 
 pub(super) fn starts_at_login() -> bool {

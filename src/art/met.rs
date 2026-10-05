@@ -13,8 +13,9 @@
 //! `Museums.kt`, as the name of a download made before the catalogue existed.
 
 use super::http;
-use super::{pick_index, Artwork, Source};
-use anyhow::{anyhow, Context, Result};
+use super::{file_name as name, pick_index, Artwork, Source};
+use crate::journal;
+use anyhow::{anyhow, Result};
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -121,16 +122,11 @@ impl Met {
         let mut ids = Vec::new();
         let mut offset = 0;
         loop {
-            let results: SearchResults = self
-                .agent
-                .get(&format!(
-                    "{SEARCH_API}?{SEARCH}&limit={SEARCH_PAGE}&offset={offset}"
-                ))
-                .call()
-                .context("asking the Met which paintings are available")?
-                .body_mut()
-                .read_json()
-                .context("reading the Met's list of paintings")?;
+            let results: SearchResults = http::get_json(
+                &self.agent,
+                &format!("{SEARCH_API}?{SEARCH}&limit={SEARCH_PAGE}&offset={offset}"),
+                "the Met's list of paintings",
+            )?;
             let total = results.total.min(MAX_SEARCH_RESULTS);
             let page = results.object_ids.unwrap_or_default();
             if page.is_empty() {
@@ -146,18 +142,17 @@ impl Met {
         if ids.is_empty() {
             Err(anyhow!("the Met returned no public-domain paintings"))
         } else {
+            journal::note!("fetch", "met: {} candidate paintings", ids.len());
             Ok(ids)
         }
     }
 
     fn object(&self, id: u64) -> Result<Object> {
-        self.agent
-            .get(&format!("{API}/objects/{id}"))
-            .call()
-            .with_context(|| format!("fetching Met object {id}"))?
-            .body_mut()
-            .read_json()
-            .with_context(|| format!("reading Met object {id}"))
+        http::get_json(
+            &self.agent,
+            &format!("{API}/objects/{id}"),
+            &format!("Met object {id}"),
+        )
     }
 
     fn download(&self, url: &str, id: u64) -> Result<PathBuf> {
@@ -184,6 +179,12 @@ impl Source for Met {
                 // Kept only if nothing more specific went wrong: a museum that
                 // refused is worth more to whoever reads the log than the clock
                 // that ran out waiting for it.
+                journal::note!(
+                    "fetch",
+                    "met: over the {} second budget before attempt {}",
+                    BUDGET.as_secs(),
+                    attempt + 1
+                );
                 last_error
                     .get_or_insert_with(|| anyhow!("gave up after {} seconds", BUDGET.as_secs()));
                 break;
@@ -191,12 +192,22 @@ impl Source for Met {
 
             let id = ids[pick_index(ids.len(), attempt as u64)];
             if Some(id) == avoid {
+                journal::note!("fetch", "met: skipped {id}, already on the desktop");
                 continue;
             }
 
             let object = match self.object(id) {
                 Ok(o) if !o.primary_image.is_empty() && !o.is_portrait() => o,
-                Ok(_) => continue, // no usable image, or catalogued as a portrait
+                Ok(o) => {
+                    // No usable image, or catalogued as a portrait.
+                    let why = if o.primary_image.is_empty() {
+                        "no image"
+                    } else {
+                        "a portrait"
+                    };
+                    journal::note!("fetch", "met: skipped {id}, {why}");
+                    continue;
+                }
                 Err(e) => {
                     last_error = Some(e);
                     continue;
@@ -205,6 +216,13 @@ impl Source for Met {
 
             match self.download(&object.primary_image, object.object_id) {
                 Ok(path) => {
+                    journal::note!(
+                        "fetch",
+                        "met: chose {}, {:?}, file {}",
+                        object.object_id,
+                        object.title,
+                        name(&path)
+                    );
                     return Ok(Artwork {
                         byline: match (object.artist.trim(), object.date.trim()) {
                             ("", "") => String::new(),
@@ -220,9 +238,12 @@ impl Source for Met {
                         attribution: "The Metropolitan Museum of Art".to_owned(),
                         details_url: Some(object.object_url),
                         path,
-                    })
+                    });
                 }
-                Err(e) => last_error = Some(e),
+                Err(e) => {
+                    journal::note!("fetch", "met: download of {id} failed, trying another");
+                    last_error = Some(e)
+                }
             }
         }
 
@@ -243,7 +264,10 @@ impl Source for Met {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_file() && Some(path.as_path()) != keep && id_of(&path).is_some() {
-                let _ = std::fs::remove_file(path);
+                match std::fs::remove_file(&path) {
+                    Ok(()) => journal::note!("sweep", "met: deleted {}", name(&path)),
+                    Err(e) => journal::note!("sweep", "met: could not delete {}: {e}", name(&path)),
+                }
             }
         }
     }

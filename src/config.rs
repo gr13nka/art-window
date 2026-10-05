@@ -8,6 +8,7 @@
 use crate::art::{Artwork, SourceSpec};
 use crate::backdrop::{App, Slot};
 use crate::day;
+use crate::journal;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -76,6 +77,8 @@ pub struct Paths {
     /// of its own because the cache is emptied daily and this is the one place a
     /// picture is safe from that.
     pub favourites: PathBuf,
+    /// What the program did and when — see [`crate::journal`].
+    pub log: PathBuf,
 }
 
 impl Paths {
@@ -96,8 +99,26 @@ impl Paths {
             settings: dirs.data_dir().join("settings.json"),
             cache: dirs.cache_dir().to_path_buf(),
             favourites: dirs.data_dir().join("favourites"),
+            log: log_file(&dirs),
         })
     }
+}
+
+/// On macOS the journal is the file the launch agent already sends stderr to —
+/// see `desktop/macos/login.rs` — so there is one file to read however the program
+/// was started. `~/Library/Logs` is also where Console looks.
+#[cfg(target_os = "macos")]
+fn log_file(dirs: &directories::ProjectDirs) -> PathBuf {
+    match directories::BaseDirs::new() {
+        Some(base) => base.home_dir().join("Library/Logs/ArtWindow.log"),
+        None => dirs.data_dir().join("art-window.log"),
+    }
+}
+
+/// Beside the state file: on Windows that is where stderr is already redirected.
+#[cfg(not(target_os = "macos"))]
+fn log_file(dirs: &directories::ProjectDirs) -> PathBuf {
+    dirs.data_dir().join("art-window.log")
 }
 
 impl Config {
@@ -151,22 +172,32 @@ impl State {
         let text = match std::fs::read_to_string(path) {
             Ok(text) => text,
             Err(e) => {
-                if e.kind() != std::io::ErrorKind::NotFound {
-                    eprintln!(
-                        "art-window: reading {}: {e}; starting fresh",
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    journal::note!("state", "no state file, starting fresh");
+                } else {
+                    journal::note!(
+                        "state",
+                        "FAILED: reading {}: {e}; starting fresh",
                         path.display()
                     );
                 }
                 return Self::default();
             }
         };
-        serde_json::from_str(&text).unwrap_or_else(|e| {
-            eprintln!(
-                "art-window: {} will not parse ({e}); starting fresh",
-                path.display()
-            );
-            Self::default()
-        })
+        match serde_json::from_str::<Self>(&text) {
+            Ok(state) => {
+                journal::note!("state", "loaded, {}", state.summary());
+                state
+            }
+            Err(e) => {
+                journal::note!(
+                    "state",
+                    "FAILED: {} will not parse ({e}); starting fresh",
+                    path.display()
+                );
+                Self::default()
+            }
+        }
     }
 
     /// Records `artwork` as the picture of the day, fresh from the rotation.
@@ -176,6 +207,11 @@ impl State {
     /// desktop, and there is no way to do half of it. Callers must have hung the
     /// wallpaper first — see [`crate::rotation::show`].
     pub fn record_fetched(&mut self, artwork: &Artwork, path: &Path) -> Result<()> {
+        journal::note!(
+            "state",
+            "day settled by a fetched picture, {}",
+            name(artwork)
+        );
         self.last_success = Some(now_secs());
         self.fetched = Some(artwork.clone());
         self.shown = Some(artwork.clone());
@@ -193,7 +229,18 @@ impl State {
     ///
     /// Callers must have hung the wallpaper first — see [`crate::rotation::revisit`].
     pub fn record_chosen(&mut self, artwork: &Artwork, path: &Path) -> Result<()> {
-        if self.is_due() {
+        let owed = self.is_due();
+        journal::note!(
+            "state",
+            "chose {}, day {}",
+            name(artwork),
+            if owed {
+                "settled by it, a picture was owed"
+            } else {
+                "left alone"
+            }
+        );
+        if owed {
             self.last_success = Some(now_secs());
         }
         self.shown = Some(artwork.clone());
@@ -206,6 +253,11 @@ impl State {
     /// The clock and both pictures are left alone: a meeting background takes
     /// neither the desktop nor the day.
     pub fn record_backdrop(&mut self, app: App, slot: Option<Slot>, path: &Path) -> Result<()> {
+        journal::note!(
+            "state",
+            "backdrop slot for {app:?}: {}",
+            if slot.is_some() { "set" } else { "cleared" }
+        );
         self.backdrops.retain(|kept| kept.app() != app);
         self.backdrops.extend(slot);
         self.save(path)
@@ -227,14 +279,39 @@ impl State {
             .filter(|art| art.path.exists())
     }
 
+    /// The state in a line, for the journal: what is on the desktop, what the day
+    /// brought, and what the calendar makes of the two.
+    pub fn summary(&self) -> String {
+        let name = |art: &Option<Artwork>| match art {
+            Some(art) => art.path.display().to_string(),
+            None => "nothing".to_owned(),
+        };
+        let settled = match self.last_success {
+            Some(at) => format!("day {}", day::local(at)),
+            None => "never".to_owned(),
+        };
+        format!(
+            "shown {}, fetched {}, settled {settled}, today is day {}, due {}",
+            name(&self.shown),
+            name(&self.fetched),
+            day::local(now_secs()),
+            self.is_due(),
+        )
+    }
+
     fn save(&self, path: &Path) -> Result<()> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
         let unfinished = path.with_extension("json.tmp");
-        std::fs::write(&unfinished, serde_json::to_string_pretty(self)?)
+        let saved = std::fs::write(&unfinished, serde_json::to_string_pretty(self)?)
             .and_then(|()| std::fs::rename(&unfinished, path))
-            .with_context(|| format!("writing {}", path.display()))
+            .with_context(|| format!("writing {}", path.display()));
+        match &saved {
+            Ok(()) => journal::note!("state", "saved"),
+            Err(error) => journal::fault("state", error),
+        }
+        saved
     }
 
     /// Whether the local date has changed since the last picture was settled.
@@ -254,6 +331,11 @@ impl State {
             Some(last) => day::local(now_secs()) != day::local(last),
         }
     }
+}
+
+/// The picture's file name, which is all the journal says of it.
+fn name(artwork: &Artwork) -> &str {
+    crate::art::file_name(&artwork.path)
 }
 
 pub(crate) fn now_secs() -> u64 {

@@ -10,7 +10,8 @@
 //! are all this module's business. Callers keep pictures, drop them, and ask which
 //! one a menu row meant.
 
-use crate::art::Artwork;
+use crate::art::{file_name, Artwork};
+use crate::journal;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -44,6 +45,15 @@ impl Favourites {
     /// is a convenience — losing it costs a repeated painting — whereas an empty
     /// list would be written straight back over the real one at the next `keep`.
     pub fn open(dir: &Path) -> Result<Self> {
+        let opened = Self::read(dir);
+        match &opened {
+            Ok(list) => journal::note!("favourites", "list read, {} kept", list.kept.len()),
+            Err(error) => journal::fault("favourites", error),
+        }
+        opened
+    }
+
+    fn read(dir: &Path) -> Result<Self> {
         let index = dir.join(INDEX);
         let kept = match std::fs::read_to_string(&index) {
             Ok(text) => serde_json::from_str(&text)
@@ -87,8 +97,23 @@ impl Favourites {
         std::fs::create_dir_all(&self.dir)
             .with_context(|| format!("making {}", self.dir.display()))?;
         let copy = self.free_name(&art.path);
-        std::fs::copy(&art.path, &copy)
-            .with_context(|| format!("copying {} to {}", art.path.display(), copy.display()))?;
+        if let Err(error) = std::fs::copy(&art.path, &copy)
+            .with_context(|| format!("copying {} to {}", art.path.display(), copy.display()))
+        {
+            journal::fault("favourites", &error);
+            return Err(error);
+        }
+        journal::note!(
+            "favourites",
+            "kept {} as {}{}",
+            file_name(&art.path),
+            file_name(&copy),
+            if file_name(&art.path) == file_name(&copy) {
+                ""
+            } else {
+                " (renamed, name taken)"
+            }
+        );
         self.kept.push(Kept {
             origin: art.path.clone(),
             art: Artwork {
@@ -103,6 +128,7 @@ impl Favourites {
     /// [`Favourites::discard_all_but`].
     pub fn forget(&mut self, key: &str) -> Result<()> {
         self.kept.retain(|k| k.key() != key);
+        journal::note!("favourites", "forgot {key}, {} kept", self.kept.len());
         self.save()
     }
 
@@ -122,7 +148,14 @@ impl Favourites {
             let path = entry.path();
             let claimed = self.kept.iter().any(|k| k.art.path == path);
             if path.is_file() && Some(path.as_path()) != keep && path != index && !claimed {
-                let _ = std::fs::remove_file(path);
+                match std::fs::remove_file(&path) {
+                    Ok(()) => journal::note!("sweep", "favourites: deleted {}", file_name(&path)),
+                    Err(e) => journal::note!(
+                        "sweep",
+                        "favourites: could not delete {}: {e}",
+                        file_name(&path)
+                    ),
+                }
             }
         }
     }
@@ -157,8 +190,12 @@ impl Favourites {
         std::fs::create_dir_all(&self.dir)
             .with_context(|| format!("making {}", self.dir.display()))?;
         let index = self.dir.join(INDEX);
-        std::fs::write(&index, serde_json::to_string_pretty(&self.kept)?)
-            .with_context(|| format!("writing {}", index.display()))
+        let saved = std::fs::write(&index, serde_json::to_string_pretty(&self.kept)?)
+            .with_context(|| format!("writing {}", index.display()));
+        if let Err(error) = &saved {
+            journal::fault("favourites", error);
+        }
+        saved
     }
 }
 

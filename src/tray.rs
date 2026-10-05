@@ -31,6 +31,7 @@ use crate::config::{now_secs, Config, Paths, State};
 use crate::desktop::{self, Pinned};
 use crate::favourites::Favourites;
 use crate::gallery::{Control, Gallery, Pick, Tab};
+use crate::journal;
 use crate::rotation;
 use crate::settings::Settings;
 use crate::wake;
@@ -144,6 +145,33 @@ enum Wanted {
     Quit,
 }
 
+impl Wanted {
+    /// What the journal calls this request, or `None` for the one that asks nothing.
+    fn name(&self) -> Option<String> {
+        Some(match self {
+            Self::Nothing => return None,
+            Self::Next => "Next".to_string(),
+            Self::Keep => "Keep".to_string(),
+            Self::Show(key) => format!("Show {key}"),
+            Self::Today => "Today".to_string(),
+            Self::Forget(key) => format!("Forget {key}"),
+            Self::Gallery => "Gallery opened".to_string(),
+            Self::Settings => "Settings opened".to_string(),
+            Self::Apply(_) => "Apply".to_string(),
+            Self::Browse => "Browse".to_string(),
+            Self::Read(url) => format!("Read {url}"),
+            Self::Reapply => "Reapply".to_string(),
+            Self::Login(enabled) => format!("Login {}", if *enabled { "on" } else { "off" }),
+            Self::Backdrop(app, enabled) => format!(
+                "Backdrop {} {}",
+                app.label(),
+                if *enabled { "on" } else { "off" }
+            ),
+            Self::Quit => "Quit".to_string(),
+        })
+    }
+}
+
 impl From<Control> for Wanted {
     fn from(control: Control) -> Self {
         match control {
@@ -219,6 +247,23 @@ impl Owed {
     fn owe_after(&mut self, delay: Duration) {
         self.at = Some(now_secs() + delay.as_secs());
         self.tries = PATIENCE;
+        journal::note!(
+            "owed",
+            "asking again in {} s, {} tries",
+            delay.as_secs(),
+            self.tries
+        );
+    }
+
+    /// Owes an asking on the next turn of the loop if a write is still waiting on
+    /// a redraw. A restart publishes whatever the store holds by then, and the Dock
+    /// can have thrown the store away since the write: asked again first, the
+    /// picture is either back in it or the restart is called off.
+    fn recheck(&mut self) {
+        if let Some(path) = &self.unseen {
+            journal::note!("owed", "recheck, redraw still owed for {}", path.display());
+            self.owe();
+        }
     }
 
     /// Records what the desktop made of a picture just put up.
@@ -229,6 +274,16 @@ impl Owed {
             _ => None,
         };
         self.remember_visibility(pinned, path);
+        journal::note!(
+            "owed",
+            "{pinned:?} for {}, re-asking {}",
+            path.display(),
+            if self.at.is_some() {
+                "scheduled"
+            } else {
+                "not needed"
+            }
+        );
     }
 
     /// Offers the desktop `shown` again, if an asking is owed by now.
@@ -256,6 +311,12 @@ impl Owed {
         if pinned == Pinned::InPart && self.tries > 0 {
             self.at = Some(now_secs() + RE_PIN.as_secs());
         }
+        journal::note!(
+            "owed",
+            "pressed {}, {pinned:?}, {} tries left",
+            art.path.display(),
+            self.tries
+        );
         Ok(())
     }
 
@@ -264,10 +325,20 @@ impl Owed {
     /// Only ever called where a blanked desktop costs nothing — see
     /// [`desktop::catch_up`] — and cheap to call anywhere, because a desktop that
     /// owes nothing is not disturbed.
-    fn catch_up(&mut self) {
-        if self.unseen.take().is_some() {
-            desktop::catch_up();
+    fn catch_up(&mut self, reason: &str) {
+        if let Some(path) = self.unseen.take() {
+            journal::note!(
+                "owed",
+                "restarting for {reason}, publishing {}",
+                path.display()
+            );
+            desktop::catch_up(reason);
         }
+    }
+
+    /// Whether a written picture is still waiting on a redraw.
+    fn is_unseen(&self) -> bool {
+        self.unseen.is_some()
     }
 
     /// Records which picture a future Dock restart would publish. A later picture
@@ -283,7 +354,9 @@ impl Owed {
     /// Drops the redraw debt because the desktop has just been redrawn by other
     /// means than [`Owed::catch_up`].
     fn forget_unseen(&mut self) {
-        self.unseen = None;
+        if let Some(path) = self.unseen.take() {
+            journal::note!("owed", "redraw debt for {} dropped", path.display());
+        }
     }
 
     /// Seconds until the next asking, for the clock at the tail of the loop.
@@ -350,17 +423,30 @@ impl Schedule {
     /// now would undo a choice just made.
     fn landed(&mut self) -> bool {
         self.fetching = false;
-        !std::mem::take(&mut self.superseded)
+        let hang = !std::mem::take(&mut self.superseded);
+        if !hang {
+            journal::note!(
+                "schedule",
+                "download landed and dropped, superseded by a pick"
+            );
+        }
+        hang
     }
 
     fn succeeded(&mut self) {
         self.cooling_off = None;
+        journal::note!("schedule", "fetch succeeded");
     }
 
     /// Every failure path has to come through here: the day is marked done only on
     /// success, so a failure with no cooling-off is retried at once and for ever.
     fn failed(&mut self, now: u64) {
         self.cooling_off = Some(now + RETRY.as_secs());
+        journal::note!(
+            "schedule",
+            "fetch failed, cooling off {} s",
+            RETRY.as_secs()
+        );
     }
 
     /// A picture went up by hand. Nothing is owed that this has not just answered,
@@ -388,6 +474,15 @@ impl Schedule {
             .filter(|left| *left > 0);
         if asked || (cooling_off.is_none() && is_due()) {
             self.fetching = true;
+            journal::note!(
+                "schedule",
+                "fetching, {}",
+                if asked {
+                    "asked for by hand"
+                } else {
+                    "the day is due"
+                }
+            );
             Step::Fetch
         } else {
             Step::Idle(cooling_off)
@@ -454,7 +549,7 @@ pub fn run(paths: Paths, config: Config, mut settings: Settings, mut state: Stat
         }) {
             Ok(watch) => Some(watch),
             Err(error) => {
-                report(&error);
+                report("desktop", &error);
                 None
             }
         }
@@ -475,7 +570,7 @@ pub fn run(paths: Paths, config: Config, mut settings: Settings, mut state: Stat
         Err(error) => {
             // The Linux GLib tick below preserves correctness; wake notification
             // only removes up to a minute of latency after opening a lid.
-            report(&error);
+            report("desktop", &error);
             None
         }
     };
@@ -487,7 +582,7 @@ pub fn run(paths: Paths, config: Config, mut settings: Settings, mut state: Stat
     .unwrap_or_else(|error| {
         // Losing it costs only the rescue after an unplug; the next wake or login
         // still re-asserts the picture.
-        report(&error);
+        report("desktop", &error);
         None
     });
 
@@ -559,6 +654,7 @@ pub fn run(paths: Paths, config: Config, mut settings: Settings, mut state: Stat
         // still waiting for. Two events say so and no state outlives them, so this
         // belongs to the pass rather than to the loop.
         let mut redrawing = false;
+        let mut starting_session = false;
 
         // Every event is first read for what it asks of the loop, and only then
         // acted on. The two halves are separate because the same two things can be
@@ -585,7 +681,7 @@ pub fn run(paths: Paths, config: Config, mut settings: Settings, mut state: Stat
                     match build_tray(&ui.menu) {
                         Ok(built) => tray = Some(built),
                         Err(e) => {
-                            report(&e);
+                            report("desktop", &e);
                             *control_flow = ControlFlow::Exit;
                             return;
                         }
@@ -612,7 +708,7 @@ pub fn run(paths: Paths, config: Config, mut settings: Settings, mut state: Stat
                         window_requested = true;
                     }
                     if let Err(error) = ui.present(target, &favourites, Tab::Favourites) {
-                        report(&error);
+                        report("window", &error);
                         *control_flow = ControlFlow::Exit;
                         return;
                     }
@@ -629,8 +725,12 @@ pub fn run(paths: Paths, config: Config, mut settings: Settings, mut state: Stat
                 // would put that right — the day is settled the moment a picture
                 // arrives, and no rotation is owed until tomorrow.
                 if starting {
+                    let (width, height) = desktop::primary_screen();
+                    journal::note!("start", "screen {width}x{height}");
+                    journal::note!("loop", "session begun");
                     owed.owe();
                     redrawing = true;
+                    starting_session = true;
                 }
                 Wanted::Nothing
             }
@@ -648,6 +748,7 @@ pub fn run(paths: Paths, config: Config, mut settings: Settings, mut state: Stat
 
             #[cfg(target_os = "linux")]
             Event::UserEvent(Notice::TrayHost(present)) => {
+                journal::note!("loop", "tray host present {present}");
                 if present && indicator_available {
                     if tray.is_none() {
                         match build_tray(&ui.menu) {
@@ -655,7 +756,7 @@ pub fn run(paths: Paths, config: Config, mut settings: Settings, mut state: Stat
                                 tray = Some(built);
                                 nudge_run_loop();
                             }
-                            Err(error) => report(&error),
+                            Err(error) => report("desktop", &error),
                         }
                     }
                     if tray.is_some() && !window_requested {
@@ -664,7 +765,7 @@ pub fn run(paths: Paths, config: Config, mut settings: Settings, mut state: Stat
                 } else {
                     tray.take();
                     if let Err(error) = ui.present(target, &favourites, Tab::Favourites) {
-                        report(&error);
+                        report("window", &error);
                         *control_flow = ControlFlow::Exit;
                         return;
                     }
@@ -681,6 +782,7 @@ pub fn run(paths: Paths, config: Config, mut settings: Settings, mut state: Stat
                 ..
             } => {
                 if ui.owns_window(window_id) {
+                    journal::note!("loop", "window closed");
                     #[cfg(target_os = "linux")]
                     {
                         window_requested = false;
@@ -711,7 +813,7 @@ pub fn run(paths: Paths, config: Config, mut settings: Settings, mut state: Stat
                             ui.describe(&state, &favourites);
                         }
                         Err(e) => {
-                            report(&e);
+                            report("schedule", &e);
                             schedule.failed(now_secs());
                             ui.set_status("Last attempt failed — will retry");
                         }
@@ -722,8 +824,11 @@ pub fn run(paths: Paths, config: Config, mut settings: Settings, mut state: Stat
 
             // Nothing to do but arrive: the clock below is what this is for. The
             // screen is coming back with it, which makes this one of the two
-            // moments a blanked desktop costs nothing.
+            // moments a blanked desktop costs nothing. What is waiting to be shown
+            // is asked for once more before the restart that would show it.
             Event::UserEvent(Notice::Woke) => {
+                journal::note!("loop", "woke");
+                owed.recheck();
                 redrawing = true;
                 Wanted::Nothing
             }
@@ -735,6 +840,7 @@ pub fn run(paths: Paths, config: Config, mut settings: Settings, mut state: Stat
             // user is looking straight at the screen, so the Spaces out of sight
             // wait for the next wake as they always do.
             Event::UserEvent(Notice::Rearranged) => {
+                journal::note!("loop", "displays rearranged");
                 owed.owe_after(SETTLE);
                 Wanted::Nothing
             }
@@ -745,6 +851,9 @@ pub fn run(paths: Paths, config: Config, mut settings: Settings, mut state: Stat
         // Both ways of picking a picture by hand end in the same place, so the arms
         // only say which picture and the work happens once, below.
         let mut chosen: Option<Artwork> = None;
+        if let Some(name) = wanted.name() {
+            journal::note!("loop", "wanted {name}");
+        }
         match wanted {
             Wanted::Nothing => {}
 
@@ -760,7 +869,7 @@ pub fn run(paths: Paths, config: Config, mut settings: Settings, mut state: Stat
                     _ => Tab::Favourites,
                 };
                 if let Err(e) = ui.present(target, &favourites, tab) {
-                    report(&e);
+                    report("window", &e);
                     ui.set_status("Could not open the window");
                 }
             }
@@ -790,14 +899,14 @@ pub fn run(paths: Paths, config: Config, mut settings: Settings, mut state: Stat
                         ) {
                             Ok(pinned) => owed.took(pinned, &art.path),
                             Err(error) => {
-                                report(&error);
+                                report("pin", &error);
                                 ui.set_status("Could not hang the picture that way");
                             }
                         }
                     }
                 }
                 Err(error) => {
-                    report(&error);
+                    report("settings", &error);
                     ui.set_status("Could not save the settings");
                 }
             },
@@ -826,12 +935,12 @@ pub fn run(paths: Paths, config: Config, mut settings: Settings, mut state: Stat
                             if pinned != Pinned::InPart {
                                 // Explicitly disruptive: even an unchanged store may
                                 // be newer than the Dock's in-memory copy.
-                                desktop::catch_up();
+                                desktop::catch_up("re-apply");
                                 owed.forget_unseen();
                             }
                         }
                         Err(error) => {
-                            report(&error);
+                            report("pin", &error);
                             ui.set_status("Could not re-apply the wallpaper");
                         }
                     }
@@ -839,10 +948,12 @@ pub fn run(paths: Paths, config: Config, mut settings: Settings, mut state: Stat
             }
 
             Wanted::Login(enabled) => {
+                let was = desktop::starts_at_login();
                 if let Err(error) = desktop::set_start_at_login(enabled) {
-                    report(&error);
+                    report("desktop", &error);
                     ui.set_login(!enabled);
                 } else {
+                    journal::note!("desktop", "start at login {was} -> {enabled}");
                     ui.set_login(enabled);
                 }
             }
@@ -863,7 +974,7 @@ pub fn run(paths: Paths, config: Config, mut settings: Settings, mut state: Stat
                         backdrops.push((app, running));
                     }
                     Err(error) => {
-                        report(&error);
+                        report("backdrop", &error);
                         ui.set_backdrop(app, false);
                         ui.set_status(&error.to_string());
                     }
@@ -875,7 +986,7 @@ pub fn run(paths: Paths, config: Config, mut settings: Settings, mut state: Stat
             Wanted::Backdrop(app, false) => {
                 backdrops.retain(|(kept, _)| *kept != app);
                 if let Err(error) = state.record_backdrop(app, None, &paths.state) {
-                    report(&error);
+                    report("backdrop", &error);
                 }
             }
 
@@ -891,7 +1002,7 @@ pub fn run(paths: Paths, config: Config, mut settings: Settings, mut state: Stat
                     match favourites.keep(art) {
                         Ok(()) => ui.describe(&state, &favourites),
                         Err(e) => {
-                            report(&e);
+                            report("favourites", &e);
                             ui.set_status("Could not keep that picture");
                         }
                     }
@@ -910,7 +1021,7 @@ pub fn run(paths: Paths, config: Config, mut settings: Settings, mut state: Stat
                     ui.describe(&state, &favourites);
                 }
                 Err(e) => {
-                    report(&e);
+                    report("favourites", &e);
                     ui.set_status("Could not drop that favourite");
                 }
             },
@@ -925,36 +1036,50 @@ pub fn run(paths: Paths, config: Config, mut settings: Settings, mut state: Stat
                     ui.describe(&state, &favourites);
                 }
                 Err(e) => {
-                    report(&e);
+                    report("pin", &e);
                     ui.set_status("Could not put that picture up");
                 }
             }
         }
 
-        // Whatever the desktop still owes, offered to it again. Last of the three,
-        // because a picture that has just gone up in one of them has already said
-        // what it wants asking for and when. Not while a download is in the air,
-        // though: that picture is about to be replaced, and the loop would be
-        // pressing for a painting nobody will see.
+        // Asked before the desktop is touched, because the answer decides whether
+        // it is: a download in the air, or one this turn is about to start, counts
+        // as fetching from here on.
+        let step = schedule.step(now_secs(), || state.is_due());
+
         if !schedule.fetching() {
+            // Whatever the desktop still owes, offered to it again. Last of the
+            // three, because a picture that has just gone up in one of them has
+            // already said what it wants asking for and when. Not while a download
+            // is on its way, though: that picture is about to be replaced, and the
+            // loop would be pressing for a painting nobody will see.
             if let Err(e) = owed.press(state.shown.as_ref(), &settings, &paths.cache) {
-                report(&e);
+                report("pin", &e);
                 ui.set_status("Could not re-apply the wallpaper");
             }
-        }
 
-        // A desktop that is being redrawn anyway can be shown what was written for
-        // the Spaces out of sight, at no cost anyone will notice. After the pressing
-        // above and never before it: at the start of a session it is that asking
-        // which leaves something written to show.
-        if redrawing {
-            owed.catch_up();
+            // A desktop that is being redrawn anyway can be shown what was written
+            // for the Spaces out of sight, at no cost anyone will notice. After the
+            // pressing above and never before it: at the start of a session it is
+            // that asking which leaves something written to show. And never ahead
+            // of a download: the restart would publish yesterday's painting and
+            // leave the new one landing in a Dock a few seconds old, which loses
+            // its wallpaper store to exactly that.
+            if redrawing {
+                owed.catch_up(if starting_session {
+                    "session begun"
+                } else {
+                    "woke"
+                });
+            }
+        } else if redrawing && owed.is_unseen() {
+            journal::note!("owed", "restart skipped, a download is on its way");
         }
 
         // When to wake up next. Recomputed after every event rather than scheduled
         // once, so that a click, a finished download and a tick all leave the clock
         // in the same, correct place.
-        *control_flow = match schedule.step(now_secs(), || state.is_due()) {
+        *control_flow = match step {
             Step::Wait => ControlFlow::Wait,
             Step::Fetch => {
                 ui.set_fetching(true);
@@ -1331,9 +1456,10 @@ fn nudge_run_loop() {}
 
 /// The menu carries the short version; this is where the whole chain goes. Under
 /// the launchd agent it lands in `~/Library/Logs/ArtWindow.log`; on Windows,
-/// `art-window.log` beside the state file — see `desktop::log_to`.
-fn report(e: &anyhow::Error) {
-    eprintln!("art-window: {e:#}");
+/// `art-window.log` beside the state file — see `desktop::log_to`. `topic` says
+/// which part of the program the failure belongs to.
+fn report(topic: &str, e: &anyhow::Error) {
+    journal::fault(topic, e);
 }
 
 #[cfg(test)]
@@ -1450,6 +1576,26 @@ mod tests {
         owed.took(Pinned::InPart, Path::new("new.jpg"));
         assert!(owed.unseen.is_none());
         assert!(owed.at.is_some());
+    }
+
+    #[test]
+    fn a_write_waiting_on_a_redraw_is_asked_for_again_before_it() {
+        let mut owed = Owed::settled();
+        owed.recheck();
+        assert!(owed.at.is_none(), "nothing waiting, nothing to ask");
+
+        owed.took(Pinned::AfterRedraw, Path::new("unseen.jpg"));
+        owed.recheck();
+        assert!(owed.at.is_some());
+    }
+
+    #[test]
+    fn a_download_about_to_start_already_counts_as_fetching() {
+        // What the tail relies on to keep the Dock from being restarted, or the old
+        // picture pressed, just ahead of a new one.
+        let mut schedule = Schedule::idle();
+        assert_eq!(schedule.step(100, || true), Step::Fetch);
+        assert!(schedule.fetching());
     }
 
     #[test]

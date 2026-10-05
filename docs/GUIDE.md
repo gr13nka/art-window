@@ -241,7 +241,7 @@ Art Window remains useful as a command:
 art-window            # run the resident app
 art-window --once     # fetch a painting now, print it, then exit
 art-window --if-due   # the same, but only if the local day is unsettled
-art-window --where    # print config, state, cache and favourites locations
+art-window --where    # print config, state, cache, favourites and journal locations
 art-window --check    # diagnose GNOME integration (Linux only)
 art-window --quit     # stop the running instance (Linux and Windows)
 art-window --catalogue  # count the paintings behind every filter combination
@@ -249,7 +249,8 @@ art-window --catalogue  # count the paintings behind every filter combination
 
 On Windows the one-shot commands print to the terminal they are run from.
 The installed binary is `%LOCALAPPDATA%\Programs\Art Window\art-window.exe`.
-The resident app writes its errors to `art-window.log`, beside `state.json`.
+Anything a GUI program would otherwise print to nowhere goes to the journal,
+below.
 
 Launching the GNOME app a second time brings the existing window forward instead
 of starting another rotation process.
@@ -261,6 +262,50 @@ one-shot commands:
 mkdir -p ~/.local/bin
 ln -s "/Applications/Art Window.app/Contents/MacOS/art-window" ~/.local/bin/
 ```
+
+### The journal
+
+Art Window writes down what it does as it does it: one file, one line per fact,
+kept on your machine and sent nowhere.
+
+| Platform | File |
+|----------|------|
+| macOS | `~/Library/Logs/ArtWindow.log` (Console shows it under *Log Reports*) |
+| Linux | `art-window.log`, beside `state.json` |
+| Windows | `art-window.log`, beside `state.json` |
+
+`art-window --where` prints the exact path. A line looks like this:
+
+```
+2026-10-04 15:48:29.272 +0200 [pin] …
+```
+
+The time is local, with its offset from UTC, so it can be laid beside the
+system's own logs. The word in brackets is the topic:
+
+| Topic | What it records |
+|-------|-----------------|
+| `start` | the version, how the program was started, where its files are, the state it found |
+| `loop` | what woke the program: a session beginning, the machine waking, a display changing, a click |
+| `schedule` | why a download started, a cooling-off after a failure |
+| `fetch` | each request to a museum, the painting chosen, why another was passed over |
+| `pin` | hanging a picture: what was asked of the desktop and what it answered |
+| `dock` | macOS only: the health of the Dock's wallpaper store, and every Dock restart with its reason |
+| `owed` | what the desktop is still owed, and each time it is offered again |
+| `state`, `settings`, `favourites`, `sweep` | every file written or deleted |
+| `backdrop` | meeting backgrounds: a meeting beginning and ending, a painting hung |
+| `desktop` | start at login, wake and display subscriptions |
+| `panic` | the program stopping where it should not have |
+
+A failure reads `FAILED:` followed by every cause behind it. To find one:
+
+```sh
+grep FAILED ~/Library/Logs/ArtWindow.log
+```
+
+and read upwards from it: the ordinary lines just before are usually the
+explanation. The file is cut back to its last quarter-megabyte when it passes one
+megabyte, at start-up, so it never needs clearing.
 
 ### A painting behind you in meetings
 

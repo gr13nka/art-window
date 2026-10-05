@@ -60,8 +60,8 @@ pub enum Pinned {
 /// redrawn anyway, waking and beginning a session, rather than to the moment a
 /// picture changes. What the user is actually looking at is never waiting on this;
 /// that went up when it was pinned.
-pub fn catch_up() {
-    platform::catch_up();
+pub fn catch_up(reason: &str) {
+    platform::catch_up(reason);
 }
 
 /// Shows `path` on every display placed as `style` says — fitted over coloured
