@@ -10,17 +10,20 @@ agree byte for byte with `paintings.tsv`. A picture whose painter no longer has
 a row is deleted. A surviving painter with no `about`, no `showcase`, or a
 `showcase` that is not one of their own rows fails the run: nothing here guesses.
 
-The pictures go through the Commons source's own paced, cached request path
-and are downscaled here with Pillow (Commons only serves thumbnails at fixed
-widths); an existing file is kept unless `refresh` is set.
+`showcase` is `<source>:<id>`, a row of that painter's own. The picture is
+downloaded from that row's `image_url` through a paced client and downscaled
+here with Pillow, so any museum's image host works; an existing file is kept
+unless `refresh` is set.
 """
 
+import json
 import os
 import re
 import unicodedata
 
 from . import http
-from .sources import commons
+
+ARTISTS_PATH = os.path.join(os.path.dirname(os.path.realpath(__file__)), "artists.json")
 
 MAX_LONG_SIDE = 1400
 
@@ -33,14 +36,21 @@ def slug(name: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", folded.lower()).strip("-")
 
 
+def load_artists() -> list[dict]:
+    """The curated painters in `artists.json`: `name`, `aliases`, `about`,
+    `showcase`."""
+    with open(ARTISTS_PATH, encoding="utf-8") as f:
+        return json.load(f)
+
+
 def _entries(rows: list[dict]) -> list[tuple[dict, dict]]:
     """`(artists.json entry, showcase row)` for each painter still named in
     `rows`, sorted by name. Raises `SystemExit` naming the first one that
     cannot be served."""
-    by_id = {row["id"]: row for row in rows if row["source"] == "wmc"}
+    by_key = {f"{row['source']}:{row['id']}": row for row in rows}
     named = {row["artist"] for row in rows if row.get("artist")}
     entries = []
-    for artist in commons._load_artists():
+    for artist in load_artists():
         name = artist["name"]
         if name not in named:
             continue
@@ -48,38 +58,22 @@ def _entries(rows: list[dict]) -> list[tuple[dict, dict]]:
             raise SystemExit(f"showcase: {name} keeps an Artist chip but has no \"about\" in artists.json")
         if not artist.get("showcase"):
             raise SystemExit(f"showcase: {name} keeps an Artist chip but has no \"showcase\" in artists.json")
-        row = by_id.get(str(artist["showcase"]))
+        row = by_key.get(artist["showcase"])
         if row is None or row.get("artist") != name:
             raise SystemExit(
-                f"showcase: {name}'s showcase {artist['showcase']!r} is not one of their wmc rows in paintings.tsv"
+                f"showcase: {name}'s showcase {artist['showcase']!r} is not one of their rows in paintings.tsv"
             )
         entries.append((artist, row))
     return sorted(entries, key=lambda e: e[0]["name"])
 
 
-def _source_url(client: http.PacedClient, cache: http.JsonCache, refresh: bool, page_id: str) -> str:
-    """A URL for Commons page `page_id` that is at least `MAX_LONG_SIDE` on its
-    long side where the original is. Commons only serves thumbnails at its
-    standard widths (1280, 1920, ...), so a 1400 px request would be rounded up
-    anyway; `write` does the final downscale itself."""
-    data = commons._cached_get_json(
-        client, cache, refresh,
-        f"{commons.API}?" + commons.urlencode({
-            "action": "query", "format": "json", "pageids": page_id, "prop": "imageinfo",
-            "iiprop": "url|size", "iiurlwidth": "1920", "maxlag": "5",
-        }),
-    )
-    info = list(data["query"]["pages"].values())[0]["imageinfo"][0]
-    return info.get("thumburl") or info["url"]
-
-
-def _fetch(client: http.PacedClient, cache: http.JsonCache, refresh: bool, page_id: str, dest: str) -> None:
+def _fetch(client: http.PacedClient, image_url: str, dest: str) -> None:
     try:
         from PIL import Image
     except ImportError:
         raise SystemExit("showcase: Pillow is needed to downscale the pictures (pip3 install pillow)")
     raw = dest + ".download"
-    client.download(_source_url(client, cache, refresh, page_id), raw)
+    client.download(image_url, raw)
     try:
         with Image.open(raw) as image:
             image = image.convert("RGB")
@@ -89,11 +83,12 @@ def _fetch(client: http.PacedClient, cache: http.JsonCache, refresh: bool, page_
         os.remove(raw)
 
 
-def write(rows: list[dict], out_dir: str, refresh: bool) -> None:
+def write(rows: list[dict], out_dir: str, refresh: bool, host_gaps: dict[str, float]) -> None:
+    """`host_gaps` is every source's `HOST_GAPS` merged, so a showcase picture
+    is fetched as politely as the catalogue itself was."""
     entries = _entries(rows)
     os.makedirs(out_dir, exist_ok=True)
-    client = http.PacedClient(gap_seconds=commons.HOST_GAPS)
-    cache = http.JsonCache(os.path.expanduser("~/.cache/art-window/catalogue/wmc/api"))
+    client = http.PacedClient(gap_seconds=host_gaps)
 
     wanted = set()
     index_lines = []
@@ -103,14 +98,15 @@ def write(rows: list[dict], out_dir: str, refresh: bool) -> None:
         dest = os.path.join(out_dir, file_name)
         if refresh or not os.path.isfile(dest):
             print(f"  showcase: {artist['name']} -> {file_name}", flush=True)
-            _fetch(client, cache, refresh, str(artist["showcase"]), dest)
-        fields = [artist["name"], artist["region"], artist["about"], str(artist["showcase"]),
+            _fetch(client, row["image_url"], dest)
+        fields = [artist["name"], row["region"], artist["about"], artist["showcase"],
                   row["title"], row["byline"], file_name]
         index_lines.append("\t".join(" ".join(f.split()) for f in fields))
 
     with open(os.path.join(out_dir, "index.tsv"), "w", encoding="utf-8", newline="\n") as f:
         f.write("# Generated by catalogue/build.py (showcase.py) from catalogue/artists.json. Do not edit by hand.\n")
-        f.write("\n".join(index_lines) + "\n")
+        for line in index_lines:
+            f.write(line + "\n")
     for existing in os.listdir(out_dir):
         if existing.endswith(".jpg") and existing not in wanted:
             os.remove(os.path.join(out_dir, existing))

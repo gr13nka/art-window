@@ -117,7 +117,7 @@ Three notes on the platform wallpaper APIs sit beside it:
 
 Artwork metadata and images come from [The Metropolitan Museum of Art Collection
 API](https://metmuseum.github.io/), the National Gallery of Art, the Cleveland
-Museum of Art, SMK — Denmark's national gallery — and Wikimedia Commons, all
+Museum of Art, SMK — Denmark's national gallery — the Rijksmuseum and the Getty, all
 public domain or CC0.
 Inspired by
 [Muzei](https://github.com/romannurik/muzei) by Roman Nurik and its

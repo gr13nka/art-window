@@ -110,7 +110,20 @@ class WallpaperPreferencesTest {
         assertEquals(emptySet<String>(), artistValues(null))
         assertEquals(emptySet<String>(), artistValues(""))
         assertEquals(setOf("Mikhail Vrubel"), artistValues("Mikhail Vrubel"))
-        assertEquals(setOf("Mikhail Vrubel", "Ivan Shishkin"), artistValues("Mikhail Vrubel,Ivan Shishkin"))
+    }
+
+    @Test
+    fun `a stored list of several painters reads as its first only`() {
+        assertEquals(setOf("Mikhail Vrubel"), artistValues("Mikhail Vrubel,Ivan Shishkin"))
+        assertEquals(setOf("Ivan Shishkin"), artistValues(",Ivan Shishkin"))
+    }
+
+    @Test
+    fun `choosing a painter replaces whoever was chosen, and Any clears the choice`() {
+        val vrubel = WallpaperPreferences(artworkArtists = chosenArtist("Mikhail Vrubel"))
+        val shishkin = vrubel.copy(artworkArtists = chosenArtist("Ivan Shishkin"))
+        assertEquals(setOf("Ivan Shishkin"), shishkin.artworkArtists)
+        assertEquals(emptySet<String>(), shishkin.copy(artworkArtists = emptySet()).artworkArtists)
     }
 
     @Test

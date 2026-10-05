@@ -7,11 +7,11 @@ import SwiftUI
 /// desktop and the Android copy.
 struct ArtistBrowser: View {
     @Environment(\.dismiss) private var dismiss
-    @Binding var chosen: Set<String>
+    /// The staged filters: where the choice is written, and what tells why a painter has
+    /// nothing left under them.
+    @Binding var filters: Filters
     /// Painters the other staged filters still leave twenty paintings of.
     let available: Set<String>
-    /// The staged filters, to tell why a painter has nothing left under them.
-    let filters: Filters
 
     struct Card: Identifiable {
         let painter: Painter
@@ -42,7 +42,7 @@ struct ArtistBrowser: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
             .sheet(item: $selected) { card in
-                ArtistDetail(card: card, chosen: $chosen, close: { selected = nil })
+                ArtistDetail(card: card, filters: $filters, close: { selected = nil })
             }
             // Counting walks the whole catalogue, so it never runs on the main thread.
             .task {
@@ -71,8 +71,8 @@ struct ArtistBrowser: View {
             }
             .aspectRatio(1, contentMode: .fit)
             .clipShape(RoundedRectangle(cornerRadius: 8))
-            .opacity(chosen.contains(painter.name) || card.emptied == nil ? 1 : 0.45)
-            if chosen.contains(painter.name) {
+            .opacity(filters.artists.contains(painter.name) || card.emptied == nil ? 1 : 0.45)
+            if filters.artists.contains(painter.name) {
                 Image(systemName: "checkmark.circle.fill")
                     .foregroundStyle(.white, Color.accentColor).padding(6)
             }
@@ -92,13 +92,13 @@ struct ArtistBrowser: View {
 
 private struct ArtistDetail: View {
     let card: ArtistBrowser.Card
-    @Binding var chosen: Set<String>
+    @Binding var filters: Filters
     let close: () -> Void
 
-    private var isChosen: Bool { chosen.contains(card.painter.name) }
+    private var isChosen: Bool { filters.artists.contains(card.painter.name) }
 
-    /// A chosen painter can always be removed. Otherwise only Subject and *Hide religious*
-    /// can block one, since a chosen painter wins over Shape and Origins and one painting
+    /// A chosen painter is never blocked, so the screen never disagrees with what is staged.
+    /// Otherwise only Subject and *Hide religious* can block one, since a chosen painter wins over Shape and Origins and one painting
     /// is enough.
     private var blocked: String? {
         guard !isChosen, let emptied = card.emptied else { return nil }
@@ -122,14 +122,9 @@ private struct ArtistDetail: View {
                 }
             }
             HStack(spacing: 12) {
-                if isChosen {
-                    Button("Remove", role: .destructive) { chosen.remove(card.painter.name); close() }
-                        .buttonStyle(.borderedProminent)
-                } else {
-                    Button("Choose") { chosen.insert(card.painter.name); close() }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(blocked != nil)
-                }
+                Button(isChosen ? "Chosen" : "Choose") { filters.chooseArtist(card.painter.name); close() }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(blocked != nil)
                 Link("Read more", destination: card.painter.about)
                     .buttonStyle(.bordered)
             }

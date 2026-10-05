@@ -28,7 +28,7 @@ public struct CatalogueEntry: Hashable, Identifiable, Sendable {
     let tags: [String]
 }
 
-/// A prebuilt, pixel-verified list of paintings from five sources, built offline by
+/// A prebuilt, pixel-verified list of paintings from six museums, built offline by
 /// `catalogue/build.py` (see CLAUDE.md). Because each row's pixel size was verified at
 /// build time, shape and renderability are decided here outright, with no live preview.
 /// Every rule that decides what a phone will show — subject and artist matching, the
@@ -64,7 +64,7 @@ public final class Catalogue: @unchecked Sendable {
 
     /// Parses the TSV `catalogue/build.py` writes: a leading `#` comment line, then one
     /// `source id region width height image_url details_url title byline origin tags
-    /// [artist]` row per painting. The artist column is present only on `wmc` rows, so
+    /// [artist]` row per painting. The artist column names the painter where the painter has an *Artist* chip, so
     /// eleven and twelve fields are both accepted. A row naming an unknown source or
     /// region, or a non-positive size, is skipped rather than failing the whole list.
     public init(tsv: String) {

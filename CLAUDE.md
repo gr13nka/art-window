@@ -355,8 +355,15 @@ it before touching `src/desktop/macos/wallpaper.rs`.
   staged, which chips show, what the preview looks like and whether *Apply* can
   be pressed; the three platform windows only draw it and forward clicks into it.
   A rule written into one platform file is a rule the other two will not have.
-- **A painter is chosen by a painting, not by a name.** The *Artist* row holds only
-  who has been chosen and one button; the button opens a browser inside the
+- **One painter at a time, and the row says who.** The *Artist* row is two chips
+  with exactly one on: *Any artist*, and a second that carries the chosen
+  painter's name and opens the browser. Choosing another painter replaces the
+  first; nothing is ever taken out, so the browser's button reads *Choose* or
+  *Chosen* and never *Remove*. Several at once came out as a mixture nobody had
+  asked for by name. `filters.artists` is still a list on disk so no file had to
+  migrate; a file holding several is read as its first.
+- **A painter is chosen by a painting, not by a name.** The second chip opens a
+  browser inside the
   settings tab that is the favourites browser again — the same shelf and preview,
   told different words for its two buttons. `Pending::artist_cards` hands each
   painter over as an `Artwork` precisely so that nothing about showing one had to
@@ -473,6 +480,17 @@ Reversing these needs a reason, not a tidy-up impulse.
 - **Not the Art Institute of Chicago.** Its metadata API is fine, but the image host
   `www.artic.edu/iiif/...` sits behind a Cloudflare managed challenge that an
   unattended client cannot answer. The Met has no such gate. Do not switch back.
+- **Not Wikimedia Commons, and no source without its own commercial grant.** The
+  apps are sold, so a source is admitted only if the institution's own published
+  terms allow commercial use of its images. Commons warrants nothing per file —
+  its "public domain" means the United States and the painting's country — and was
+  dropped in 2026-10 for that reason, taking Oceania, South America and Africa out
+  of the Origin filter with it; no clearly licensed source for those regions was
+  found. The three apps still recognise the code `wmc`, because a Commons picture
+  already on someone's desktop is theirs by its file name. Also looked at and
+  refused: Nationalmuseum (Sweden), whose image server caps downloads at 1000 px;
+  Yale, Te Papa, Brazil's federal museums and the Australian state galleries, on
+  their terms. The quoted terms are in `docs/research/legal_check.md`.
 
 ## External services
 
@@ -488,10 +506,10 @@ narrowed to it — only for whether the candidate reads as a portrait despite
 matching, which is skipped for the next of the eight. The `met` source ignores
 the settings tab's filters; only the `museums` catalogue can answer them.
 
-`catalogue/build.py` draws from four museums instead of one: the Met, the
-National Gallery of Art (Washington), the Cleveland Museum of Art and SMK
-(Denmark) — all public domain or CC0, all reachable over plain HTTPS with no
-auth. Only the Met sits behind Imperva, which throttles an unfamiliar client to
+`catalogue/build.py` draws from six museums instead of one: the Met, the
+National Gallery of Art (Washington), the Cleveland Museum of Art, SMK
+(Denmark), the Rijksmuseum and the Getty — all public domain or CC0, all
+reachable over plain HTTPS with no auth. Only the Met sits behind Imperva, which throttles an unfamiliar client to
 roughly 80 requests a minute; `catalogue/http.py`'s `PacedClient` is the one
 place that paces every host (2 s between requests to the Met's
 `collectionapi`, 1 s to the rest) and backs off on a 403 or 429, so no source
@@ -499,11 +517,22 @@ module has to remember any of that itself. NGA and Cleveland need no
 per-object request at all — their open data already carries everything a row
 needs — which is why only the Met pass takes hours. SMK's search deliberately
 omits `lang=en`: passing it makes the API match nothing, so its titles and
-tags come back in Danish — see **Android** below and `docs/android.md`.
+tags come back in Danish — see **Android** below and `docs/android.md`. The
+Rijksmuseum is read through its OAI-PMH endpoint, fifty records a request, rather
+than its Linked Art documents at five requests a painting; the one request left
+per painting is the IIIF `info.json` for the true pixel size, so its first pass
+takes about an hour and a half. About one title in ten there has no English form
+and stays Dutch. The Getty takes two requests a painting and gates on the image
+document's rights, not the object's.
 
-A fifth source, `wmc`, adds Wikimedia Commons, whose rows carry a twelfth
-`artist` column the other four leave empty. `art/museums.rs` keeps it for the
-settings tab's *Artist* chips, as Android and iOS do.
+**The painter comes from the museum's own record, and a curated list decides who
+gets a chip.** Every source yields the primary maker's plain name (`text.maker`
+refuses workshops, followers and the unidentified); `catalogue/artists.json` lists
+the painters worth a chip, with the spellings each museum uses as `aliases`, and
+`build.py` fills the twelfth `artist` column only for them. The list is curated
+because museums name hundreds of makers nobody would pick and spell one painter
+several ways. The raw names survive a partial run in `catalogue/makers.tsv`, which
+sits outside `dist/` because Android bundles all of `dist/`.
 
 ## The resident app
 

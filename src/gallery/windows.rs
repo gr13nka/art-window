@@ -347,6 +347,9 @@ struct Card {
     art: Artwork,
     /// Whether the painter is already chosen. Always false on the favourites' shelf.
     on: bool,
+    /// What the main button says: *Choose*, or *Chosen*. Empty on the favourites'
+    /// shelf, whose button has its own fixed word.
+    primary: &'static str,
     /// Why the card's main button is inert, if it is. Always `None` on the
     /// favourites' shelf.
     note: Option<String>,
@@ -425,7 +428,7 @@ struct Browser {
     canvas: HWND,
     title: HWND,
     byline: HWND,
-    /// *Set as wallpaper*, or *Choose* / *Remove*.
+    /// *Set as wallpaper*, or *Choose* / *Chosen*.
     primary: HWND,
     /// *Forget*, or *Read more*.
     secondary: HWND,
@@ -730,7 +733,7 @@ impl Inner {
                         None => &art.byline,
                     },
                 );
-                set_text(b.primary, if card.on { "Remove" } else { "Choose" });
+                set_text(b.primary, card.primary);
                 enable(b.primary, card.note.is_none());
                 enable(b.secondary, art.details_url.is_some());
             }
@@ -870,7 +873,8 @@ enum Act {
     Shape(Shape),
     Region(Region),
     Subject(Subject),
-    Artist(String),
+    /// Back to paintings by anyone.
+    AnyArtist,
     /// Opens the artist browser in place of the page.
     BrowseArtists,
     /// Closes the artist browser, back to the page.
@@ -1417,24 +1421,22 @@ impl Inner {
             })
             .collect();
         col.chips(chips, filters);
-        // Shown even when nobody is chosen: the button is how anybody gets to be.
         let row = pending.artist_row();
         col.heading("Artist", true);
-        let browse_available = row.disabled_reason.is_none();
-        let mut chips: Vec<_> = row
-            .chosen
-            .into_iter()
-            .map(|c| {
-                let available = c.disabled_reason.is_none();
-                (c.label, c.selected, Act::Artist(c.value), available)
-            })
-            .collect();
-        chips.push((
-            row.browse.to_owned(),
-            false,
-            Act::BrowseArtists,
-            browse_available,
-        ));
+        let chips = vec![
+            (
+                row.any.label,
+                row.any.selected,
+                Act::AnyArtist,
+                row.any.disabled_reason.is_none(),
+            ),
+            (
+                row.browse.label,
+                row.browse.selected,
+                Act::BrowseArtists,
+                row.browse.disabled_reason.is_none(),
+            ),
+        ];
         col.chips(chips, filters);
         col.y += col.px(24);
         let h = col.px(28);
@@ -1575,19 +1577,20 @@ impl Inner {
                 key: card.name,
                 art: card.art,
                 on: card.selected,
+                primary: card.primary,
                 note: card.disabled_reason,
             })
             .collect()
     }
 
-    /// Chooses the painter in the pane, or takes them out again.
-    fn toggle_painter(&self) {
+    /// Chooses the painter in the pane; the one already chosen stays so.
+    fn choose_painter(&self) {
         let Some(key) = self.selected_key(&self.artists) else {
             return;
         };
         // The borrow ends with the statement: `changed` and `retag_artists` read
         // `pending` again.
-        self.pending.borrow_mut().toggle_artist(&key);
+        self.pending.borrow_mut().choose_artist(&key);
         self.changed();
         self.retag_artists();
     }
@@ -1602,6 +1605,7 @@ impl Inner {
             for card in &mut shown.cards {
                 if let Some(now) = fresh.iter().find(|now| now.key == card.key) {
                     card.on = now.on;
+                    card.primary = now.primary;
                     card.note = now.note.clone();
                 }
             }
@@ -1700,7 +1704,7 @@ impl Inner {
             Act::Shape(shape) => self.pending.borrow_mut().set_shape(shape),
             Act::Region(region) => self.pending.borrow_mut().toggle_region(region),
             Act::Subject(subject) => self.pending.borrow_mut().toggle_subject(subject),
-            Act::Artist(name) => self.pending.borrow_mut().toggle_artist(&name),
+            Act::AnyArtist => self.pending.borrow_mut().any_artist(),
             Act::BrowseArtists => {
                 self.browse_artists();
                 return;
@@ -2300,7 +2304,7 @@ unsafe extern "system" fn subclass_proc(
             match (wparam.0 & 0xffff) as i32 {
                 SHOW_ID => inner.ask(Pick::Show),
                 FORGET_ID => inner.ask(Pick::Forget),
-                CHOOSE_ID => inner.toggle_painter(),
+                CHOOSE_ID => inner.choose_painter(),
                 READ_ID => inner.read_painter(),
                 _ => {}
             }
@@ -2596,6 +2600,7 @@ impl Content {
                     key: key.to_string(),
                     art: art.clone(),
                     on: false,
+                    primary: "",
                     note: None,
                 })
                 .collect(),

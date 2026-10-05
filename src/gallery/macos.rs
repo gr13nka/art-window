@@ -73,6 +73,8 @@ struct Card {
     art: Artwork,
     /// Ticked on the shelf. Only the artist browser has anything to tick.
     chosen: bool,
+    /// What the primary button says for this card.
+    primary: &'static str,
     /// Why the primary button cannot do its work, if it cannot.
     blocked: Option<String>,
 }
@@ -86,8 +88,9 @@ type Say = Rc<dyn Fn(&NSView, &str)>;
 struct Kit {
     /// The two lines shown instead of a picture when the shelf is empty.
     empty: (&'static str, &'static str),
-    /// Says what the primary button does to a card that is (not) chosen.
-    primary_title: fn(chosen: bool) -> &'static str,
+    /// What the primary button says before any card is selected; a card says its
+    /// own word after that.
+    primary_title: &'static str,
     secondary_title: &'static str,
     secondary_role: ButtonRole,
     /// The widths of the primary and secondary buttons.
@@ -109,7 +112,7 @@ impl Kit {
                 "Nothing kept yet",
                 "Add to favourites keeps a painting here.",
             ),
-            primary_title: |_| "Set as wallpaper",
+            primary_title: "Set as wallpaper",
             secondary_title: "Forget",
             secondary_role: ButtonRole::Destructive,
             widths: (152.0, 80.0),
@@ -290,11 +293,9 @@ impl Shelf {
             let shown = self.ivars().shown.borrow();
             let card = row.and_then(|row| shown.cards.get(row));
             let kit = &self.ivars().kit;
-            self.ivars().easel.point_at(
-                card,
-                card.map(|card| (kit.primary_title)(card.chosen)),
-                kit.secondary_title,
-            );
+            self.ivars()
+                .easel
+                .point_at(card, card.map(|card| card.primary), kit.secondary_title);
         }
         self.setNeedsDisplay(true);
     }
@@ -443,7 +444,7 @@ impl Easel {
         let mid = PAD + BUTTON_H / 2.0;
         let show = action_button(
             mtm,
-            (kit.primary_title)(false),
+            kit.primary_title,
             (show_x, show_w),
             mid,
             ButtonRole::Primary,
@@ -869,6 +870,7 @@ impl Content {
                     key: key.to_string(),
                     art: art.clone(),
                     chosen: false,
+                    primary: "Set as wallpaper",
                     blocked: None,
                 })
                 .collect(),
@@ -1908,11 +1910,11 @@ impl Ui {
                 "No painters yet",
                 "The catalogue names none to choose from.",
             ),
-            primary_title: |chosen| if chosen { "Remove" } else { "Choose" },
+            primary_title: "Choose",
             secondary_title: "Read more",
             secondary_role: ButtonRole::Secondary,
             widths: (96.0, 96.0),
-            on_primary: reach(|ui, card| ui.change(|p| p.toggle_artist(&card.key))),
+            on_primary: reach(|ui, card| ui.change(|p| p.choose_artist(&card.key))),
             on_secondary: reach(|ui, card| {
                 if let Some(url) = &card.art.details_url {
                     (ui.on_pick)(Pick::Read(url.clone()));
@@ -2092,6 +2094,7 @@ impl Ui {
                 key: card.name,
                 art: card.art,
                 chosen: card.selected,
+                primary: card.primary,
                 blocked: card.disabled_reason,
             })
             .collect()
@@ -2403,22 +2406,23 @@ impl Ui {
             ),
         );
 
-        // Only those already chosen get a chip of their own; choosing among the
-        // rest is the browser's work.
+        // Two chips, one of them on: nobody in particular, or the painter the
+        // browser chose — whose name the second chip carries.
         let row = p.artist_row();
-        let mut views: Vec<_> = row
-            .chosen
-            .into_iter()
-            .map(|c| {
-                let artist = c.value;
-                self.chip(&c.label, c.selected, c.disabled_reason, move |ui| {
-                    ui.change(|p| p.toggle_artist(&artist))
-                })
-            })
-            .collect();
-        views.push(self.chip(row.browse, false, row.disabled_reason, |ui| {
-            ui.open_browser()
-        }));
+        let views = vec![
+            self.chip(
+                &row.any.label,
+                row.any.selected,
+                row.any.disabled_reason,
+                |ui| ui.change(|p| p.any_artist()),
+            ),
+            self.chip(
+                &row.browse.label,
+                row.browse.selected,
+                row.browse.disabled_reason,
+                |ui| ui.open_browser(),
+            ),
+        ];
         blocks.push(self.row("Artist", views, true));
 
         self.religious.setState(p.hide_religious() as isize);

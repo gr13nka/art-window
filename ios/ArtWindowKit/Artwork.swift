@@ -6,9 +6,11 @@ import Foundation
 /// One of the sources `catalogue/build.py` draws from. `rawValue` is the TSV's `source`
 /// column and the prefix a download's file name carries — `keyOf` reads it back out to
 /// recognise this app's own work, so a code can never change once paintings carrying it
-/// exist on a device.
+/// exist on a device. That is also why `wmc` is still here: the catalogue no longer draws
+/// from Wikimedia Commons, which warrants no licence per file, but a Commons picture
+/// already on a device is still this app's own by its file name.
 enum MuseumSource: String, CaseIterable {
-    case met, nga, cma, smk, wmc
+    case met, nga, cma, smk, rijks, getty, wmc
 
     var displayName: String {
         switch self {
@@ -16,6 +18,8 @@ enum MuseumSource: String, CaseIterable {
         case .nga: "National Gallery of Art, Washington"
         case .cma: "Cleveland Museum of Art"
         case .smk: "SMK – National Gallery of Denmark"
+        case .rijks: "Rijksmuseum, Amsterdam"
+        case .getty: "J. Paul Getty Museum"
         case .wmc: "Wikimedia Commons"
         }
     }

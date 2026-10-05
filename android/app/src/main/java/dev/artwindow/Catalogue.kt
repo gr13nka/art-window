@@ -3,10 +3,9 @@ package dev.artwindow
 import android.content.Context
 
 /**
- * A prebuilt, pixel-verified list of paintings from four museums — the Met, the NGA,
- * Cleveland and SMK — plus, where a row names one, an artist credited from Wikimedia
- * Commons — built offline by `catalogue/build.py` (see CLAUDE.md) rather than searched
- * for on the device.
+ * A prebuilt, pixel-verified list of paintings from six museums — see [MuseumSource] —
+ * built offline by `catalogue/build.py` (see CLAUDE.md) rather than searched for on the
+ * device.
  *
  * `catalogue/dist/paintings.tsv` ships as the asset [ASSET_NAME]: one row per
  * painting, holding what a region/subject/shape filter needs plus the exact pixel
@@ -228,8 +227,8 @@ class Catalogue(private val entries: List<Entry>) {
         /**
          * Parses the TSV format `catalogue/build.py` writes: a leading `#` comment line,
          * then one `source id region width height image_url details_url title byline
-         * origin tags [artist]` row per painting — the trailing `artist` column is a
-         * Wikimedia Commons addition, present only on `wmc` rows for now, so both
+         * origin tags [artist]` row per painting — the trailing `artist` column names the
+         * painter where the painter has an *Artist* chip, and older files lack it, so both
          * [FIELD_COUNT] and [FIELD_COUNT_WITH_ARTIST] are accepted and a row missing it
          * gets an empty [Entry.artist]. Pure and dependency-free so it is unit-testable
          * without an asset manager. A row naming an unknown source or region, or whose

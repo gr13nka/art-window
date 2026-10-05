@@ -1,239 +1,261 @@
 [
-  {
-    "name": "Mikhail Vrubel",
-    "region": "EUROPE",
-    "died": 1910,
-    "about": "https://en.wikipedia.org/wiki/Mikhail_Vrubel",
-    "showcase": "13507795",
-    "categories": ["Paintings by Mikhail Vrubel", "Works by Mikhail Vrubel"]
-  },
-  {
-    "name": "Arthur Streeton",
-    "region": "OCEANIA",
-    "died": 1943,
-    "about": "https://en.wikipedia.org/wiki/Arthur_Streeton",
-    "showcase": "23282518",
-    "categories": ["Paintings by Arthur Streeton", "Arthur Streeton"]
-  },
-  {
-    "name": "Tom Roberts",
-    "region": "OCEANIA",
-    "died": 1931,
-    "about": "https://en.wikipedia.org/wiki/Tom_Roberts",
-    "showcase": "22142609",
-    "categories": ["Works by Tom Roberts", "Tom Roberts"]
-  },
-  {
-    "name": "Frederick McCubbin",
-    "region": "OCEANIA",
-    "died": 1917,
-    "about": "https://en.wikipedia.org/wiki/Frederick_McCubbin",
-    "showcase": "22143303",
-    "categories": ["Paintings by Frederick McCubbin", "Frederick McCubbin"]
-  },
-  {
-    "name": "Eugene von Guérard",
-    "region": "OCEANIA",
-    "died": 1901,
-    "about": "https://en.wikipedia.org/wiki/Eugene_von_Guerard",
-    "categories": ["Eugene von Guerard"]
-  },
-  {
-    "name": "Charles Conder",
-    "region": "OCEANIA",
-    "died": 1909,
-    "about": "https://en.wikipedia.org/wiki/Charles_Conder",
-    "categories": ["Charles Conder"]
-  },
-  {
-    "name": "John Glover",
-    "region": "OCEANIA",
-    "died": 1849,
-    "about": "https://en.wikipedia.org/wiki/John_Glover_(artist)",
-    "categories": ["Paintings by John Glover", "John Glover"]
-  },
-  {
-    "name": "William Charles Piguenit",
-    "region": "OCEANIA",
-    "died": 1914,
-    "about": "https://en.wikipedia.org/wiki/William_Piguenit",
-    "categories": ["William Charles Piguenit"]
-  },
-  {
-    "name": "Petrus van der Velden",
-    "region": "OCEANIA",
-    "died": 1913,
-    "about": "https://en.wikipedia.org/wiki/Petrus_Van_der_Velden",
-    "categories": ["Petrus van der Velden"]
-  },
-  {
-    "name": "Conrad Martens",
-    "region": "OCEANIA",
-    "died": 1878,
-    "about": "https://en.wikipedia.org/wiki/Conrad_Martens",
-    "showcase": "21998448",
-    "categories": ["Conrad Martens"]
-  },
-  {
-    "name": "Augustus Earle",
-    "region": "OCEANIA",
-    "died": 1838,
-    "about": "https://en.wikipedia.org/wiki/Augustus_Earle",
-    "categories": ["Augustus Earle"]
-  },
-  {
-    "name": "Gottfried Lindauer",
-    "region": "OCEANIA",
-    "died": 1926,
-    "about": "https://en.wikipedia.org/wiki/Gottfried_Lindauer",
-    "categories": ["Paintings by Gottfried Lindauer", "Gottfried Lindauer"]
-  },
-  {
-    "name": "Charles Goldie",
-    "region": "OCEANIA",
-    "died": 1947,
-    "about": "https://en.wikipedia.org/wiki/Charles_Frederick_Goldie",
-    "categories": ["Charles Goldie"]
-  },
-  {
-    "name": "Juan Manuel Blanes",
-    "region": "SOUTH_AMERICA",
-    "died": 1901,
-    "about": "https://en.wikipedia.org/wiki/Juan_Manuel_Blanes",
-    "categories": ["Paintings by Juan Manuel Blanes", "Juan Manuel Blanes"]
-  },
-  {
-    "name": "Pedro Américo",
-    "region": "SOUTH_AMERICA",
-    "died": 1905,
-    "about": "https://en.wikipedia.org/wiki/Pedro_Am%C3%A9rico",
-    "showcase": "68846699",
-    "categories": ["Paintings by Pedro Américo", "Pedro Américo"]
-  },
-  {
-    "name": "Almeida Júnior",
-    "region": "SOUTH_AMERICA",
-    "died": 1899,
-    "about": "https://en.wikipedia.org/wiki/Almeida_J%C3%BAnior",
-    "showcase": "68444303",
-    "categories": ["Paintings by Almeida Júnior", "Almeida Júnior"]
-  },
-  {
-    "name": "Victor Meirelles",
-    "region": "SOUTH_AMERICA",
-    "died": 1903,
-    "about": "https://en.wikipedia.org/wiki/Victor_Meirelles",
-    "showcase": "86504335",
-    "categories": ["Paintings by Victor Meirelles", "Works by Victor Meirelles", "Victor Meirelles"]
-  },
-  {
-    "name": "Benedito Calixto",
-    "region": "SOUTH_AMERICA",
-    "died": 1927,
-    "about": "https://en.wikipedia.org/wiki/Benedito_Calixto",
-    "showcase": "123890337",
-    "categories": ["Paintings by Benedito Calixto", "Benedito Calixto"]
-  },
-  {
-    "name": "Giovanni Battista Castagneto",
-    "region": "SOUTH_AMERICA",
-    "died": 1900,
-    "about": "https://en.wikipedia.org/wiki/Giovanni_Battista_Castagneto",
-    "categories": ["Giovanni Battista Castagneto"]
-  },
-  {
-    "name": "Antônio Parreiras",
-    "region": "SOUTH_AMERICA",
-    "died": 1937,
-    "about": "https://en.wikipedia.org/wiki/Ant%C3%B4nio_Parreiras",
-    "showcase": "21939095",
-    "categories": ["Paintings by Antônio Parreiras", "Antônio Parreiras"]
-  },
-  {
-    "name": "Prilidiano Pueyrredón",
-    "region": "SOUTH_AMERICA",
-    "died": 1870,
-    "about": "https://en.wikipedia.org/wiki/Prilidiano_Pueyrred%C3%B3n",
-    "showcase": "21881019",
-    "categories": ["Prilidiano Pueyrredón"]
-  },
-  {
-    "name": "Cándido López",
-    "region": "SOUTH_AMERICA",
-    "died": 1902,
-    "about": "https://en.wikipedia.org/wiki/C%C3%A1ndido_L%C3%B3pez",
-    "showcase": "21977865",
-    "categories": ["Cándido López"]
-  },
-  {
-    "name": "Arturo Michelena",
-    "region": "SOUTH_AMERICA",
-    "died": 1898,
-    "about": "https://en.wikipedia.org/wiki/Arturo_Michelena",
-    "categories": ["Paintings by Arturo Michelena", "Arturo Michelena"]
-  },
-  {
-    "name": "Martín Tovar y Tovar",
-    "region": "SOUTH_AMERICA",
-    "died": 1902,
-    "about": "https://en.wikipedia.org/wiki/Mart%C3%ADn_Tovar_y_Tovar",
-    "categories": ["Paintings by Martín Tovar y Tovar", "Martín Tovar y Tovar"]
-  },
-  {
-    "name": "Pedro Lira",
-    "region": "SOUTH_AMERICA",
-    "died": 1912,
-    "about": "https://en.wikipedia.org/wiki/Pedro_Lira",
-    "categories": ["Pedro Lira"]
-  },
-  {
-    "name": "Juan Francisco González",
-    "region": "SOUTH_AMERICA",
-    "died": 1933,
-    "about": "https://en.wikipedia.org/wiki/Juan_Francisco_Gonz%C3%A1lez",
-    "showcase": "42029477",
-    "categories": ["Juan Francisco González"]
-  },
-  {
-    "name": "Thomas Baines",
-    "region": "AFRICA",
-    "died": 1875,
-    "about": "https://en.wikipedia.org/wiki/Thomas_Baines",
-    "showcase": "80054999",
-    "categories": ["Thomas Baines"]
-  },
-  {
-    "name": "Thomas Bowler",
-    "region": "AFRICA",
-    "died": 1869,
-    "about": "https://en.wikipedia.org/wiki/Thomas_William_Bowler",
-    "categories": ["Thomas William Bowler"]
-  },
-  {
-    "name": "Frederick I'Ons",
-    "region": "AFRICA",
-    "died": 1887,
-    "about": "https://en.wikipedia.org/wiki/Frederick_Timpson_I%27Ons",
-    "categories": ["Frederick Timpson I'Ons"]
-  },
-  {
-    "name": "Jan Ernst Abraham Volschenk",
-    "region": "AFRICA",
-    "died": 1936,
-    "about": "https://en.wikipedia.org/wiki/Jan_Ernst_Abraham_Volschenk",
-    "categories": ["Jan Ernst Abraham Volschenk"]
-  },
-  {
-    "name": "Pieter Wenning",
-    "region": "AFRICA",
-    "died": 1921,
-    "about": "https://en.wikipedia.org/wiki/Pieter_Wenning",
-    "categories": ["Pieter Wenning"]
-  },
-  {
-    "name": "Robert Gwelo Goodman",
-    "region": "AFRICA",
-    "died": 1939,
-    "categories": ["Robert Gwelo Goodman"]
-  }
+ {
+  "name": "Rembrandt",
+  "aliases": [
+   "Rembrandt van Rijn",
+   "Rembrandt Harmensz. van Rijn"
+  ],
+  "about": "https://en.wikipedia.org/wiki/Rembrandt",
+  "showcase": "rijks:SK-A-3137"
+ },
+ {
+  "name": "Claude Monet",
+  "aliases": [],
+  "about": "https://en.wikipedia.org/wiki/Claude_Monet",
+  "showcase": "nga:46523"
+ },
+ {
+  "name": "Pierre-Auguste Renoir",
+  "aliases": [
+   "Auguste Renoir"
+  ],
+  "about": "https://en.wikipedia.org/wiki/Pierre-Auguste_Renoir",
+  "showcase": "nga:52220"
+ },
+ {
+  "name": "Edgar Degas",
+  "aliases": [],
+  "about": "https://en.wikipedia.org/wiki/Edgar_Degas",
+  "showcase": "nga:46597"
+ },
+ {
+  "name": "Gustave Courbet",
+  "aliases": [],
+  "about": "https://en.wikipedia.org/wiki/Gustave_Courbet",
+  "showcase": "met:848137"
+ },
+ {
+  "name": "Peter Paul Rubens",
+  "aliases": [
+   "Sir Peter Paul Rubens"
+  ],
+  "about": "https://en.wikipedia.org/wiki/Peter_Paul_Rubens",
+  "showcase": "getty:af42c83f-8069-4675-9f3b-3fa560f178c6"
+ },
+ {
+  "name": "Camille Pissarro",
+  "aliases": [],
+  "about": "https://en.wikipedia.org/wiki/Camille_Pissarro",
+  "showcase": "met:437317"
+ },
+ {
+  "name": "Édouard Manet",
+  "aliases": [
+   "Edouard Manet"
+  ],
+  "about": "https://en.wikipedia.org/wiki/%C3%89douard_Manet",
+  "showcase": "nga:164939"
+ },
+ {
+  "name": "Vincent van Gogh",
+  "aliases": [],
+  "about": "https://en.wikipedia.org/wiki/Vincent_van_Gogh",
+  "showcase": "rijks:SK-C-1845"
+ },
+ {
+  "name": "Paul Cézanne",
+  "aliases": [
+   "Paul Cezanne"
+  ],
+  "about": "https://en.wikipedia.org/wiki/Paul_C%C3%A9zanne",
+  "showcase": "nga:53123"
+ },
+ {
+  "name": "Paul Gauguin",
+  "aliases": [],
+  "about": "https://en.wikipedia.org/wiki/Paul_Gauguin",
+  "showcase": "nga:56109"
+ },
+ {
+  "name": "Georges Seurat",
+  "aliases": [],
+  "about": "https://en.wikipedia.org/wiki/Georges_Seurat",
+  "showcase": "nga:61383"
+ },
+ {
+  "name": "Camille Corot",
+  "aliases": [
+   "Jean-Baptiste-Camille Corot",
+   "Jean Baptiste Camille Corot"
+  ],
+  "about": "https://en.wikipedia.org/wiki/Jean-Baptiste-Camille_Corot",
+  "showcase": "nga:195860"
+ },
+ {
+  "name": "Eugène Boudin",
+  "aliases": [],
+  "about": "https://en.wikipedia.org/wiki/Eug%C3%A8ne_Boudin",
+  "showcase": "nga:46562"
+ },
+ {
+  "name": "Giovanni Battista Tiepolo",
+  "aliases": [],
+  "about": "https://en.wikipedia.org/wiki/Giovanni_Battista_Tiepolo",
+  "showcase": "met:437802"
+ },
+ {
+  "name": "Francesco Guardi",
+  "aliases": [],
+  "about": "https://en.wikipedia.org/wiki/Francesco_Guardi",
+  "showcase": "rijks:SK-A-3309"
+ },
+ {
+  "name": "Anthony van Dyck",
+  "aliases": [
+   "Sir Anthony van Dyck"
+  ],
+  "about": "https://en.wikipedia.org/wiki/Anthony_van_Dyck",
+  "showcase": "rijks:SK-A-103"
+ },
+ {
+  "name": "Eugène Delacroix",
+  "aliases": [],
+  "about": "https://en.wikipedia.org/wiki/Eug%C3%A8ne_Delacroix",
+  "showcase": "nga:89678"
+ },
+ {
+  "name": "Jan Steen",
+  "aliases": [
+   "Jan Havicksz. Steen"
+  ],
+  "about": "https://en.wikipedia.org/wiki/Jan_Steen",
+  "showcase": "rijks:SK-A-3347"
+ },
+ {
+  "name": "Jan van Goyen",
+  "aliases": [
+   "Jan Josefsz van Goyen"
+  ],
+  "about": "https://en.wikipedia.org/wiki/Jan_van_Goyen",
+  "showcase": "rijks:SK-A-3945"
+ },
+ {
+  "name": "Jacob van Ruisdael",
+  "aliases": [
+   "Jacob Isaacksz van Ruisdael",
+   "Jacob Isaacksz. van Ruisdael"
+  ],
+  "about": "https://en.wikipedia.org/wiki/Jacob_van_Ruisdael",
+  "showcase": "nga:46184"
+ },
+ {
+  "name": "François Boucher",
+  "aliases": [],
+  "about": "https://en.wikipedia.org/wiki/Fran%C3%A7ois_Boucher",
+  "showcase": "getty:ac9440c4-0d89-4d20-9697-b1ce39a1819e"
+ },
+ {
+  "name": "Jean-Honoré Fragonard",
+  "aliases": [
+   "Jean Honoré Fragonard"
+  ],
+  "about": "https://en.wikipedia.org/wiki/Jean-Honor%C3%A9_Fragonard",
+  "showcase": "nga:46036"
+ },
+ {
+  "name": "Henri Fantin-Latour",
+  "aliases": [],
+  "about": "https://en.wikipedia.org/wiki/Henri_Fantin-Latour",
+  "showcase": "rijks:SK-A-2894"
+ },
+ {
+  "name": "Théodore Rousseau",
+  "aliases": [],
+  "about": "https://en.wikipedia.org/wiki/Th%C3%A9odore_Rousseau",
+  "showcase": "nga:98290"
+ },
+ {
+  "name": "Charles-François Daubigny",
+  "aliases": [
+   "Charles François Daubigny"
+  ],
+  "about": "https://en.wikipedia.org/wiki/Charles-Fran%C3%A7ois_Daubigny",
+  "showcase": "met:436085"
+ },
+ {
+  "name": "Vilhelm Hammershøi",
+  "aliases": [],
+  "about": "https://en.wikipedia.org/wiki/Vilhelm_Hammersh%C3%B8i",
+  "showcase": "smk:KMS1542"
+ },
+ {
+  "name": "Christen Købke",
+  "aliases": [],
+  "about": "https://en.wikipedia.org/wiki/Christen_K%C3%B8bke",
+  "showcase": "smk:KMS3148"
+ },
+ {
+  "name": "C.W. Eckersberg",
+  "aliases": [
+   "Christoffer Wilhelm Eckersberg"
+  ],
+  "about": "https://en.wikipedia.org/wiki/Christoffer_Wilhelm_Eckersberg",
+  "showcase": "smk:KMS1776"
+ },
+ {
+  "name": "P.C. Skovgaard",
+  "aliases": [],
+  "about": "https://en.wikipedia.org/wiki/P._C._Skovgaard",
+  "showcase": "smk:KMS6650"
+ },
+ {
+  "name": "L.A. Ring",
+  "aliases": [],
+  "about": "https://en.wikipedia.org/wiki/Laurits_Andersen_Ring",
+  "showcase": "smk:KMS3201"
+ },
+ {
+  "name": "George Hendrik Breitner",
+  "aliases": [],
+  "about": "https://en.wikipedia.org/wiki/George_Hendrik_Breitner",
+  "showcase": "rijks:SK-A-3560"
+ },
+ {
+  "name": "Jacob Maris",
+  "aliases": [],
+  "about": "https://en.wikipedia.org/wiki/Jacob_Maris",
+  "showcase": "rijks:SK-A-2468"
+ },
+ {
+  "name": "Anton Mauve",
+  "aliases": [],
+  "about": "https://en.wikipedia.org/wiki/Anton_Mauve",
+  "showcase": "rijks:SK-A-2436"
+ },
+ {
+  "name": "Jozef Israëls",
+  "aliases": [],
+  "about": "https://en.wikipedia.org/wiki/Jozef_Isra%C3%ABls",
+  "showcase": "rijks:SK-A-2598"
+ },
+ {
+  "name": "George Inness",
+  "aliases": [],
+  "about": "https://en.wikipedia.org/wiki/George_Inness",
+  "showcase": "nga:195785"
+ },
+ {
+  "name": "Katsushika Hokusai",
+  "aliases": [
+   "Katsushika Hokusai 葛飾北斎"
+  ],
+  "about": "https://en.wikipedia.org/wiki/Hokusai",
+  "showcase": "met:44634"
+ },
+ {
+  "name": "Shibata Zeshin",
+  "aliases": [],
+  "about": "https://en.wikipedia.org/wiki/Shibata_Zeshin",
+  "showcase": "met:57196"
+ }
 ]

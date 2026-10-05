@@ -365,7 +365,10 @@ impl Settings {
             }
         };
         match serde_json::from_str::<Self>(&text) {
-            Ok(settings) => {
+            Ok(mut settings) => {
+                // One painter at a time; a file from when several could be
+                // chosen keeps the first.
+                settings.filters.artists.truncate(1);
                 journal::note!("settings", "loaded, {}", settings.describe());
                 settings
             }

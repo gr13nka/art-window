@@ -114,6 +114,25 @@ public struct Filters: Codable, Equatable, Sendable {
         self.hideReligious = hideReligious
     }
 
+    /// One painter at a time, so `artists` holds at most one name; it stays a set so nothing
+    /// stored has to migrate and `Catalogue` keeps taking a collection. An earlier build could
+    /// store several, and a mixture nobody asked for by name is worse than a guess, so only one
+    /// is read — here and nowhere else. A set has no order, so "first" is the alphabetical one.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        shape = try c.decode(ArtworkShape.self, forKey: .shape)
+        regions = try c.decode(Set<Region>.self, forKey: .regions)
+        subjects = try c.decode(Set<ArtworkSubject>.self, forKey: .subjects)
+        artists = Set(try c.decode(Set<String>.self, forKey: .artists).sorted().prefix(1))
+        hideReligious = try c.decode(Bool.self, forKey: .hideReligious)
+    }
+
+    /// Makes `artist` the one painter chosen, in place of whoever was.
+    public mutating func chooseArtist(_ artist: String) { artists = [artist] }
+
+    /// Back to paintings by anyone.
+    public mutating func anyArtist() { artists = [] }
+
     /// A fresh install starts from Europe and Asia, landscapes, no artist: not an unfiltered
     /// Any. Once saved, an empty section is honestly Any — there is no other fallback.
     public static let defaults = Filters()

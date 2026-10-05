@@ -150,8 +150,8 @@ impl Config {
             concat!(
                 "# Art Window settings.\n",
                 "\n",
-                "# \"museums\" for public-domain paintings from the Met, the National\n",
-                "# Gallery of Art, the Cleveland Museum of Art and SMK, \"met\" to search\n",
+                "# \"museums\" for public-domain paintings from the open collections\n",
+                "# of six museums, the Met among them, \"met\" to search\n",
                 "# the Metropolitan Museum's collection live instead, or a path to a\n",
                 "# folder of your own pictures, e.g.\n",
                 "#   source = \"~/Pictures/Wallpapers\"\n",

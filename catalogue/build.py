@@ -3,7 +3,7 @@
 paintings the desktop, Android and iOS apps all ship inside their bundles, so
 none has to search a live API on someone's phone or laptop.
 
-Each of the five sources under `sources/` applies only *objective* gates:
+Each of the sources under `sources/` applies only *objective* gates:
 public domain or CC0, classified as a painting, a direct JPEG, and (via
 `geometry.meets_minimum`, applied once below rather than by each source) a
 long side of at least `geometry.MIN_LONG_SIDE` pixels. Subject, portrait,
@@ -12,26 +12,29 @@ live in `Catalogue.kt` on Android, `museums.rs` on the desktop and
 `Catalogue.swift` on iOS, the three places that actually decide what a
 person sees.
 
-Four sources are museums; the fifth, `wmc` (`sources/commons.py`), instead
-walks Wikimedia Commons categories for one named artist at a time. Its rows
-carry an `artist` display name in the 12th column, empty for every museum
-row. To add an artist, add one entry to `catalogue/artists.json`:
-`{"name": ..., "region": <one of catalogue.regions.REGIONS>, "categories":
-[...]}`, where `categories` are Commons category names (without the
-"Category:" prefix) walked recursively for that artist's paintings.
+Every source is a museum that itself grants commercial use of its public-domain
+images. Each row also carries the maker the museum names, which `text.maker`
+reduces to a plain personal name or nothing; `_apply_curated_list` then keeps
+that name in the 12th `artist` column only for painters listed in
+`catalogue/artists.json`. To add a painter, run the build, read the report's
+"Makers ... not on the list" section for the spellings the museums use, and add
+one entry: `{"name": <chip name>, "aliases": [<raw maker strings>], "about":
+<URL>, "showcase": "<source>:<id>"}`, the showcase being one of that painter's
+own rows.
 
 An artist with fewer than `MIN_PER_CHOICE` rows in the finished file has its
 `artist` column blanked (the rows stay; the byline still names the painter),
 because that column is what puts an *Artist* chip in every app's settings. The
 run ends with a report of thin spots: rows per (source, region), per region
-(all six, zeros included), per named artist, the artists just blanked, and —
+(all six, zeros included), per named artist, the artists just blanked, the makers the museums name that the
+list does not, and —
 when `cargo` is on the PATH — the desktop app's own region x subject x shape
 counts from `cargo run -- --catalogue`.
 
 Every painter whose artist column survives that rule also gets an entry in
 `catalogue/dist/artists/` (written by `showcase.py` after the TSV, from the combined
 rows, so it runs under any `--only`): `<slug>.jpg`, the painter's `showcase`
-painting from `artists.json` at no more than 1400 px, and `index.tsv`
+painting from `artists.json` (downloaded from that row's own image URL) at no more than 1400 px, and `index.tsv`
 (`name region about showcase title byline file`, sorted by name; `name`,
 `title` and `byline` are copied from the TSV so they match it exactly). The
 desktop's artist browser compiles these in; Android bundles them with the rest
@@ -40,7 +43,7 @@ chip but lacks `about`, `showcase`, or a showcase that is one of their own rows
 fails the build.
 
 Usage:
-    python3 catalogue/build.py [--only met,nga,cma,smk,wmc] [--refresh] [--csv PATH]
+    python3 catalogue/build.py [--only met,nga,cma,smk] [--refresh] [--csv PATH]
                                [--no-app-report]
 
 Everything each source downloads is cached under
@@ -50,9 +53,10 @@ ignores that cache and re-fetches everything for the sources being run.
 
 `--only` narrows which sources make new requests; it does not shrink the
 file. A source left out this run has its rows read back from the existing
-`dist/paintings.tsv` and kept as-is, so `--only wmc` after a museum-only
-build adds artist rows without discarding the museums', and any one source
-can be rerun on its own without waiting on — or erasing — the other four.
+`dist/paintings.tsv` and kept as-is, so any one source can be rerun on its
+own without waiting on — or erasing — the others. What a kept row loses is its raw
+maker, which `paintings.tsv` no longer holds once the list has mapped it; that
+survives in `catalogue/makers.tsv` (see `_read_makers`).
 
 A source that aborts part-way — a host that kept refusing — is treated the
 same way: what it managed this run is thrown away, its rows already on disk
@@ -82,10 +86,10 @@ import shutil  # noqa: E402
 import subprocess  # noqa: E402
 
 from catalogue import geometry, http, regions, showcase, text  # noqa: E402
-from catalogue.sources import cleveland, commons, met, nga, smk  # noqa: E402
+from catalogue.sources import cleveland, getty, met, nga, rijksmuseum, smk  # noqa: E402
 
-SOURCE_MODULES = {"met": met, "nga": nga, "cma": cleveland, "smk": smk, "wmc": commons}
-SOURCE_ORDER = ("met", "nga", "cma", "smk", "wmc")
+SOURCE_MODULES = {"met": met, "nga": nga, "cma": cleveland, "smk": smk, "rijks": rijksmuseum, "getty": getty}
+SOURCE_ORDER = ("met", "nga", "cma", "smk", "rijks", "getty")
 
 # Mirrors `MIN_POOL` in `src/art/museums.rs` on purpose, the same way the word
 # lists are duplicated across platforms: a filter choice with fewer paintings
@@ -106,14 +110,15 @@ def _read_existing_snapshot_dates(dist_path: str) -> dict[str, str]:
         return {}
     with open(dist_path, encoding="utf-8") as f:
         first_line = f.readline()
-    return dict(_SNAPSHOT_RE.findall(first_line))
+    return {name: date for name, date in _SNAPSHOT_RE.findall(first_line) if name in SOURCE_ORDER}
 
 
-def _read_existing_rows(dist_path: str, keep_sources: set[str]) -> list[dict]:
+def _read_existing_rows(dist_path: str, keep_sources: set[str], makers: dict[tuple[str, str], str]) -> list[dict]:
     """Rows already on disk whose `source` is in `keep_sources` — the
     sources this run did *not* select — so `--only` can narrow which sources
-    make new requests without shrinking the file down to just those. Reads
-    both the legacy 11-column shape and the current 12-column one."""
+    make new requests without shrinking the file down to just those. Each row's
+    `artist` is its raw maker from `makers`, not the 12th column, which holds
+    only what the list let through last time."""
     rows: list[dict] = []
     if not os.path.isfile(dist_path):
         return rows
@@ -136,7 +141,7 @@ def _read_existing_rows(dist_path: str, keep_sources: set[str]) -> list[dict]:
                 "byline": fields[8],
                 "origin": fields[9],
                 "tags": fields[10].split("|") if fields[10] else [],
-                "artist": fields[11] if len(fields) > 11 else "",
+                "artist": makers.get((fields[0], fields[1]), ""),
             })
     return rows
 
@@ -163,6 +168,61 @@ def _write(rows: list[dict], dist_path: str, snapshot_dates: dict[str, str]) -> 
             f.write("\t".join(fields) + "\n")
 
 
+def _read_makers(path: str) -> dict[tuple[str, str], str]:
+    """`{(source, id): raw maker}` from `catalogue/makers.tsv`.
+
+    A partial run keeps some sources' rows from disk, but `paintings.tsv` holds
+    only the *mapped* artist, and mapping is lossy: a painter added to the list
+    later could never be found among rows already blanked. Re-fetching every
+    source to recover the maker is exactly what `--only` exists to avoid, so the
+    build writes each row's raw maker beside the catalogue and reads it back. It
+    sits in `catalogue/`, not `dist/`, because Android bundles all of `dist/` and
+    no app has any use for it. Absent on the first run, in which case kept rows
+    have no maker until their source is run once."""
+    makers: dict[tuple[str, str], str] = {}
+    if os.path.isfile(path):
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("#") or not line.strip():
+                    continue
+                fields = line.rstrip("\n").split("\t")
+                if len(fields) == 3:
+                    makers[(fields[0], fields[1])] = fields[2]
+    return makers
+
+
+def _write_makers(rows: list[dict], path: str) -> None:
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        f.write("# Generated by catalogue/build.py: each painting's maker as its museum names it. Do not edit by hand.\n")
+        for row in rows:
+            if row.get("maker"):
+                f.write(f"{row['source']}\t{row['id']}\t{text.collapse(row['maker'])}\n")
+
+
+def _apply_curated_list(rows: list[dict]) -> dict[str, dict[str, int]]:
+    """Sets every row's `artist` to the listed painter its raw `maker` stands
+    for, or to nothing, and returns `{maker: {source: rows}}` for the makers
+    that matched no one.
+
+    The list is curated because museums name hundreds of makers nobody would
+    pick from a settings screen, and spell one painter several ways ("Claude
+    Monet", "Monet, Claude", "Claude-Oscar Monet"); a painter exists for the apps
+    only once someone has listed the spellings that mean them. Names are compared
+    after `text.collapse` and case-folding."""
+    wanted: dict[str, str] = {}
+    for painter in showcase.load_artists():
+        for spelling in (painter["name"], *painter.get("aliases", [])):
+            wanted[text.collapse(spelling).casefold()] = painter["name"]
+    unlisted: dict[str, dict[str, int]] = {}
+    for row in rows:
+        maker = text.collapse(row.get("maker"))
+        row["artist"] = wanted.get(maker.casefold(), "")
+        if maker and not row["artist"]:
+            per_source = unlisted.setdefault(maker, {})
+            per_source[row["source"]] = per_source.get(row["source"], 0) + 1
+    return unlisted
+
+
 def _blank_thin_artists(rows: list[dict]) -> dict[str, int]:
     """Blanks the `artist` column of every row whose artist has fewer than
     `MIN_PER_CHOICE` rows in `rows`, and returns `{artist: count}` for the
@@ -181,7 +241,9 @@ def _blank_thin_artists(rows: list[dict]) -> dict[str, int]:
     return thin
 
 
-def _print_report(combined: list[dict], blanked: dict[str, int], app_report: bool) -> None:
+def _print_report(
+    combined: list[dict], blanked: dict[str, int], unlisted: dict[str, dict[str, int]], app_report: bool
+) -> None:
     by_source_region: dict[tuple[str, str], int] = {}
     by_region = dict.fromkeys(regions.REGIONS, 0)
     by_artist: dict[str, int] = {}
@@ -208,6 +270,16 @@ def _print_report(combined: list[dict], blanked: dict[str, int], app_report: boo
         for name, count in sorted(blanked.items()):
             print(f"  {name:32s} {count}")
 
+    candidates = sorted(
+        ((sum(per_source.values()), maker, per_source) for maker, per_source in unlisted.items()),
+        key=lambda c: (-c[0], c[1]),
+    )
+    candidates = [c for c in candidates if c[0] >= MIN_PER_CHOICE]
+    print(f"\nMakers with {MIN_PER_CHOICE}+ rows not on the list (catalogue/artists.json):")
+    for count, maker, per_source in candidates:
+        sources = ", ".join(f"{s} {n}" for s, n in sorted(per_source.items()))
+        print(f"  {maker:36s} {count:5d}  ({sources})")
+
     command = "cargo run --quiet -- --catalogue"
     if not app_report:
         return
@@ -225,7 +297,7 @@ def _print_report(combined: list[dict], blanked: dict[str, int], app_report: boo
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument(
-        "--only", default=",".join(SOURCE_ORDER), help="comma-separated subset of met,nga,cma,smk,wmc"
+        "--only", default=",".join(SOURCE_ORDER), help="comma-separated subset of " + ",".join(SOURCE_ORDER)
     )
     parser.add_argument(
         "--refresh", action="store_true", help="ignore each selected source's cache and re-fetch everything"
@@ -290,19 +362,29 @@ def main(argv: list[str] | None = None) -> None:
             continue
         accepted.append(row)
 
+    makers_path = os.path.join(_repo_root, "catalogue", "makers.tsv")
+    for row in accepted:
+        row["maker"] = row.get("artist", "")
     kept = _read_existing_rows(
-        dist_path, keep_sources=(set(SOURCE_MODULES) - requested) | set(aborted)
+        dist_path,
+        keep_sources=(set(SOURCE_MODULES) - requested) | set(aborted),
+        makers=_read_makers(makers_path),
     )
+    for row in kept:
+        row["maker"] = row.get("artist", "")
     combined = accepted + kept
+    unlisted = _apply_curated_list(combined)
     blanked = _blank_thin_artists(combined)
     combined.sort(key=lambda r: (r["source"], r["id"]))
     _write(combined, dist_path, snapshot_dates)
-    showcase.write(combined, os.path.join(_repo_root, "catalogue", "dist", "artists"), args.refresh)
+    _write_makers(combined, makers_path)
+    showcase.write(combined, os.path.join(_repo_root, "catalogue", "dist", "artists"), args.refresh,
+                   host_gaps={h: g for m in SOURCE_MODULES.values() for h, g in m.HOST_GAPS.items()})
 
     print(f"\nWrote {len(combined)} rows to {dist_path} "
           f"({len(accepted)} freshly fetched, {len(kept)} kept from disk)")
     print(f"Dropped: {dropped_region} unknown region, {dropped_size} under {geometry.MIN_LONG_SIDE}px long side")
-    _print_report(combined, blanked, app_report=not args.no_app_report)
+    _print_report(combined, blanked, unlisted, app_report=not args.no_app_report)
     if aborted:
         sys.exit(f"\nIncomplete: {', '.join(aborted)} aborted and kept its rows from disk.")
 

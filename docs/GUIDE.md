@@ -202,10 +202,11 @@ the way the choices on the right would hang it:
   in each; nothing picked means any. A choice that would leave fewer than twenty
   paintings is greyed, and clicking it says which of the other choices is in the
   way.
-- **Artist** — the row lists the painters you have chosen; click one to take it
-  out. *Any artist* (or *Add*) opens a browser like the favourites one: each
-  painter is shown by their best-known painting, with *Choose* and a *Read more*
-  link to their Wikipedia article. *Back* returns to the settings. A chosen
+- **Artist** — one painter at a time. The row has two chips: *Any artist*, and a
+  second that names the painter chosen (or says *Choose…*) and opens a browser
+  like the favourites one. Each painter is shown by one of their paintings, with
+  *Choose* and a *Read more* link to their Wikipedia article; choosing another
+  replaces the first. *Back* returns to the settings. A chosen
   painter wins over **Shape** and **Origin**, which grey out while one is chosen,
   and the twenty-painting minimum does not apply to them; **Subject** and **Hide
   religious scenes** still narrow what arrives.
@@ -355,22 +356,24 @@ source = "museums"
 ```
 
 `"museums"` is the default for new installs: a prebuilt, pixel-verified list of
-paintings from all four museums, checked in at `catalogue/dist/paintings.tsv`
+paintings from all six museums, checked in at `catalogue/dist/paintings.tsv`
 and compiled straight into the binary, so a day's painting is one download
 rather than a live search. `"met"` keeps the older behaviour — a live search
 against just the Met's own collection — for a `config.toml` that already
 spells it out. Regenerate the list with:
 
 ```sh
-python3 catalogue/build.py            # all four museums; the Met pass alone takes ~3 h, resumable
+python3 catalogue/build.py            # all six museums; the Met pass alone takes ~3 h, resumable
 python3 catalogue/build.py --only nga,cma,smk  # skip the Met for a quick rebuild of the rest
-python3 catalogue/build.py --only wmc  # the painters named in catalogue/artists.json
+python3 catalogue/build.py --only ''   # no requests: re-apply catalogue/artists.json to the rows on disk
 ```
 
 The build ends with the number of paintings per region and per artist, then
 `art-window --catalogue`'s table of every region, subject and shape together,
 with anything under twenty marked. A marked cell is a choice the settings tab
-will grey; the cure is more painters in `catalogue/artists.json`.
+will grey; the cure is another museum whose own terms allow commercial use.
+It also lists every maker with twenty or more paintings who is not yet in
+`catalogue/artists.json`, which is what a new *Artist* entry is written from.
 
 One painting a day is the whole schedule and there is nothing to tune. A
 `refresh_hours` left over from an older version is accepted and ignored so an

@@ -232,4 +232,20 @@ final class FramingTests: XCTestCase {
             RenderStyle.self, from: JSONEncoder().encode(RenderStyle(rotateWide: true, frameZoom: 2.5, panX: 0.3, panY: 0.8, panFor: "y")))
         XCTAssertEqual(round, RenderStyle(rotateWide: true, frameZoom: 2.5, panX: 0.3, panY: 0.8, panFor: "y"))
     }
+
+    func testChoosingAPainterReplacesWhoeverWasChosenAndAnyClears() {
+        var f = Filters(artists: ["Ann"])
+        f.chooseArtist("Bea")
+        XCTAssertEqual(f.artists, ["Bea"])
+        f.anyArtist()
+        XCTAssertTrue(f.artists.isEmpty)
+    }
+
+    func testStoredSeveralPaintersReadAsOneOnly() throws {
+        let json = """
+        {"shape":"screen","regions":[],"subjects":[],"artists":["Cy","Ann","Bea"],"hideReligious":false}
+        """
+        let f = try JSONDecoder().decode(Filters.self, from: Data(json.utf8))
+        XCTAssertEqual(f.artists, ["Ann"])
+    }
 }

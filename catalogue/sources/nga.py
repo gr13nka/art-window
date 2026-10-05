@@ -73,6 +73,11 @@ def fetch(
             candidates[object_id] = {
                 "title": text.collapse(row.get("title")),
                 "byline": text.byline(row.get("attribution") or "", row.get("displaydate") or ""),
+                # `attribution` already says "Claude Monet" for a sole painter and
+                # "... and Workshop" / "Follower of ..." otherwise, which
+                # `text.maker` refuses; the constituents file would add a join
+                # and no better answer.
+                "artist": text.maker(row.get("attribution") or ""),
             }
 
     # 2. The primary open-access image and its real size, per candidate.
@@ -159,4 +164,5 @@ def fetch(
             "byline": candidates[object_id]["byline"],
             "origin": origin,
             "tags": tags.get(object_id, []),
+            "artist": candidates[object_id]["artist"],
         }

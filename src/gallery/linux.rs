@@ -391,9 +391,7 @@ impl Content {
             login,
             stack,
             settings,
-            list,
-            cards,
-            thumbs: Rc::new(RefCell::new(HashMap::new())),
+            favourites,
             updating_login,
         })
     }
@@ -833,7 +831,7 @@ impl SettingsView {
         let weak = Rc::downgrade(self);
         let choose: Rc<dyn Fn(&Card)> = Rc::new(move |card: &Card| {
             if let Some(view) = weak.upgrade() {
-                view.pending.borrow_mut().toggle_artist(&card.key);
+                view.pending.borrow_mut().choose_artist(&card.key);
                 view.redraw(Redraw::All);
             }
         });
@@ -1006,14 +1004,23 @@ impl SettingsView {
         }
     }
 
-    /// The chosen painters as chips, then the button that opens the browser.
+    /// *Any artist*, then the chip that opens the browser and names who is chosen.
     fn fill_artists(self: &Rc<Self>, row: ArtistRow) {
-        self.fill(&self.artists, row.chosen, |p, v: &String| {
-            p.toggle_artist(v)
+        clear(&self.artists);
+        let any = chip_button(&row.any.label, row.any.selected);
+        any.set_sensitive(row.any.disabled_reason.is_none());
+        any.set_tooltip_text(row.any.disabled_reason.as_deref());
+        let weak = Rc::downgrade(self);
+        any.connect_clicked(move |_| {
+            if let Some(view) = weak.upgrade() {
+                view.pending.borrow_mut().any_artist();
+                view.redraw(Redraw::All);
+            }
         });
-        let browse = chip_button(row.browse, false);
-        browse.set_sensitive(row.disabled_reason.is_none());
-        browse.set_tooltip_text(row.disabled_reason.as_deref());
+        self.artists.insert(&any, -1);
+        let browse = chip_button(&row.browse.label, row.browse.selected);
+        browse.set_sensitive(row.browse.disabled_reason.is_none());
+        browse.set_tooltip_text(row.browse.disabled_reason.as_deref());
         let weak = Rc::downgrade(self);
         browse.connect_clicked(move |_| {
             if let Some(view) = weak.upgrade() {
@@ -1032,7 +1039,7 @@ impl SettingsView {
             .map(|card| Card {
                 key: card.name,
                 marked: card.selected,
-                primary: if card.selected { "Remove" } else { "Choose" }.to_owned(),
+                primary: card.primary.to_owned(),
                 blocked: card.disabled_reason,
                 can_secondary: card.art.details_url.is_some(),
                 art: card.art,

@@ -54,8 +54,8 @@ import kotlinx.coroutines.withContext
  *
  * Android's own copy of `Pending::artist_cards` on the desktop and the browser in
  * `ios/ArtWindow` — the rules for what a card says and when *Choose* is refused belong in
- * all three. Choosing only stages: [onToggle] changes the same staged set the Settings
- * chips change, and *Apply changes* there still commits it. This screen owns no copy.
+ * all three. Choosing only stages: [onChoose] changes the same staged choice the Settings
+ * row shows, and *Apply changes* there still commits it. This screen owns no copy.
  *
  * [painters] are already ordered; [paintings] is each one's count from
  * [Catalogue.paintingsBy]; [blocks] is [Catalogue.artistBlocks] for what is staged.
@@ -66,7 +66,7 @@ fun ArtistBrowserScreen(
     paintings: Map<String, Int>,
     chosen: Set<String>,
     blocks: Map<String, ArtistBlock>,
-    onToggle: (String) -> Unit,
+    onChoose: (String) -> Unit,
     onClose: () -> Unit,
 ) {
     var selectedName by rememberSaveable { mutableStateOf<String?>(null) }
@@ -101,14 +101,14 @@ fun ArtistBrowserScreen(
             isChosen = selected.name in chosen,
             blocked = blockedReason(selected.name, chosen, blocks),
             onBack = { selectedName = null },
-            onToggle = { onToggle(selected.name) },
+            onChoose = { onChoose(selected.name) },
         )
     }
 }
 
 /**
- * Why [name] cannot be added to the staged choice, or null when it can. A painter
- * already chosen is never blocked, so that it can always be taken out again. A painter
+ * Why [name] cannot be made the staged choice, or null when it can. A painter
+ * already chosen is never blocked, so the screen never disagrees with what is staged. A painter
  * wins over Shape, Origins and the floor, so only Subject and the religious toggle (or,
  * with neither to blame, the screen's size limits) can empty one: [blocks] says which.
  */
@@ -173,7 +173,7 @@ private fun PainterDetail(
     isChosen: Boolean,
     blocked: String?,
     onBack: () -> Unit,
-    onToggle: () -> Unit,
+    onChoose: () -> Unit,
 ) {
     val context = LocalContext.current
     val about = remember(painter.aboutUrl) { Intent(Intent.ACTION_VIEW, Uri.parse(painter.aboutUrl)) }
@@ -210,7 +210,7 @@ private fun PainterDetail(
             modifier = Modifier.padding(top = 12.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Button(onClick = onToggle, enabled = blocked == null) { Text(if (isChosen) "Remove" else "Choose") }
+            Button(onClick = onChoose, enabled = blocked == null) { Text(if (isChosen) "Chosen" else "Choose") }
             if (canRead) {
                 TextButton(onClick = { context.startActivity(about) }, colors = quietButtonColors()) { Text("Read more") }
             }

@@ -222,9 +222,16 @@ internal fun subjectValues(raw: String?): Set<ArtworkSubject> {
  * dropped at load time. Blank entries are filtered so an empty stored string reads
  * as no artists chosen. Artists default to Any even on a fresh install (`raw == null`),
  * unlike [regionValues] and [subjectValues] — there is no curated artist default.
+ *
+ * One painter at a time. The stored value stays a comma-separated list so nothing
+ * migrates, but an earlier build could store several and a mixture nobody asked for by
+ * name is worse than a guess, so only the first is read — here and nowhere else.
  */
 internal fun artistValues(raw: String?): Set<String> =
-    raw?.split(',')?.filter { it.isNotBlank() }?.toSet().orEmpty()
+    raw?.split(',')?.firstOrNull { it.isNotBlank() }?.let { setOf(it) }.orEmpty()
+
+/** [artist] as the one painter chosen, in place of whoever was. */
+internal fun chosenArtist(artist: String): Set<String> = setOf(artist)
 
 /**
  * Toggles [item] in [current]. Reaching the empty set is fine and expected — Origins,

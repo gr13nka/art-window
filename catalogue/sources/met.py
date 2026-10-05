@@ -87,7 +87,10 @@ def _download_csv(client: http.PacedClient, csv_path: str) -> None:
     client.download(CSV_URL, csv_path)
 
 
-def _iter_candidate_ids(csv_path: str) -> Iterator[int]:
+def _iter_candidates(csv_path: str) -> Iterator[tuple[int, str]]:
+    """`(object id, maker)` per public-domain painting. The maker comes from
+    the CSV rather than the per-object cache, whose format a three-hour pass
+    depends on staying put."""
     with open(csv_path, encoding="utf-8-sig", newline="") as f:
         reader = csv.DictReader(f)
         for row in reader:
@@ -96,7 +99,7 @@ def _iter_candidate_ids(csv_path: str) -> Iterator[int]:
             if row.get("Classification") != "Paintings":
                 continue
             try:
-                yield int(row["Object ID"])
+                yield int(row["Object ID"]), text.maker(row.get("Artist Display Name") or "")
             except (KeyError, ValueError):
                 continue
 
@@ -166,7 +169,7 @@ def fetch(
         _download_csv(client, csv_path)
 
     cache = http.JsonCache(os.path.join(cache_dir, "objects"))
-    for object_id in _iter_candidate_ids(csv_path):
+    for object_id, maker in _iter_candidates(csv_path):
         key = str(object_id)
         record = None if refresh else cache.get(key)
         if record is None:
@@ -193,4 +196,5 @@ def fetch(
             "byline": record["byline"],
             "origin": record["origin"],
             "tags": record["tags"],
+            "artist": maker,
         }

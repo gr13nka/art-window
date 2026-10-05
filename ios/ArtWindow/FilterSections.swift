@@ -33,22 +33,24 @@ struct FilterSections: View {
             }
         }
 
-        // Only the painters already chosen, so a stored name the catalogue no longer
-        // lists is still here to be removed. Choosing happens in the browser.
-        ForEach(filters.artists.sorted(), id: \.self) { artist in
-            row(artist, checked: true) { toggle(&filters.artists, artist) }
-        }
+        // Two choices, exactly one on. The chosen painter is named even when a newer
+        // catalogue no longer lists them, so nothing staged is hidden.
+        row("Any artist", checked: filters.artists.isEmpty) { filters.anyArtist() }
         Button { browsing = true } label: {
             HStack {
-                Text(filters.artists.isEmpty ? "Any artist" : "Add").foregroundStyle(.primary)
+                Text(filters.artists.first ?? "Choose…").foregroundStyle(.primary)
                 Spacer()
-                Image(systemName: "chevron.right").font(.footnote).foregroundStyle(.tertiary)
+                if filters.artists.isEmpty {
+                    Image(systemName: "chevron.right").font(.footnote).foregroundStyle(.tertiary)
+                } else {
+                    Image(systemName: "checkmark").foregroundStyle(Color.accentColor)
+                }
             }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .fullScreenCover(isPresented: $browsing) {
-            ArtistBrowser(chosen: $filters.artists, available: availability.artists, filters: filters)
+            ArtistBrowser(filters: $filters, available: availability.artists)
         }
     }
 

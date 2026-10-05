@@ -86,12 +86,13 @@ on purpose. A pool of a handful is the same few pictures coming round again, so:
 ## Choosing a painter by a painting
 
 Fourteen names in one wrapping run of chips said nothing to someone who had not heard
-them, so the Settings *Artist* section lists only the painters already chosen (tap one
-to remove it; a stored name the catalogue no longer holds still shows, so it can go)
-and one row, *Any artist* or, once somebody is chosen, *Add*. The row opens a browser
+them, so the Settings *Artist* section is two rows, exactly one on: *Any artist* (tapping
+it clears the choice) and a row labelled with the chosen painter, or *Choose…*. One
+painter at a time — choosing replaces whoever was chosen, and `Filters` decodes a
+stored set of several (from an earlier build) as one name only. The second row opens a browser
 modelled on `FavouritesView`: a grid of one picture per painter, ticked when chosen,
 and a sheet for the one tapped with their painting large, a line of the form
-"Golden summer, Eaglemont, 1889 · Oceania, 40 paintings", *Choose* or *Remove*, and
+"Golden summer, Eaglemont, 1889 · Oceania, 40 paintings", *Choose* — or *Chosen* on the one who is, there is no *Remove* — and
 *Read more*, a `Link` that hands the Wikipedia article to Safari. On an iPad the grid
 simply has more columns. Choosing only stages the name in the same `filters` Settings
 holds; *Apply changes* still commits it. Painters run by region, in the `Region`

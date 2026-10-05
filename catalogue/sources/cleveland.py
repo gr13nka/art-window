@@ -86,6 +86,7 @@ def fetch(
                 "byline": text.byline(_creator_name(creators), artwork.get("creation_date") or ""),
                 "origin": culture,
                 "tags": [],
+                "artist": text.maker(_creator_name(creators)),
             }
 
         skip += PAGE_SIZE

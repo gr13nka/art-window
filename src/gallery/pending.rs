@@ -63,22 +63,24 @@ pub struct Chip<T> {
     pub disabled_reason: Option<String>,
 }
 
-/// The settings tab's *Artist* row: the painters already chosen and one button
-/// that opens the browser. Not a chip per painter — the catalogue names more of
-/// them with every build, and a row of fourteen names tells nobody which to pick.
+/// The settings tab's *Artist* row: two chips, exactly one of them on. Not a chip
+/// per painter — the catalogue names dozens, and a row of them tells nobody which
+/// to pick.
+///
+/// One painter at a time. Several at once came out as a mixture nobody had asked
+/// for by name, and the row could not say whose painting was on the desktop.
 pub struct ArtistRow {
-    /// Clicking one takes that painter out again.
-    pub chosen: Vec<Chip<String>>,
-    /// What the button that opens the browser says.
-    pub browse: &'static str,
-    /// Present when the button should explain itself instead of opening anything.
-    pub disabled_reason: Option<String>,
+    /// *Any artist*: on while nobody is chosen, and the way back to that.
+    pub any: Chip<()>,
+    /// Opens the browser. Carries the chosen painter's name and is on while there
+    /// is one, so the row itself says who is chosen.
+    pub browse: Chip<()>,
 }
 
 /// One painter in the artist browser.
 pub struct ArtistCard {
     /// Who this is: the shelf's key for the card, and what a click on it hands
-    /// to [`Pending::toggle_artist`].
+    /// to [`Pending::choose_artist`].
     pub name: String,
     /// How the painter is shown, dressed as a picture so that the shelf and
     /// preview each window already has for favourites can draw it unchanged:
@@ -87,6 +89,10 @@ pub struct ArtistCard {
     /// read about them. For display only — identity is `name`.
     pub art: Artwork,
     pub selected: bool,
+    /// What the browser's button says for this card: *Choose*, or *Chosen* on
+    /// the one painter who is. There is no taking a painter out here — choosing
+    /// another replaces them, and *Any artist* in the row is the way back.
+    pub primary: &'static str,
     /// Present when choosing this painter should explain why it cannot be done.
     pub disabled_reason: Option<String>,
 }
@@ -434,26 +440,23 @@ impl Pending {
             .collect()
     }
 
-    /// The *Artist* row. Every staged painter is listed, including one a newer
-    /// catalogue no longer names, so that nothing chosen is ever out of reach.
+    /// The *Artist* row. The chosen painter is named even when a newer catalogue
+    /// no longer has them, so that what is staged is never hidden.
     pub fn artist_row(&self) -> ArtistRow {
-        let chosen = &self.staged.filters.artists;
+        let chosen = self.staged.filters.artists.first();
         ArtistRow {
-            chosen: chosen
-                .iter()
-                .map(|a| Chip {
-                    value: a.clone(),
-                    label: a.clone(),
-                    selected: true,
-                    disabled_reason: self.disabled_reason(true, None, a),
-                })
-                .collect(),
-            browse: if chosen.is_empty() {
-                "Any artist"
-            } else {
-                "Add"
+            any: Chip {
+                value: (),
+                label: "Any artist".to_owned(),
+                selected: chosen.is_none(),
+                disabled_reason: self.disabled_reason(chosen.is_none(), None, ""),
             },
-            disabled_reason: self.disabled_reason(false, None, ""),
+            browse: Chip {
+                value: (),
+                label: chosen.cloned().unwrap_or_else(|| "Choose…".to_owned()),
+                selected: chosen.is_some(),
+                disabled_reason: self.disabled_reason(false, None, ""),
+            },
         }
     }
 
@@ -474,7 +477,7 @@ impl Pending {
         cards
             .into_iter()
             .map(|artist| {
-                let selected = chosen.contains(&artist.name);
+                let selected = chosen.first() == Some(&artist.name);
                 // The catalogue's byline is "painter, year"; the painter is the
                 // title here, so only the year is wanted.
                 let year = artist
@@ -495,13 +498,14 @@ impl Pending {
                             artist.region.label(),
                             museums::paintings_by(&artist.name)
                         ),
-                        attribution: "Wikimedia Commons".to_owned(),
+                        attribution: String::new(),
                         details_url: Some(artist.about.clone()),
                         // A picture that cannot be unpacked is an empty frame
                         // with the painter's name under it, not a missing row.
                         path: artists::picture(artist, &self.artist_pictures).unwrap_or_default(),
                     },
                     selected,
+                    primary: if selected { "Chosen" } else { "Choose" },
                     disabled_reason: self.artist_reason(
                         selected,
                         self.availability
@@ -626,8 +630,15 @@ impl Pending {
         self.refresh();
     }
 
-    pub fn toggle_artist(&mut self, artist: &str) {
-        toggle(&mut self.staged.filters.artists, artist.to_owned());
+    /// Makes `artist` the one painter chosen, in place of whoever was.
+    pub fn choose_artist(&mut self, artist: &str) {
+        self.staged.filters.artists = vec![artist.to_owned()];
+        self.refresh();
+    }
+
+    /// Back to paintings by anyone.
+    pub fn any_artist(&mut self) {
+        self.staged.filters.artists.clear();
         self.refresh();
     }
 
@@ -793,18 +804,25 @@ mod tests {
     }
 
     #[test]
-    fn the_artist_row_holds_only_who_was_chosen() {
+    fn the_artist_row_names_the_one_painter_chosen() {
         let mut p = pending();
         let row = p.artist_row();
-        assert!(row.chosen.is_empty());
-        assert_eq!(row.browse, "Any artist");
+        assert!(row.any.selected && !row.browse.selected);
+        assert_eq!(row.browse.label, "Choose…");
 
-        // Somebody a later catalogue dropped is still there to be taken out.
-        p.toggle_artist("Nobody At All");
+        // Somebody a later catalogue dropped is still named.
+        p.choose_artist("Nobody At All");
         let row = p.artist_row();
-        assert_eq!(row.browse, "Add");
-        assert_eq!(row.chosen.len(), 1);
-        assert!(row.chosen[0].selected && row.chosen[0].disabled_reason.is_none());
+        assert!(!row.any.selected && row.browse.selected);
+        assert_eq!(row.browse.label, "Nobody At All");
+
+        // Choosing another replaces them rather than joining them.
+        p.choose_artist("Somebody Else");
+        assert_eq!(p.artist_row().browse.label, "Somebody Else");
+        assert_eq!(p.staged.filters.artists.len(), 1);
+
+        p.any_artist();
+        assert!(p.artist_row().any.selected);
     }
 
     #[test]
@@ -835,7 +853,7 @@ mod tests {
     fn a_thin_selection_cannot_be_applied_and_says_why() {
         let mut p = pending();
         // No catalogue names this painter, so the count is nought whatever is in it.
-        p.toggle_artist("Nobody At All");
+        p.choose_artist("Nobody At All");
         assert!(!p.can_apply());
         assert_eq!(p.note().unwrap(), "No painting matches all of these.");
     }
@@ -858,10 +876,10 @@ mod tests {
         let idle = Some("Not used while an artist is chosen.".to_owned());
         let mut p = pending();
         assert!(p.regions().iter().all(|c| c.disabled_reason != idle));
-        p.toggle_artist("Nobody At All");
+        p.choose_artist("Nobody At All");
         assert!(p.shapes().iter().all(|c| c.disabled_reason == idle));
         assert!(p.regions().iter().all(|c| c.disabled_reason == idle));
-        p.toggle_artist("Nobody At All");
+        p.any_artist();
         assert!(p.shapes().iter().all(|c| c.disabled_reason != idle));
         assert!(p.regions().iter().all(|c| c.disabled_reason != idle));
     }

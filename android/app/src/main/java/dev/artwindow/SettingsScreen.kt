@@ -232,7 +232,7 @@ fun SettingsScreen(
     // show, dimmed and inert, rather than vanishing from under the user.
     val byArtist = preferences.artworkArtists.isNotEmpty()
     val artistsSummary = preferences.artworkArtists.takeIf { it.isNotEmpty() }
-        ?.sorted()?.joinToString(", ")
+        ?.first()
         ?: "Any artist"
 
     // Choosing a painter happens in the browser, which takes over the whole screen and
@@ -243,9 +243,7 @@ fun SettingsScreen(
             paintings = paintingCounts,
             chosen = preferences.artworkArtists,
             blocks = artistBlocks,
-            onToggle = { artist ->
-                onPreferencesChange(preferences.copy(artworkArtists = toggled(preferences.artworkArtists, artist)))
-            },
+            onChoose = { artist -> onPreferencesChange(preferences.copy(artworkArtists = chosenArtist(artist))) },
             onClose = { browsing = false },
         )
         return
@@ -549,38 +547,20 @@ fun SettingsScreen(
                 expanded = artistsExpanded,
                 onToggle = { artistsExpanded = !artistsExpanded },
             ) {
-                // Every chosen name is listed, even one a newer catalogue no longer names,
-                // so that nothing staged is ever out of reach. Mirrors `Pending::artist_row`.
-                preferences.artworkArtists.sorted().forEach { artist ->
-                    SelectionRow(
-                        title = artist,
-                        selected = true,
-                        onClick = {
-                            onPreferencesChange(
-                                preferences.copy(artworkArtists = toggled(preferences.artworkArtists, artist)),
-                            )
-                        },
-                    )
-                }
+                // Two choices, exactly one on. The chosen painter is named even when a newer
+                // catalogue no longer has them, so nothing staged is hidden. Mirrors
+                // `Pending::artist_row`.
+                SelectionRow(
+                    title = "Any artist",
+                    selected = !byArtist,
+                    onClick = { onPreferencesChange(preferences.copy(artworkArtists = emptySet())) },
+                )
                 if (painters.isNotEmpty()) {
-                    val shape = RoundedCornerShape(9.dp)
-                    Surface(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(bottom = 4.dp)
-                            .border(BorderStroke(1.dp, chipLine(false)), shape)
-                            .focusRing(shape)
-                            .clickable { browsing = true },
-                        color = chipFill(false),
-                        contentColor = chipInk(false),
-                        shape = shape,
-                    ) {
-                        Text(
-                            if (preferences.artworkArtists.isEmpty()) "Any artist" else "Add",
-                            style = MaterialTheme.typography.labelLarge,
-                            modifier = Modifier.padding(horizontal = 11.dp, vertical = 9.dp),
-                        )
-                    }
+                    SelectionRow(
+                        title = preferences.artworkArtists.firstOrNull() ?: "Choose…",
+                        selected = byArtist,
+                        onClick = { browsing = true },
+                    )
                 }
             }
         }

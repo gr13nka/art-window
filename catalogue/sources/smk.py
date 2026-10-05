@@ -121,6 +121,7 @@ def fetch(
                 "byline": text.byline(name, period),
                 "origin": nationality,
                 "tags": _tags(item),
+                "artist": text.maker(name),
             }
 
         offset += PAGE_SIZE

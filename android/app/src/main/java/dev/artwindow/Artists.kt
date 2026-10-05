@@ -67,8 +67,8 @@ class Artists(private val painters: List<Painter>) {
         /**
          * Parses `index.tsv`: a leading `#` comment, then `name region about showcase
          * title byline file` rows. The file is generated, so a short row or an unknown
-         * region is skipped rather than failing the rest. `showcase` (the Commons page
-         * id) is for the build and unused here.
+         * region is skipped rather than failing the rest. `showcase` (the painting's
+         * `source:id`) is for the build and unused here.
          */
         fun parse(text: String): Artists = Artists(
             text.lineSequence()

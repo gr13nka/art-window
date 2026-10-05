@@ -14,7 +14,7 @@ Android, which has its own scheduler, its own wallpaper API and no menu bar to
 hang anything off.
 
 What *could* be shared is smaller than it looks, and most of it already is
-one thing: `catalogue/build.py`, a single Python pipeline that walks all four
+one thing: `catalogue/build.py`, a single Python pipeline that walks all six
 museums and writes `catalogue/dist/paintings.tsv` — the desktop compiles that
 file in, Android bundles it as an asset, and neither platform repeats any of
 the network logic that built it. What's left is judgment a build script
@@ -32,7 +32,7 @@ Danish-language records need, see **Subject choice and the religious filter**
 below — or to the portrait exclusion belongs in both files, and each carries a
 comment pointing at the other so that isn't easy to forget. What Android's
 `Museums.kt` (renamed from `Met.kt` along with the rest of the app, now that a
-turn can draw from any of the four museums) duplicates is much smaller: the
+turn can draw from any of the six museums) duplicates is much smaller: the
 `{source}-{id}.{ext}` filename convention a download has to carry so `keyOf`
 can recognise this module's own work later — the same reasoning as the
 desktop's `museums-` prefix (see `CLAUDE.md`'s Android invariants).
@@ -42,7 +42,7 @@ desktop's `museums-` prefix (see `CLAUDE.md`'s Android invariants).
 The desktop's **No filtering by the shape of a picture** rule (see the main
 `CLAUDE.md`) holds because fit-plus-letterbox renders any painting well. A phone
 screen is roughly 0.45 units wide per unit of height, close to nothing in any of
-the four museums' collections, so the Android default remains **Phone-shaped** (`ArtworkShape.SCREEN`, labelled TV-shaped on a television): paintings that
+the museums' collections, so the Android default remains **Phone-shaped** (`ArtworkShape.SCREEN`, labelled TV-shaped on a television): paintings that
 Zoom can fill without grotesque cropping. Settings can broaden that pool to
 include near-square work (up to a 1.25 width/height ratio) or any shape, including
 fully horizontal work. This artwork-shape choice is independent of the rendering
@@ -107,7 +107,7 @@ Artists combine. How much a region actually has to offer depends on which
 museum contributed it: SMK's collection is almost entirely European, the
 Cleveland Museum of Art's open-access paintings skew heavily Asian, and the
 National Gallery of Art splits between Europe and North America — so pooling
-four museums instead of one changes what's available for a given
+several museums instead of one changes what's available for a given
 region/subject/shape combination far more than it changes any single one's
 share (see **Availability** below).
 
@@ -154,7 +154,7 @@ English-language titles with false matches. See the doc comment on
 
 ## Artist choice
 
-Settings can also choose specific artists — one chip per name `Catalogue.artists()`
+Settings can also choose a specific artist — one painter per name `Catalogue.artists()`
 finds in the catalogue, fourteen painters as of the 2026-10-02 build. `WallpaperPreferences.artworkArtists`
 holds the choice as plain strings rather than an enum like `ArtworkSubject`, because
 the artist list is catalogue data, not a fixed set this app defines; an artist name
@@ -178,24 +178,21 @@ drowned out the painter. Settings keeps Shape and Origins on show but dimmed and
 inert, saying "Not used while an artist is chosen." This mirrors `admits` and `needed`
 in `src/art/museums.rs` and `Catalogue.swift`.
 
-The artists themselves come from `catalogue/artists.json`, a small config
-`catalogue/build.py` reads to pull specific Wikimedia Commons categories into the
-build (one row per artist, its region and the Commons categories that hold their
-work) — a fifth source (`wmc`) alongside the four museums, distinguished in
-`paintings.tsv` by a twelfth `artist` column the other four leave empty. See
-`catalogue/build.py` for the pipeline side of this; `Catalogue.kt` only ever reads
-the column.
+The artists themselves come from the museums' own records. Every source names
+each painting's maker, and `catalogue/artists.json` is the curated list of painters
+worth a chip: a display name plus the spellings the museums use for that painter
+(`aliases`). `catalogue/build.py` writes the name into `paintings.tsv`'s twelfth
+`artist` column for those painters only, and only when the catalogue holds at least
+twenty of their paintings (`MIN_PER_CHOICE` in `build.py`); every other row leaves
+the column empty and keeps its byline. `Catalogue.kt` only ever reads the column.
 
-Not every painter in `artists.json` becomes a chip. Most of them are there to give
-Oceania, South America and Africa something to show, which the four museums
-barely hold, and the build names an artist in the twelfth column only when it kept
-at least twenty of their paintings (`MIN_PER_CHOICE` in `build.py`). The rest keep
-their rows and their byline and leave the column empty, so their work arrives
-under its region without a chip that would lead to three pictures.
+Until 2026-10 the column came from Wikimedia Commons instead, which also gave
+Oceania, South America and Africa something to show. Commons was dropped because it
+warrants no licence per file, and those three regions now fall under the floor and
+are hidden.
 
-Each entry also carries `about` (the painter's Wikipedia article) and, for those
-who keep the column, `showcase` (the Commons page id of the painting they are
-known by). `catalogue/showcase.py` turns those into `catalogue/dist/artists/` — an
+Each entry also carries `about` (the painter's Wikipedia article) and `showcase`
+(the `source:id` of the painting they are known by). `catalogue/showcase.py` turns those into `catalogue/dist/artists/` — an
 `index.tsv` and one picture per painter, at most 1400 px on the long side — which
 the build bundles with the rest of `dist/` as the assets `artists/index.tsv` and
 `artists/<slug>.jpg`. `Artists.kt` reads the index once (a short row or an unknown
@@ -203,20 +200,23 @@ region is skipped; a painter `Catalogue.artists()` names but the index lacks is
 left out of the browser) and decodes a picture only at the size it is shown, so
 fourteen painters never mean fourteen large bitmaps.
 
-Settings' *Artists* section lists only the painters already chosen — tap one to
-remove it, including a name a newer catalogue no longer holds — and one button,
-*Any artist* while nobody is chosen and *Add* after. That button opens
+One painter at a time: choosing one replaces whoever was chosen, and
+`artistValues` reads a stored list of several (from an earlier build) as its first
+name only. Settings' *Artists* section is two rows, exactly one on — *Any artist*
+(on while nobody is chosen; tapping it clears the choice) and a row labelled with
+the chosen painter's name, or *Choose…*, which opens
 `ArtistBrowserScreen`, built like `FavouritesScreen`: a grid of one picture per
 painter, ordered by region and then name, a tick on the chosen. Tapping one
 shows their best-known painting large, their name, a line such as "Golden
 summer, Eaglemont, 1889 · Oceania, 40 paintings" (`Catalogue.paintingsBy`
-counts the non-portrait rows), *Choose* or *Remove*, and *Read more*, which
+counts the non-portrait rows), *Choose* — or *Chosen* on the one who is, there is no
+*Remove* — and *Read more*, which
 hands the Wikipedia article to the system browser and is hidden where nothing
 can open it (a TV often has no browser, which is why the manifest declares a
 `queries` entry for https). *Choose* is refused, with the reason in view, for
 a painter `availableArtists` does not return: "Fewer than 20 catalogue paintings
 are available" below `MIN_POOL`, otherwise "Too few paintings match with the other
-filters." Choosing only stages the change, the way a chip did, and *Apply
+filters." Choosing only stages the change, and *Apply
 changes* still commits it. Back leaves the painter, then the browser. The rules
 mirror `Pending::artist_row` and `artist_cards` on the desktop; iOS keeps its own copy.
 

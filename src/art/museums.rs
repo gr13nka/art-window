@@ -1,14 +1,14 @@
-//! A prebuilt list of paintings from four museums plus Wikimedia Commons, no live
-//! search.
+//! A prebuilt list of paintings from six museums, no live search.
 //!
 //! `catalogue/build.py` — a separate, offline pipeline — walks the Met, the
-//! National Gallery of Art (Washington), the Cleveland Museum of Art and SMK
-//! (Denmark), keeps only what is public domain, catalogued as a painting and at
-//! least `MIN_LONG_SIDE` pixels on its long side, and writes one row per painting
-//! to `catalogue/dist/paintings.tsv`. That file is checked in and compiled
-//! straight into this binary: a day's painting is a local pick out of an
-//! already-verified list and exactly one download, never a live search. A
-//! Wikimedia Commons row (`wmc`) carries a twelfth column naming the artist.
+//! National Gallery of Art (Washington), the Cleveland Museum of Art, SMK
+//! (Denmark), the Rijksmuseum and the Getty, keeps only what is public domain,
+//! catalogued as a painting and at least `MIN_LONG_SIDE` pixels on its long side,
+//! and writes one row per painting to `catalogue/dist/paintings.tsv`. That file is
+//! checked in and compiled straight into this binary: a day's painting is a local
+//! pick out of an already-verified list and exactly one download, never a live
+//! search. A twelfth column names the painter on the rows whose painter has an
+//! *Artist* chip.
 //!
 //! Subject, portrait, religious-scene and shape decisions are deliberately not the
 //! build's to make, so this module makes them, from the [`Filters`] the settings
@@ -39,7 +39,7 @@ const CATALOGUE_TEXT: &str = include_str!("../../catalogue/dist/paintings.tsv");
 /// briefly unreachable — so a source with thousands of candidates simply moves on.
 const MAX_ATTEMPTS: usize = 3;
 
-/// One of the museums — or Wikimedia Commons — a row in the catalogue can name.
+/// One of the museums a row in the catalogue can name.
 ///
 /// The word actually written in the TSV, and the words this module shows a person,
 /// are two different concerns — [`MuseumSource::parse`] and
@@ -51,8 +51,12 @@ enum MuseumSource {
     Nga,
     Cma,
     Smk,
-    /// Wikimedia Commons: the artist-attributed rows, carrying the twelfth
-    /// `artist` column the other four leave empty.
+    Rijks,
+    Getty,
+    /// Wikimedia Commons, which the catalogue no longer draws from: it warrants
+    /// no licence per file. The code stays recognised so a Commons picture
+    /// already on someone's desktop or among their favourites is still this
+    /// source's own by its file name.
     Wmc,
 }
 
@@ -63,6 +67,8 @@ impl MuseumSource {
             "nga" => Some(Self::Nga),
             "cma" => Some(Self::Cma),
             "smk" => Some(Self::Smk),
+            "rijks" => Some(Self::Rijks),
+            "getty" => Some(Self::Getty),
             "wmc" => Some(Self::Wmc),
             _ => None,
         }
@@ -76,6 +82,8 @@ impl MuseumSource {
             Self::Nga => "nga",
             Self::Cma => "cma",
             Self::Smk => "smk",
+            Self::Rijks => "rijks",
+            Self::Getty => "getty",
             Self::Wmc => "wmc",
         }
     }
@@ -86,6 +94,8 @@ impl MuseumSource {
             Self::Nga => "National Gallery of Art, Washington",
             Self::Cma => "Cleveland Museum of Art",
             Self::Smk => "SMK – National Gallery of Denmark",
+            Self::Rijks => "Rijksmuseum, Amsterdam",
+            Self::Getty => "J. Paul Getty Museum",
             Self::Wmc => "Wikimedia Commons",
         }
     }
@@ -101,7 +111,7 @@ struct Entry {
     region: Region,
     width: u32,
     height: u32,
-    /// Empty on every row but Wikimedia Commons'.
+    /// Empty unless the painter has an *Artist* chip.
     artist: String,
     image_url: String,
     details_url: String,
@@ -155,7 +165,8 @@ fn parse_catalogue(text: &str) -> Vec<Entry> {
 /// Parses one `source id region width height image_url details_url title byline
 /// origin tags` row, or `None` if it does not honour that contract.
 ///
-/// A twelfth column, present only on `wmc` rows, names the artist.
+/// A twelfth column names the painter, on the rows whose painter has an *Artist*
+/// chip; a row written before the column existed has eleven.
 fn parse_line(line: &str) -> Option<Entry> {
     let fields: Vec<&str> = line.split('\t').collect();
     let (source, id, region, width, height, image_url, details_url, title, byline, tags, artist) =
